@@ -408,22 +408,36 @@
     <div class="main-content">
       <div id="pred-loading" class="pred-loading"><div class="spinner"></div><div id="pred-load-msg">Loading data...</div></div>
       <div id="pred-content" style="display:none">
-        <h2>Upcoming Predictions <span class="badge" id="pred-count">0</span></h2>
-        <div class="predictions-grid" id="pred-grid"></div>
-        <h2>Prediction Tracker <span class="badge" id="tracker-count">0</span></h2>
-        <div id="tracker-section"></div>
-        <h2 style="margin-top:32px">Recent Results <span class="badge" id="res-count">0</span></h2>
-        <div class="table-wrapper" style="max-height:600px">
-          <table class="results-table">
-            <thead><tr>
-              <th>Date</th><th>Matchup</th><th>Score</th>
-              <th>ML Fav</th><th>ML Odds</th>
-              <th>Spread</th><th>Spread Odds</th>
-              <th>Total</th><th>Total Odds</th>
-              <th>Result</th>
-            </tr></thead>
-            <tbody id="res-body"></tbody>
-          </table>
+        <div class="status-tabs" id="pred-tabs">
+          <div class="status-tab active" data-pred-tab="upcoming" onclick="switchPredTab('upcoming')">
+            Upcoming <span class="tab-badge" id="pred-count">0</span>
+          </div>
+          <div class="status-tab" data-pred-tab="tracker" onclick="switchPredTab('tracker')">
+            Tracker <span class="tab-badge" id="tracker-count">0</span>
+          </div>
+          <div class="status-tab" data-pred-tab="results" onclick="switchPredTab('results')">
+            Results <span class="tab-badge" id="res-count">0</span>
+          </div>
+        </div>
+        <div id="pred-tab-upcoming">
+          <div class="predictions-grid" id="pred-grid"></div>
+        </div>
+        <div id="pred-tab-tracker" style="display:none">
+          <div id="tracker-section"></div>
+        </div>
+        <div id="pred-tab-results" style="display:none">
+          <div class="table-wrapper" style="max-height:600px">
+            <table class="results-table">
+              <thead><tr>
+                <th>Date</th><th>Matchup</th><th>Score</th>
+                <th>ML Fav</th><th>ML Odds</th>
+                <th>Spread</th><th>Spread Odds</th>
+                <th>Total</th><th>Total Odds</th>
+                <th>Result</th>
+              </tr></thead>
+              <tbody id="res-body"></tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
@@ -1440,6 +1454,18 @@ function toggleCard(id, btn) {
 
 const predMsg = t => { const e = document.getElementById('pred-load-msg'); if (e) e.textContent = t; };
 
+let activePredTab = 'upcoming';
+function switchPredTab(tab) {
+  activePredTab = tab;
+  ['upcoming', 'tracker', 'results'].forEach(t => {
+    const el = document.getElementById('pred-tab-' + t);
+    if (el) el.style.display = t === tab ? '' : 'none';
+  });
+  document.querySelectorAll('#pred-tabs .status-tab').forEach(el => {
+    el.classList.toggle('active', el.dataset.predTab === tab);
+  });
+}
+
 async function loadPredictions(sport) {
   sport = sport || 'nhl';
   activePredSport = sport;
@@ -1664,7 +1690,18 @@ async function loadPredictions(sport) {
     let tracker = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
     for (const key of Object.keys(tracker)) {
       const t = tracker[key];
+      // Reset results for future events (shouldn't have been resolved)
       if (t.result && new Date(t.date) > new Date()) { t.result = null; }
+      // Reset results where game is today (may not have completed yet)
+      if (t.result) {
+        const gameDate = new Date(t.date);
+        const now = new Date();
+        if (gameDate.toDateString() === now.toDateString()) { t.result = null; }
+      }
+      // Reset results with undefined/null totals lines (corrupted data)
+      if (t.result && t.result.totalResults && t.result.totalResults.some(tr => tr.line == null)) {
+        t.result = null;
+      }
     }
     for (const p of predictions) {
       const key = p.title + '|' + p.date;
@@ -1673,18 +1710,28 @@ async function loadPredictions(sport) {
       }
     }
     const completedByKey = {};
-    for (const ev of completed) { completedByKey[ev.title + '|' + ev.start_time_utc] = ev; }
+    for (const ev of completed) {
+      completedByKey[ev.title + '|' + ev.start_time_utc] = ev;
+    }
     for (const key of Object.keys(tracker)) {
       const t = tracker[key];
       if (t.result) continue;
-      const ev = completedByKey[t.title + '|' + t.date];
+      // Only try to resolve if the game date is in the past
+      if (new Date(t.date) > new Date()) continue;
+      // Try exact key match first, then find closest completed event by title within 3hrs
+      let ev = completedByKey[t.title + '|' + t.date];
+      if (!ev) {
+        const tDate = new Date(t.date).getTime();
+        const match = completed.find(e => e.title === t.title && e.score && Math.abs(new Date(e.start_time_utc).getTime() - tDate) < 3 * 60 * 60 * 1000);
+        if (match) ev = match;
+      }
       if (!ev || !ev.score) continue;
       const sc = parseScore(ev.score);
       if (!sc) continue;
       const [tt1, tt2] = parseTitle(ev.title);
       const actualWinner = sc[0] > sc[1] ? tt1 : sc[1] > sc[0] ? tt2 : 'Draw';
       const actualTotal = sc[0] + sc[1];
-      t.result = { score: ev.score, actualWinner, mlCorrect: t.predictedWinner === actualWinner, totalResults: (t.totalPicks || []).map(tp => ({ line: tp.line, pickOver: tp.pickOver, actual: actualTotal > tp.line ? 'Over' : actualTotal < tp.line ? 'Under' : 'Push', correct: tp.pickOver ? actualTotal > tp.line : actualTotal < tp.line })) };
+      t.result = { score: ev.score, actualWinner, mlCorrect: t.predictedWinner === actualWinner, totalResults: (t.totalPicks || []).filter(tp => tp.line != null).map(tp => ({ line: tp.line, pickOver: tp.pickOver, actual: actualTotal > tp.line ? 'Over' : actualTotal < tp.line ? 'Under' : 'Push', correct: tp.pickOver ? actualTotal > tp.line : actualTotal < tp.line })) };
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tracker));
 
