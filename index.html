@@ -169,7 +169,10 @@
   .match-card .mc-time { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
   .match-card .mc-status { font-size: 9px; padding: 1px 6px; border-radius: 4px; font-weight: 600; }
   .mc-status.upcoming { background: rgba(74,158,255,0.15); color: var(--blue); }
-  .mc-status.final { background: rgba(52,211,153,0.15); color: var(--green); }
+  .mc-status.live { background: rgba(52,211,153,0.15); color: var(--green); }
+  .mc-status.live .pulse-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 2s ease-in-out infinite; margin-right: 2px; vertical-align: middle; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .mc-status.final { background: rgba(107,127,163,0.15); color: var(--muted); }
   .match-card .mc-teams { font-size: 13px; font-weight: 700; color: #fff; margin-bottom: 3px; }
   .match-card .mc-meta { display: flex; gap: 8px; font-size: 10px; color: var(--muted); }
   .mc-meta .mc-score { color: var(--green); font-weight: 600; }
@@ -217,7 +220,9 @@
   .odds-table td { padding: 6px 10px; border-bottom: 1px solid var(--border2); white-space: nowrap; }
   .odds-table tr:hover td { background: rgba(74,158,255,0.03); }
   .odds-table .question-cell { color: #fff; font-weight: 600; max-width: 250px; overflow: hidden; text-overflow: ellipsis; }
-  .odds-table .outcome-cell { color: var(--text); max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+  .odds-table .outcome-cell { color: var(--text); max-width: 180px; white-space: nowrap; }
+  .odds-table .outcome-cell .oc-name { overflow: hidden; text-overflow: ellipsis; display: inline-block; max-width: calc(100% - 40px); vertical-align: bottom; }
+  .odds-table .outcome-cell .oc-line { white-space: nowrap; font-weight: 600; }
   .odds-table .odds-val { font-weight: 500; }
   .odds-table .null-val { color: var(--dim); }
   .odds-table .highlight-red { background: rgba(248,113,113,0.15); color: var(--red); font-weight: 600; }
@@ -527,6 +532,54 @@ const SPORTS = {
     hasDbBlend: true,
     marketTypes: ['moneyline', 'spreads', 'totals', 'first_half_moneyline', 'first_half_spreads', 'first_half_totals', 'points', 'rebounds'],
   },
+  ucl: {
+    label: 'UCL', icon: 'assets/ucl.png',
+    eventsTable: 'ucl_events',
+    marketsTable: 'ucl_odds_matching',
+    hasTrades: false,
+    threeWay: true,
+    oc: (n) => 'oc' + n + '_',
+    probField: 'og_prob',
+    marketSelect: 'event_slug,question,sports_market_type,oc1_name,oc1_trades,oc2_name,oc2_trades,oc3_name,oc3_trades,oc1_pinn_odds,oc2_pinn_odds,oc3_pinn_odds,oc1_fanduel_odds,oc2_fanduel_odds,oc3_fanduel_odds,oc1_fanatics_odds,oc2_fanatics_odds,oc3_fanatics_odds,oc1_pinn_fair,oc2_pinn_fair,oc3_pinn_fair,oc1_fanduel_fair,oc2_fanduel_fair,oc3_fanduel_fair,oc1_fanatics_fair,oc2_fanatics_fair,oc3_fanatics_fair,oc1_og_prob,oc2_og_prob,oc3_og_prob,oc1_fair_prob,oc2_fair_prob,oc3_fair_prob,oc1_og_blend,oc2_og_blend,oc3_og_blend,oc1_fair_blend,oc2_fair_blend,oc3_fair_blend',
+    books: [
+      { key: 'pinn', label: 'Pinnacle', col1: 'oc1_pinn_odds', col2: 'oc2_pinn_odds', col3: 'oc3_pinn_odds' },
+      { key: 'fanduel', label: 'FanDuel', col1: 'oc1_fanduel_odds', col2: 'oc2_fanduel_odds', col3: 'oc3_fanduel_odds' },
+      { key: 'fanatics', label: 'Fanatics', col1: 'oc1_fanatics_odds', col2: 'oc2_fanatics_odds', col3: 'oc3_fanatics_odds' },
+    ],
+    fairBooks: [
+      { key: 'pinn_fair', label: 'Pinn Fair', col1: 'oc1_pinn_fair', col2: 'oc2_pinn_fair', col3: 'oc3_pinn_fair' },
+      { key: 'fanduel_fair', label: 'FD Fair', col1: 'oc1_fanduel_fair', col2: 'oc2_fanduel_fair', col3: 'oc3_fanduel_fair' },
+      { key: 'fanatics_fair', label: 'Fan Fair', col1: 'oc1_fanatics_fair', col2: 'oc2_fanatics_fair', col3: 'oc3_fanatics_fair' },
+    ],
+    hasProbs: true,
+    hasWinner: false,
+    hasDbBlend: true,
+    marketTypes: ['moneyline', 'spreads', 'totals'],
+  },
+  epl: {
+    label: 'EPL', icon: 'assets/epl.png',
+    eventsTable: 'epl_events',
+    marketsTable: 'epl_odds_matching',
+    hasTrades: false,
+    threeWay: true,
+    oc: (n) => 'oc' + n + '_',
+    probField: 'og_prob',
+    marketSelect: 'event_slug,question,sports_market_type,oc1_name,oc1_trades,oc2_name,oc2_trades,oc3_name,oc3_trades,oc1_pinn_odds,oc2_pinn_odds,oc3_pinn_odds,oc1_fanduel_odds,oc2_fanduel_odds,oc3_fanduel_odds,oc1_fanatics_odds,oc2_fanatics_odds,oc3_fanatics_odds,oc1_pinn_fair,oc2_pinn_fair,oc3_pinn_fair,oc1_fanduel_fair,oc2_fanduel_fair,oc3_fanduel_fair,oc1_fanatics_fair,oc2_fanatics_fair,oc3_fanatics_fair,oc1_og_prob,oc2_og_prob,oc3_og_prob,oc1_fair_prob,oc2_fair_prob,oc3_fair_prob,oc1_og_blend,oc2_og_blend,oc3_og_blend,oc1_fair_blend,oc2_fair_blend,oc3_fair_blend',
+    books: [
+      { key: 'pinn', label: 'Pinnacle', col1: 'oc1_pinn_odds', col2: 'oc2_pinn_odds', col3: 'oc3_pinn_odds' },
+      { key: 'fanduel', label: 'FanDuel', col1: 'oc1_fanduel_odds', col2: 'oc2_fanduel_odds', col3: 'oc3_fanduel_odds' },
+      { key: 'fanatics', label: 'Fanatics', col1: 'oc1_fanatics_odds', col2: 'oc2_fanatics_odds', col3: 'oc3_fanatics_odds' },
+    ],
+    fairBooks: [
+      { key: 'pinn_fair', label: 'Pinn Fair', col1: 'oc1_pinn_fair', col2: 'oc2_pinn_fair', col3: 'oc3_pinn_fair' },
+      { key: 'fanduel_fair', label: 'FD Fair', col1: 'oc1_fanduel_fair', col2: 'oc2_fanduel_fair', col3: 'oc3_fanduel_fair' },
+      { key: 'fanatics_fair', label: 'Fan Fair', col1: 'oc1_fanatics_fair', col2: 'oc2_fanatics_fair', col3: 'oc3_fanatics_fair' },
+    ],
+    hasProbs: true,
+    hasWinner: false,
+    hasDbBlend: true,
+    marketTypes: ['moneyline', 'spreads', 'totals'],
+  },
 };
 
 // ---- State ----
@@ -563,13 +616,25 @@ async function loadSport(key) {
   const cfg = SPORTS[key];
   msg(`Loading ${cfg.label} events...`);
 
-  const [upcoming, completed] = await Promise.all([
-    qAll(cfg.eventsTable, 'select=slug,title,start_time_utc,score&score=is.null&order=start_time_utc.asc'),
-    qAll(cfg.eventsTable, 'select=slug,title,start_time_utc,score&score=not.is.null&order=start_time_utc.desc'),
-  ]);
+  const allEvents = await qAll(cfg.eventsTable, 'select=slug,title,start_time_utc,score,live,ended&order=start_time_utc.desc');
 
-  const events = [...upcoming, ...completed];
-  const slugs = events.map(e => e.slug);
+  // Categorise: live (live=true, not ended), upcoming (not ended, not live), completed (ended=true)
+  const live = [];
+  const upcoming = [];
+  const completed = [];
+  for (const ev of allEvents) {
+    if (ev.ended) {
+      completed.push(ev);
+    } else if (ev.live) {
+      live.push(ev);
+    } else {
+      upcoming.push(ev);
+    }
+  }
+  // Sort upcoming by soonest first
+  upcoming.sort((a, b) => new Date(a.start_time_utc || 0) - new Date(b.start_time_utc || 0));
+
+  const events = [...live, ...upcoming, ...completed];
 
   msg(`Loading ${cfg.label} markets...`);
   const markets = await qAll(cfg.marketsTable, `select=${cfg.marketSelect}`);
@@ -581,7 +646,7 @@ async function loadSport(key) {
     grouped[m.event_slug].push(m);
   }
 
-  sportData[key] = { events, upcoming, completed, markets, grouped };
+  sportData[key] = { events, live, upcoming, completed, markets, grouped };
   upcomingCounts[key] = upcoming.filter(ev => evHasMarkets(ev, cfg, grouped)).length;
   return sportData[key];
 }
@@ -615,15 +680,17 @@ function marketHasTrades(m) {
   return ((m.oc1_trades ?? 0) + (m.oc2_trades ?? 0)) >= 1;
 }
 
-function getMarketsWithTrades(grouped, slug) {
-  return (grouped[slug] || []).filter(marketHasTrades);
+function getMarketsWithTrades(grouped, slug, cfg) {
+  const markets = grouped[slug] || [];
+  if (cfg && !cfg.hasTrades) return markets;
+  return markets.filter(marketHasTrades);
 }
 
 function evHasMarkets(ev, cfg, grouped) {
-  return getMarketsWithTrades(grouped, ev.slug).length > 0;
+  return getMarketsWithTrades(grouped, ev.slug, cfg).length > 0;
 }
 
-let activeStatusTab = 'completed';
+let activeStatusTab = 'live';
 
 function setStatusTab(tab) {
   activeStatusTab = tab;
@@ -637,22 +704,48 @@ function renderMatchList() {
   const listEl = document.getElementById('match-list-view');
 
   // Filter out events with 0 markets
+  const liveWithMkts = (data.live || []).filter(ev => evHasMarkets(ev, cfg, data.grouped));
   const upcomingWithMkts = data.upcoming.filter(ev => evHasMarkets(ev, cfg, data.grouped));
   const completedWithMkts = data.completed.filter(ev => evHasMarkets(ev, cfg, data.grouped));
+
+  // Auto-select best tab if current has no events
+  if (activeStatusTab === 'live' && liveWithMkts.length === 0 && upcomingWithMkts.length > 0) {
+    activeStatusTab = 'upcoming';
+  } else if (activeStatusTab === 'live' && liveWithMkts.length === 0 && upcomingWithMkts.length === 0) {
+    activeStatusTab = 'completed';
+  }
 
   let html = '';
 
   // Status tabs
   html += `<div class="status-tabs">
-    <div class="status-tab ${activeStatusTab === 'completed' ? 'active' : ''}" onclick="setStatusTab('completed')">
-      Completed <span class="tab-badge">${completedWithMkts.length}</span>
+    <div class="status-tab ${activeStatusTab === 'live' ? 'active' : ''}" onclick="setStatusTab('live')">
+      <span style="display:inline-flex;align-items:center;gap:4px;">
+        <span style="width:6px;height:6px;border-radius:50%;background:${liveWithMkts.length > 0 ? 'var(--green)' : 'var(--dim)'};${liveWithMkts.length > 0 ? 'animation:pulse 2s ease-in-out infinite' : ''}"></span>
+        Live
+      </span>
+      <span class="tab-badge">${liveWithMkts.length}</span>
     </div>
     <div class="status-tab ${activeStatusTab === 'upcoming' ? 'active' : ''}" onclick="setStatusTab('upcoming')">
       Upcoming <span class="tab-badge">${upcomingWithMkts.length}</span>
     </div>
+    <div class="status-tab ${activeStatusTab === 'completed' ? 'active' : ''}" onclick="setStatusTab('completed')">
+      Completed <span class="tab-badge">${completedWithMkts.length}</span>
+    </div>
   </div>`;
 
-  if (activeStatusTab === 'upcoming') {
+  if (activeStatusTab === 'live') {
+    if (liveWithMkts.length > 0) {
+      html += '<div class="match-grid">';
+      for (const ev of liveWithMkts) {
+        const mkts = getMarketsWithTrades(data.grouped, ev.slug, cfg);
+        html += renderMatchCard(ev, mkts, false);
+      }
+      html += '</div>';
+    } else {
+      html += `<div class="notice">No live ${cfg.label} events with markets.</div>`;
+    }
+  } else if (activeStatusTab === 'upcoming') {
     if (upcomingWithMkts.length > 0) {
       const now = new Date();
       const sevenDays = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
@@ -662,7 +755,7 @@ function renderMatchList() {
 
       html += '<div class="match-grid">';
       for (const ev of display) {
-        const mkts = getMarketsWithTrades(data.grouped, ev.slug);
+        const mkts = getMarketsWithTrades(data.grouped, ev.slug, cfg);
         html += renderMatchCard(ev, mkts, false);
       }
       html += '</div>';
@@ -679,7 +772,7 @@ function renderMatchList() {
     if (completedWithMkts.length > 0) {
       html += '<div class="match-grid">';
       for (const ev of completedWithMkts) {
-        const mkts = getMarketsWithTrades(data.grouped, ev.slug);
+        const mkts = getMarketsWithTrades(data.grouped, ev.slug, cfg);
         html += renderMatchCard(ev, mkts, true);
       }
       html += '</div>';
@@ -702,9 +795,10 @@ function marketHasOdds(m, cfg) {
 
 function renderMatchCard(ev, mkts, isCompleted) {
   const cfg = SPORTS[activeSport];
-  const isFinal = !!ev.score;
-  const statusClass = isFinal ? 'final' : 'upcoming';
-  const statusText = isFinal ? 'Final' : 'Upcoming';
+  const isLive = ev.live && !ev.ended;
+  const isFinal = !!ev.ended;
+  const statusClass = isLive ? 'live' : isFinal ? 'final' : 'upcoming';
+  const statusText = isLive ? '<span class="pulse-dot"></span> Live' : isFinal ? 'Final' : 'Upcoming';
   const mktCount = mkts.length;
   const typeSet = new Set(mkts.map(m => m.sports_market_type));
   const typeList = [...typeSet].join(', ');
@@ -717,7 +811,7 @@ function renderMatchCard(ev, mkts, isCompleted) {
     </div>
     <div class="mc-teams">${ev.title}</div>
     <div class="mc-meta">
-      ${isFinal ? `<span class="mc-score">${ev.score}</span>` : ''}
+      ${ev.score ? `<span class="mc-score">${ev.score}</span>` : ''}
       <span class="mc-mkts">${mktCount} markets${typeList ? ' \u00b7 ' + typeList : ''}</span>
     </div>
     ${noOdds ? '<div class="mc-no-odds">&#9888; No odds</div>' : ''}
@@ -736,7 +830,7 @@ function openDetailDirect(slug) {
   const ev = data.events.find(e => e.slug === slug);
   if (!ev) return;
 
-  const mkts = getMarketsWithTrades(data.grouped, slug);
+  const mkts = getMarketsWithTrades(data.grouped, slug, cfg);
   const detailEl = document.getElementById('detail-view');
   document.getElementById('match-list-view').style.display = 'none';
   detailEl.classList.add('active');
@@ -750,7 +844,13 @@ function openDetailDirect(slug) {
     <div class="dh-title">${ev.title}</div>
     <div class="dh-meta">
       <span>${fmtDate(ev.start_time_utc)}</span>
-      ${ev.score ? `<span class="dh-score">Final: ${ev.score}</span>` : '<span>Upcoming</span>'}
+      ${ev.score && ev.live && !ev.ended
+        ? `<span class="dh-score" style="color:var(--green);">Live: ${ev.score}</span>`
+        : ev.score && ev.ended
+        ? `<span class="dh-score">Final: ${ev.score}</span>`
+        : ev.live && !ev.ended
+        ? `<span style="color:var(--green);font-weight:600;">Live</span>`
+        : '<span>Upcoming</span>'}
     </div>
   </div>`;
 
@@ -829,13 +929,46 @@ function formatMarketType(t) {
 }
 
 // ---- Build Odds Table ----
+function formatOutcome(outcome) {
+  if (!outcome) return '-';
+  // Match a trailing line value like " -1.5", " +2.5", " 1.5"
+  const match = outcome.match(/^(.+?)\s+([+-]?\d+(?:\.\d+)?)$/);
+  if (match) {
+    const name = match[1];
+    const line = match[2];
+    // Short names (Over, Under, etc.) don't need truncation
+    if (name.length <= 10) return escHtml(outcome);
+    return `<span class="oc-name">${escHtml(name)}</span> <span class="oc-line">${escHtml(line)}</span>`;
+  }
+  return escHtml(outcome);
+}
+
+function formatQuestion(q, marketType, cfg) {
+  if (!q) return '';
+  const mt = (marketType || '').toLowerCase();
+  const sport = cfg.label.toUpperCase();
+  // UCL/EPL moneyline → "Who will win?"
+  if ((sport === 'UCL' || sport === 'EPL') && mt === 'moneyline') return 'Who will win?';
+  // All sports: remove "Spread: " prefix
+  if (q.startsWith('Spread: ')) return q.slice(8);
+  // Totals: extract "O/U X.X" from "Team vs. Team: O/U 1.5"
+  const ouMatch = q.match(/:\s*(O\/U\s*[\d.]+)/i);
+  if (mt === 'totals' && ouMatch) return ouMatch[1];
+  return q;
+}
+
 function renderOddsTable(markets, cfg, type) {
-  // Build enriched rows: each market produces 2 rows (outcome 1 & outcome 2)
+  // Build enriched rows: each market produces 2 or 3 rows
   const tableRows = [];
   for (const m of markets) {
     const row1 = buildRow(m, 1, cfg);
     const row2 = buildRow(m, 2, cfg);
-    tableRows.push({ question: m.question, line: m.line, m, rows: [row1, row2] });
+    const rows = [row1, row2];
+    // Three-way markets (soccer moneyline): add outcome 3 if present
+    if (cfg.threeWay && m.oc3_name) {
+      rows.push(buildRow(m, 3, cfg));
+    }
+    tableRows.push({ question: formatQuestion(m.question, m.sports_market_type, cfg), line: m.line, m, rows });
   }
 
   // Build column definitions
@@ -883,14 +1016,15 @@ function renderOddsTable(markets, cfg, type) {
     const isLast = i === tableRows.length - 1;
     const groupClass = !isLast ? '' : ' group-row';
 
-    for (let r = 0; r < 2; r++) {
+    const rowCount = tr.rows.length;
+    for (let r = 0; r < rowCount; r++) {
       const row = tr.rows[r];
-      html += `<tr class="${r === 1 ? groupClass : ''}" data-sort-group="${i}">`;
+      html += `<tr class="${r === rowCount - 1 ? groupClass : ''}" data-sort-group="${i}">`;
 
       for (const col of cols) {
         if (col.key === 'question') {
           if (r === 0) {
-            html += `<td class="question-cell" rowspan="2">${escHtml(tr.question || '')}</td>`;
+            html += `<td class="question-cell" rowspan="${rowCount}">${escHtml(tr.question || '')}</td>`;
           }
           continue;
         }
@@ -901,12 +1035,12 @@ function renderOddsTable(markets, cfg, type) {
           continue;
         }
         if (col.key === 'outcome') {
-          html += `<td class="outcome-cell">${escHtml(row.outcome)}</td>`;
+          html += `<td class="outcome-cell">${formatOutcome(row.outcome)}</td>`;
           continue;
         }
         if (col.key === 'winner') {
           if (r === 0) {
-            html += `<td rowspan="2" style="color:var(--green);font-weight:600">${escHtml(tr.m.winning_outcome || '-')}</td>`;
+            html += `<td rowspan="${rowCount}" style="color:var(--green);font-weight:600">${escHtml(tr.m.winning_outcome || '-')}</td>`;
           }
           continue;
         }
@@ -1040,7 +1174,7 @@ function getOddsRange(m, cfg, outcomeNum) {
 }
 
 function findDiscrepancies(slug, cfg, grouped) {
-  const mkts = getMarketsWithTrades(grouped, slug);
+  const mkts = getMarketsWithTrades(grouped, slug, cfg);
   const discs = [];
   for (const m of mkts) {
     for (const oc of [1, 2]) {
@@ -1126,7 +1260,7 @@ function renderErrorLog() {
       }
     }
   } else {
-    const events = [...(data.upcoming || []), ...(data.completed || [])];
+    const events = [...(data.live || []), ...(data.upcoming || []), ...(data.completed || [])];
     const eventDiscs = [];
     for (const ev of events) {
       const discs = findDiscrepancies(ev.slug, cfg, data.grouped);
