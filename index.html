@@ -178,6 +178,7 @@
   .mc-meta .mc-score { color: var(--green); font-weight: 600; }
   .mc-meta .mc-mkts { color: var(--dim); }
   .mc-no-odds { display: flex; align-items: center; gap: 4px; font-size: 9px; color: var(--yellow); margin-top: 2px; }
+  .mc-trades { color: var(--blue); font-weight: 600; font-size: 10px; }
 
   /* Market Detail View */
   .detail-view { display: none; }
@@ -536,7 +537,7 @@ const SPORTS = {
     label: 'UCL', icon: 'assets/ucl.png',
     eventsTable: 'ucl_events',
     marketsTable: 'ucl_odds_matching',
-    hasTrades: false,
+    hasTrades: true,
     threeWay: true,
     oc: (n) => 'oc' + n + '_',
     probField: 'og_prob',
@@ -560,7 +561,7 @@ const SPORTS = {
     label: 'EPL', icon: 'assets/epl.png',
     eventsTable: 'epl_events',
     marketsTable: 'epl_odds_matching',
-    hasTrades: false,
+    hasTrades: true,
     threeWay: true,
     oc: (n) => 'oc' + n + '_',
     probField: 'og_prob',
@@ -804,6 +805,15 @@ function renderMatchCard(ev, mkts, isCompleted) {
   const typeList = [...typeSet].join(', ');
   const noOdds = isFinal && mkts.length > 0 && !mkts.some(m => marketHasOdds(m, cfg));
 
+  // Sum trades across all markets for each outcome
+  let totalOc1 = 0, totalOc2 = 0, totalOc3 = 0;
+  for (const m of mkts) {
+    totalOc1 += m.oc1_trades ?? 0;
+    totalOc2 += m.oc2_trades ?? 0;
+    totalOc3 += m.oc3_trades ?? 0;
+  }
+  const totalTrades = totalOc1 + totalOc2 + totalOc3;
+
   return `<div class="match-card" onclick="openDetail('${ev.slug}')">
     <div class="mc-header">
       <span class="mc-time">${fmtDate(ev.start_time_utc)}</span>
@@ -812,7 +822,7 @@ function renderMatchCard(ev, mkts, isCompleted) {
     <div class="mc-teams">${ev.title}</div>
     <div class="mc-meta">
       ${ev.score ? `<span class="mc-score">${ev.score}</span>` : ''}
-      <span class="mc-mkts">${mktCount} markets${typeList ? ' \u00b7 ' + typeList : ''}</span>
+      <span class="mc-mkts">${mktCount} markets${typeList ? ' · ' + typeList : ''}</span>
     </div>
     ${noOdds ? '<div class="mc-no-odds">&#9888; No odds</div>' : ''}
   </div>`;
