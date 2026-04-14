@@ -805,24 +805,12 @@ function renderMatchList() {
     }
   } else if (activeStatusTab === 'upcoming') {
     if (upcomingWithMkts.length > 0) {
-      const now = new Date();
-      const sevenDays = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-      const within7 = upcomingWithMkts.filter(ev => new Date(ev.start_time_utc) <= sevenDays);
-      const display = showAllUpcoming ? upcomingWithMkts : within7;
-      const hiddenCount = upcomingWithMkts.length - within7.length;
-
       html += '<div class="match-grid">';
-      for (const ev of display) {
+      for (const ev of upcomingWithMkts) {
         const mkts = getMarketsWithTrades(data.grouped, ev.slug, cfg);
         html += renderMatchCard(ev, mkts, false);
       }
       html += '</div>';
-
-      if (!showAllUpcoming && hiddenCount > 0) {
-        html += `<button class="show-more-btn" onclick="showAllUpcoming=true;renderMatchList()">Show ${hiddenCount} more upcoming event${hiddenCount > 1 ? 's' : ''}</button>`;
-      } else if (showAllUpcoming && hiddenCount > 0) {
-        html += `<button class="show-more-btn" onclick="showAllUpcoming=false;renderMatchList()">Show less</button>`;
-      }
     } else {
       html += `<div class="notice">No upcoming ${cfg.label} events with markets.</div>`;
     }
