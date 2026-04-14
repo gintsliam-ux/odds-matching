@@ -678,13 +678,22 @@ function renderTabs() {
 let showAllUpcoming = false;
 
 function marketHasTrades(m) {
-  return ((m.oc1_trades ?? 0) + (m.oc2_trades ?? 0)) >= 1;
+  return ((m.oc1_trades ?? 0) + (m.oc2_trades ?? 0) + (m.oc3_trades ?? 0)) >= 1;
+}
+
+function marketHasAnyPrice(m) {
+  return (
+    m.oc1_pinn_odds != null || m.oc2_pinn_odds != null || m.oc3_pinn_odds != null ||
+    m.oc1_fanduel_odds != null || m.oc2_fanduel_odds != null || m.oc3_fanduel_odds != null ||
+    m.oc1_fanatics_odds != null || m.oc2_fanatics_odds != null || m.oc3_fanatics_odds != null
+  );
 }
 
 function getMarketsWithTrades(grouped, slug, cfg) {
   const markets = grouped[slug] || [];
   if (cfg && !cfg.hasTrades) return markets;
-  return markets.filter(marketHasTrades);
+  // Keep a market if it has Polymarket trades OR any bookmaker price.
+  return markets.filter((m) => marketHasTrades(m) || marketHasAnyPrice(m));
 }
 
 function evHasMarkets(ev, cfg, grouped) {
