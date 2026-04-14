@@ -716,8 +716,8 @@ function renderTabs() {
   container.innerHTML = Object.entries(SPORTS).map(([key, cfg]) => {
     const cnt = upcomingCounts[key];
     const badge = cnt !== undefined ? `<span class="tab-badge">${cnt}</span>` : '';
-    return `<div class="sport-tab ${key === activeSport ? 'active' : ''}" data-sport="${key}" onclick="switchSport('${key}')">
-      <img class="icon" src="${cfg.icon}" alt="${cfg.label}">${cfg.label}${badge}
+    return `<div class="sport-tab ${key === activeSport ? 'active' : ''}" data-sport="${key}" onclick="switchSport('${key}')" title="${cfg.label}">
+      <img class="icon" src="${cfg.icon}" alt="${cfg.label}">${badge}
     </div>`;
   }).join('');
 }
