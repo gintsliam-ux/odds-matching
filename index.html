@@ -454,6 +454,11 @@
 const SB_URL = 'https://ugvwiyhdyqekahizwuhg.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVndndpeWhkeXFla2FoaXp3dWhnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwMTcyNzAsImV4cCI6MjA4NDU5MzI3MH0.vf4FlW327rHxApBV2NtDvw_EUAHmymp-msU8HxkQuIo';
 
+// Odds matching uses a separate Supabase project with a different schema
+// (no _events tables; events derived from (date, home_team, away_team) tuples).
+const SB_ODDS_URL = 'https://aucplqygawlpijzbfvjb.supabase.co';
+const SB_ODDS_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF1Y3BscXlnYXdscGlqemJmdmpiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxNDMxNTIsImV4cCI6MjA5MTcxOTE1Mn0.gnvr0biTrgDC1KSjxlPpktdQX1hj0kMECmDZz1WmSf0';
+
 // ---- Discrepancy Config ----
 const DISC_THRESHOLDS = {
   prob: [0.005, 0.01, 0.02],
@@ -466,9 +471,8 @@ let discMode = 'prob'; // 'prob' = OG Prob vs Fair Prob, 'range' = bookies odds 
 const SPORTS = {
   nfl: {
     label: 'NFL', icon: 'assets/nfl.png',
-    eventsTable: 'nfl_events',
-    marketsTable: 'nfl_odds_matching',
-    hasTrades: true,
+    marketsTable: 'nfl_odds',
+    hasTrades: false,
     oc: (n) => 'oc' + n + '_',
     probField: 'og_prob',
     marketSelect: 'event_slug,question,sports_market_type,oc1_name,oc1_trades,oc2_name,oc2_trades,oc1_pinn_odds,oc2_pinn_odds,oc1_fanduel_odds,oc2_fanduel_odds,oc1_fanatics_odds,oc2_fanatics_odds,oc1_pinn_fair,oc2_pinn_fair,oc1_fanduel_fair,oc2_fanduel_fair,oc1_fanatics_fair,oc2_fanatics_fair,oc1_og_prob,oc2_og_prob,oc1_fair_prob,oc2_fair_prob,oc1_og_blend,oc2_og_blend,oc1_fair_blend,oc2_fair_blend',
@@ -489,9 +493,8 @@ const SPORTS = {
   },
   nhl: {
     label: 'NHL', icon: 'assets/nhl.png',
-    eventsTable: 'nhl_events',
-    marketsTable: 'nhl_odds_matching',
-    hasTrades: true,
+    marketsTable: 'nhl_odds',
+    hasTrades: false,
     oc: (n) => 'oc' + n + '_',
     probField: 'og_prob',
     marketSelect: 'event_slug,question,sports_market_type,oc1_name,oc1_trades,oc2_name,oc2_trades,oc1_pinn_odds,oc2_pinn_odds,oc1_fanduel_odds,oc2_fanduel_odds,oc1_fanatics_odds,oc2_fanatics_odds,oc1_pinn_fair,oc2_pinn_fair,oc1_fanduel_fair,oc2_fanduel_fair,oc1_fanatics_fair,oc2_fanatics_fair,oc1_og_prob,oc2_og_prob,oc1_fair_prob,oc2_fair_prob,oc1_og_blend,oc2_og_blend,oc1_fair_blend,oc2_fair_blend',
@@ -512,9 +515,8 @@ const SPORTS = {
   },
   nba: {
     label: 'NBA', icon: 'assets/nba.png',
-    eventsTable: 'nba_events',
-    marketsTable: 'nba_odds_matching',
-    hasTrades: true,
+    marketsTable: 'nba_odds',
+    hasTrades: false,
     oc: (n) => 'oc' + n + '_',
     probField: 'og_prob',
     marketSelect: 'event_slug,question,sports_market_type,oc1_name,oc1_trades,oc2_name,oc2_trades,oc1_pinn_odds,oc2_pinn_odds,oc1_fanduel_odds,oc2_fanduel_odds,oc1_fanatics_odds,oc2_fanatics_odds,oc1_pinn_fair,oc2_pinn_fair,oc1_fanduel_fair,oc2_fanduel_fair,oc1_fanatics_fair,oc2_fanatics_fair,oc1_og_prob,oc2_og_prob,oc1_fair_prob,oc2_fair_prob,oc1_og_blend,oc2_og_blend,oc1_fair_blend,oc2_fair_blend',
@@ -535,9 +537,8 @@ const SPORTS = {
   },
   ucl: {
     label: 'UCL', icon: 'assets/ucl.png',
-    eventsTable: 'ucl_events',
-    marketsTable: 'ucl_odds_matching',
-    hasTrades: true,
+    marketsTable: 'ucl_odds',
+    hasTrades: false,
     threeWay: true,
     oc: (n) => 'oc' + n + '_',
     probField: 'og_prob',
@@ -559,9 +560,8 @@ const SPORTS = {
   },
   epl: {
     label: 'EPL', icon: 'assets/epl.png',
-    eventsTable: 'epl_events',
-    marketsTable: 'epl_odds_matching',
-    hasTrades: true,
+    marketsTable: 'epl_odds',
+    hasTrades: false,
     threeWay: true,
     oc: (n) => 'oc' + n + '_',
     probField: 'og_prob',
@@ -583,9 +583,8 @@ const SPORTS = {
   },
   laliga: {
     label: 'La Liga', icon: 'assets/laliga.png',
-    eventsTable: 'laliga_events',
-    marketsTable: 'laliga_odds_matching',
-    hasTrades: true,
+    marketsTable: 'laliga_odds',
+    hasTrades: false,
     threeWay: true,
     oc: (n) => 'oc' + n + '_',
     probField: 'og_prob',
@@ -607,9 +606,8 @@ const SPORTS = {
   },
   seriea: {
     label: 'Serie A', icon: 'assets/seriea.png',
-    eventsTable: 'seriea_events',
-    marketsTable: 'seriea_odds_matching',
-    hasTrades: true,
+    marketsTable: 'seriea_odds',
+    hasTrades: false,
     threeWay: true,
     oc: (n) => 'oc' + n + '_',
     probField: 'og_prob',
@@ -661,42 +659,96 @@ async function qAll(table, params = '') {
   return all;
 }
 
+// ---- Odds matching project (separate Supabase instance) ----
+async function qOdds(table, params = '', range = null) {
+  const headers = { apikey: SB_ODDS_KEY, Authorization: `Bearer ${SB_ODDS_KEY}` };
+  if (range) headers.Range = range;
+  const r = await fetch(`${SB_ODDS_URL}/rest/v1/${table}?${params}`, { headers });
+  if (!r.ok) throw new Error(`API ${r.status}: ${table}`);
+  const text = await r.text();
+  if (!text) return [];
+  return JSON.parse(text);
+}
+async function qAllOdds(table, params = '') {
+  const PG = 1000; let all = [], off = 0;
+  while (true) {
+    const page = await qOdds(table, params, `${off}-${off + PG - 1}`);
+    all = all.concat(page);
+    if (page.length < PG) break;
+    off += PG;
+  }
+  return all;
+}
+
+// Map the new DB's market type names → the labels the UI expects.
+const MARKET_TYPE_MAP = { h2h: 'moneyline', spread: 'spreads', total: 'totals' };
+function slugify(s) {
+  return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
 async function loadSport(key) {
   const cfg = SPORTS[key];
-  msg(`Loading ${cfg.label} events...`);
+  msg(`Loading ${cfg.label} markets...`);
 
-  const allEvents = await qAll(cfg.eventsTable, 'select=slug,title,start_time_utc,score,live,ended&order=start_time_utc.desc');
+  // Fetch all odds rows from the odds-matching project and derive events from them.
+  const markets = await qAllOdds(cfg.marketsTable, 'select=*&order=date.desc');
 
-  // Categorise: live (live=true, not ended), upcoming (not ended, not live), completed (ended=true)
+  const grouped = {};
+  const eventMap = new Map();
+  for (const m of markets) {
+    // Remap market type to the names the rest of the app uses
+    m.sports_market_type = MARKET_TYPE_MAP[m.sports_market_type] || m.sports_market_type;
+
+    // Synthetic slug and question so downstream rendering works unchanged
+    const slug = `${key}-${slugify(m.home_team)}-${slugify(m.away_team)}-${m.date}`;
+    m.event_slug = slug;
+    const pair = `${m.home_team} vs ${m.away_team}`;
+    if (m.sports_market_type === 'totals') {
+      m.question = `${pair}: O/U ${m.line ?? ''}`.trim();
+    } else if (m.sports_market_type === 'spreads') {
+      m.question = `Spread: ${pair}${m.line != null ? ` (${m.line})` : ''}`;
+    } else {
+      m.question = pair;
+    }
+
+    if (!grouped[slug]) grouped[slug] = [];
+    grouped[slug].push(m);
+
+    if (!eventMap.has(slug)) {
+      const hasScore = m.home_score != null && m.away_score != null;
+      eventMap.set(slug, {
+        slug,
+        title: pair,
+        start_time_utc: `${m.date}T00:00:00Z`,
+        date: m.date,
+        score: hasScore ? `${m.home_score}-${m.away_score}` : null,
+        ended: hasScore,
+        live: false,
+      });
+    }
+  }
+
+  // Categorise by date (no live flag in new schema; today without a score = upcoming)
+  const todayIso = new Date().toISOString().slice(0, 10);
   const live = [];
   const upcoming = [];
   const completed = [];
-  for (const ev of allEvents) {
+  for (const ev of eventMap.values()) {
     if (ev.ended) {
       completed.push(ev);
-    } else if (ev.live) {
-      live.push(ev);
-    } else {
+    } else if (ev.date >= todayIso) {
       upcoming.push(ev);
+    } else {
+      completed.push(ev);
     }
   }
-  // Sort upcoming by soonest first
-  upcoming.sort((a, b) => new Date(a.start_time_utc || 0) - new Date(b.start_time_utc || 0));
+  upcoming.sort((a, b) => a.date.localeCompare(b.date));
+  completed.sort((a, b) => b.date.localeCompare(a.date));
 
   const events = [...live, ...upcoming, ...completed];
 
-  msg(`Loading ${cfg.label} markets...`);
-  const markets = await qAll(cfg.marketsTable, `select=${cfg.marketSelect}`);
-
-  // Group markets by event_slug
-  const grouped = {};
-  for (const m of markets) {
-    if (!grouped[m.event_slug]) grouped[m.event_slug] = [];
-    grouped[m.event_slug].push(m);
-  }
-
   sportData[key] = { events, live, upcoming, completed, markets, grouped };
-  upcomingCounts[key] = upcoming.filter(ev => evHasMarkets(ev, cfg, grouped)).length;
+  upcomingCounts[key] = upcoming.length;
   return sportData[key];
 }
 
@@ -957,26 +1009,14 @@ async function refreshDetail() {
   if (status) status.textContent = 'Refreshing...';
 
   try {
-    const cfg = SPORTS[activeSport];
     const slug = currentSlug;
-
-    // Re-fetch all markets for this sport (slug filter via client-side)
-    const markets = await qAll(cfg.marketsTable, `select=${cfg.marketSelect}&event_slug=eq.${slug}`);
-
-    // Update the cached data
-    const data = sportData[activeSport];
-    if (data) {
-      // Replace markets for this slug
-      data.grouped[slug] = markets;
-      // Update the full markets array
-      data.markets = data.markets.filter(m => m.event_slug !== slug).concat(markets);
-    }
-
-    // Re-render the detail view in place
+    // New schema has no event_slug column — reload everything and re-open.
+    await loadSport(activeSport);
     openDetailDirect(slug);
     if (status) status.textContent = 'Updated ' + new Date().toLocaleTimeString();
   } catch (err) {
     if (status) status.textContent = 'Error: ' + err.message;
+  } finally {
     if (btn) btn.disabled = false;
   }
 }
