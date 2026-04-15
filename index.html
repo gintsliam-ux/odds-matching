@@ -454,10 +454,10 @@
 const SB_URL = 'https://ugvwiyhdyqekahizwuhg.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVndndpeWhkeXFla2FoaXp3dWhnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwMTcyNzAsImV4cCI6MjA4NDU5MzI3MH0.vf4FlW327rHxApBV2NtDvw_EUAHmymp-msU8HxkQuIo';
 
-// Odds matching uses a separate Supabase project with a different schema
-// (no _events tables; events derived from (date, home_team, away_team) tuples).
-const SB_ODDS_URL = 'https://aucplqygawlpijzbfvjb.supabase.co';
-const SB_ODDS_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF1Y3BscXlnYXdscGlqemJmdmpiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxNDMxNTIsImV4cCI6MjA5MTcxOTE1Mn0.gnvr0biTrgDC1KSjxlPpktdQX1hj0kMECmDZz1WmSf0';
+// Odds matching is served by an edge function in front of a separate
+// Supabase project. Events are derived client-side from (date, home, away).
+const ODDS_API_URL = 'https://aucplqygawlpijzbfvjb.supabase.co/functions/v1/Odds-API';
+const ODDS_API_KEY = 'ol-odds-2026-secure-key';
 
 // ---- Discrepancy Config ----
 const DISC_THRESHOLDS = {
@@ -703,25 +703,13 @@ async function qAll(table, params = '') {
   return all;
 }
 
-// ---- Odds matching project (separate Supabase instance) ----
-async function qOdds(table, params = '', range = null) {
-  const headers = { apikey: SB_ODDS_KEY, Authorization: `Bearer ${SB_ODDS_KEY}` };
-  if (range) headers.Range = range;
-  const r = await fetch(`${SB_ODDS_URL}/rest/v1/${table}?${params}`, { headers });
-  if (!r.ok) throw new Error(`API ${r.status}: ${table}`);
-  const text = await r.text();
-  if (!text) return [];
-  return JSON.parse(text);
-}
-async function qAllOdds(table, params = '') {
-  const PG = 1000; let all = [], off = 0;
-  while (true) {
-    const page = await qOdds(table, params, `${off}-${off + PG - 1}`);
-    all = all.concat(page);
-    if (page.length < PG) break;
-    off += PG;
-  }
-  return all;
+// ---- Odds matching edge function ----
+async function fetchOddsApi(params) {
+  const qs = new URLSearchParams({ key: ODDS_API_KEY, ...params });
+  const r = await fetch(`${ODDS_API_URL}?${qs.toString()}`);
+  if (!r.ok) throw new Error(`Odds API ${r.status}`);
+  const json = await r.json();
+  return json.data || [];
 }
 
 // Map the new DB's market type names → the labels the UI expects.
@@ -734,8 +722,8 @@ async function loadSport(key) {
   const cfg = SPORTS[key];
   msg(`Loading ${cfg.label} markets...`);
 
-  // Fetch all odds rows from the odds-matching project and derive events from them.
-  const markets = await qAllOdds(cfg.marketsTable, 'select=*&order=date.desc');
+  // Fetch all odds rows via the edge function and derive events client-side.
+  const markets = await fetchOddsApi({ sport: key });
 
   const grouped = {};
   const eventMap = new Map();
