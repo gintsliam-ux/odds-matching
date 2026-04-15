@@ -1082,18 +1082,17 @@ function formatOutcome(outcome) {
   return escHtml(outcome);
 }
 
-function formatQuestion(q, marketType, cfg) {
-  if (!q) return '';
+function formatQuestion(q, marketType, cfg, line) {
   const mt = (marketType || '').toLowerCase();
-  const sport = cfg.label.toUpperCase();
-  // UCL/EPL moneyline → "Who will win?"
-  if ((sport === 'UCL' || sport === 'EPL') && mt === 'moneyline') return 'Who will win?';
-  // All sports: remove "Spread: " prefix
-  if (q.startsWith('Spread: ')) return q.slice(8);
-  // Totals: extract "O/U X.X" from "Team vs. Team: O/U 1.5"
-  const ouMatch = q.match(/:\s*(O\/U\s*[\d.]+)/i);
-  if (mt === 'totals' && ouMatch) return ouMatch[1];
-  return q;
+  if (mt === 'moneyline') return 'H2H';
+  if (mt === 'spreads') return line != null ? `Line ${line}` : 'Line';
+  if (mt === 'totals') {
+    if (line != null) return `O/U ${line}`;
+    const ouMatch = (q || '').match(/O\/U\s*([\d.]+)/i);
+    if (ouMatch) return `O/U ${ouMatch[1]}`;
+    return 'O/U';
+  }
+  return q || '';
 }
 
 function renderOddsTable(markets, cfg, type) {
@@ -1107,7 +1106,7 @@ function renderOddsTable(markets, cfg, type) {
     if (cfg.threeWay && m.oc3_name) {
       rows.push(buildRow(m, 3, cfg));
     }
-    tableRows.push({ question: formatQuestion(m.question, m.sports_market_type, cfg), line: m.line, m, rows });
+    tableRows.push({ question: formatQuestion(m.question, m.sports_market_type, cfg, m.line), line: m.line, m, rows });
   }
 
   // Build column definitions
