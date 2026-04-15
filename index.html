@@ -810,10 +810,8 @@ function fmtProb(v) { return v != null ? v.toFixed(1) + '%' : '-'; }
 function renderTabs() {
   const container = document.getElementById('sport-tabs');
   container.innerHTML = Object.entries(SPORTS).map(([key, cfg]) => {
-    const cnt = upcomingCounts[key];
-    const badge = cnt !== undefined ? `<span class="tab-badge">${cnt}</span>` : '';
     return `<div class="sport-tab ${key === activeSport ? 'active' : ''}" data-sport="${key}" onclick="switchSport('${key}')" title="${cfg.label}">
-      <img class="icon" src="${cfg.icon}" alt="${cfg.label}">${badge}
+      <img class="icon" src="${cfg.icon}" alt="${cfg.label}">
     </div>`;
   }).join('');
 }
