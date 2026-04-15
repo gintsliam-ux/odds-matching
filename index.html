@@ -761,9 +761,9 @@ function renderMatchList() {
   const cfg = SPORTS[activeSport];
   const listEl = document.getElementById('match-list-view');
 
-  // Filter out events with 0 markets
+  // Filter live/completed to events with markets; upcoming shows everything.
   const liveWithMkts = (data.live || []).filter(ev => evHasMarkets(ev, cfg, data.grouped));
-  const upcomingWithMkts = data.upcoming.filter(ev => evHasMarkets(ev, cfg, data.grouped));
+  const upcomingWithMkts = data.upcoming; // show all upcoming, even without odds_matching rows
   const completedWithMkts = data.completed.filter(ev => evHasMarkets(ev, cfg, data.grouped));
 
   // Auto-select best tab if current has no events
@@ -848,7 +848,9 @@ function renderMatchCard(ev, mkts, isCompleted) {
   const mktCount = mkts.length;
   const typeSet = new Set(mkts.map(m => m.sports_market_type));
   const typeList = [...typeSet].join(', ');
-  const noOdds = isFinal && mkts.length > 0 && !mkts.some(m => marketHasOdds(m, cfg));
+  const noOdds =
+    (isFinal && mkts.length > 0 && !mkts.some(m => marketHasOdds(m, cfg))) ||
+    (!isFinal && !isLive && mkts.length === 0);
 
   // Sum trades across all markets for each outcome
   let totalOc1 = 0, totalOc2 = 0, totalOc3 = 0;
