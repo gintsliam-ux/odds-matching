@@ -45,6 +45,12 @@
   header h1 b { color: var(--blue); }
 
   /* Sport Tabs */
+  .sport-tabs-bar {
+    background: #0b1322; border-bottom: 1px solid var(--border);
+    padding: 12px 32px; overflow-x: auto;
+  }
+  .sport-tabs-bar::-webkit-scrollbar { height: 4px; }
+  .sport-tabs-bar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
   .sport-tabs { display: flex; gap: 4px; }
   .sport-tab {
     background: rgba(255,255,255,0.04); border: 1px solid var(--border2); border-radius: 8px;
@@ -346,13 +352,16 @@
 <header>
   <div class="header-left">
     <h1><b>Odds</b> Matching</h1>
-    <div class="sport-tabs" id="sport-tabs"></div>
   </div>
   <div style="display:flex;align-items:center;gap:6px;opacity:0.7;">
     <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">Powered by</span>
     <img src="assets/mr huang jin.png" alt="Mr Huang Jin" style="height:28px;border-radius:4px;">
   </div>
 </header>
+
+<div class="sport-tabs-bar">
+  <div class="sport-tabs" id="sport-tabs"></div>
+</div>
 
 <main>
   <div class="main-content">
