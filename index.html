@@ -47,11 +47,9 @@
   /* Sport Tabs */
   .sport-tabs-bar {
     background: #0b1322; border-bottom: 1px solid var(--border);
-    padding: 12px 32px; overflow-x: auto;
+    padding: 12px 32px;
   }
-  .sport-tabs-bar::-webkit-scrollbar { height: 4px; }
-  .sport-tabs-bar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-  .sport-tabs { display: flex; gap: 4px; }
+  .sport-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
   .sport-tab {
     background: rgba(255,255,255,0.04); border: 1px solid var(--border2); border-radius: 8px;
     padding: 8px 18px; cursor: pointer; font-size: 13px; font-weight: 600;
