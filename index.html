@@ -618,6 +618,7 @@ const SPORTS = {
     label: 'Tennis', icon: 'assets/tennis.png',
     marketsTable: 'tennis_odds',
     hasTrades: false,
+    hideTab: true,
     oc: (n) => 'oc' + n + '_',
     probField: 'fair_prob',
     marketSelect: '*',
@@ -905,11 +906,13 @@ function handleTournamentDropdown() {
 // ---- Render Sport Tabs ----
 function renderTabs() {
   const container = document.getElementById('sport-tabs');
-  container.innerHTML = Object.entries(SPORTS).map(([key, cfg]) => {
-    return `<div class="sport-tab ${key === activeSport ? 'active' : ''}" data-sport="${key}" onclick="switchSport('${key}')" title="${cfg.label}">
-      <img class="icon" src="${cfg.icon}" alt="${cfg.label}">
-    </div>`;
-  }).join('');
+  container.innerHTML = Object.entries(SPORTS)
+    .filter(([, cfg]) => !cfg.hideTab)
+    .map(([key, cfg]) => {
+      return `<div class="sport-tab ${key === activeSport ? 'active' : ''}" data-sport="${key}" onclick="switchSport('${key}')" title="${cfg.label}">
+        <img class="icon" src="${cfg.icon}" alt="${cfg.label}">
+      </div>`;
+    }).join('');
   renderDropdowns();
 }
 
