@@ -49,6 +49,20 @@
     background: #0b1322; border-bottom: 1px solid var(--border);
     padding: 12px 32px;
   }
+  .dropdown-row {
+    display: flex; gap: 12px; margin-top: 12px; flex-wrap: wrap;
+  }
+  .dropdown-group { display: flex; flex-direction: column; gap: 4px; min-width: 160px; }
+  .dropdown-label {
+    font-size: 9px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--muted); font-weight: 600;
+  }
+  .dropdown-select {
+    background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 10px; font-size: 13px; color: var(--text); outline: none;
+    cursor: pointer;
+  }
+  .dropdown-select:focus { border-color: var(--blue); }
   .sport-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
   .sport-tab {
     background: rgba(255,255,255,0.04); border: 1px solid var(--border2); border-radius: 8px;
@@ -359,6 +373,16 @@
 
 <div class="sport-tabs-bar">
   <div class="sport-tabs" id="sport-tabs"></div>
+  <div class="dropdown-row" id="dropdown-row">
+    <div class="dropdown-group">
+      <label class="dropdown-label">Sport</label>
+      <select id="sport-dropdown" class="dropdown-select" onchange="handleSportDropdown()"></select>
+    </div>
+    <div class="dropdown-group">
+      <label class="dropdown-label">Tournament</label>
+      <select id="tournament-dropdown" class="dropdown-select" onchange="handleTournamentDropdown()"></select>
+    </div>
+  </div>
 </div>
 
 <main>
@@ -590,6 +614,28 @@ const SPORTS = {
     hasDbBlend: false,
     marketTypes: ['moneyline', 'spreads', 'totals'],
   },
+  tennis: {
+    label: 'Tennis', icon: 'assets/tennis.png',
+    marketsTable: 'tennis_odds',
+    hasTrades: false,
+    oc: (n) => 'oc' + n + '_',
+    probField: 'fair_prob',
+    marketSelect: '*',
+    books: [
+      { key: 'pinn', label: 'Pinnacle', col1: 'oc1_pinn_odds', col2: 'oc2_pinn_odds' },
+      { key: 'sbet', label: 'Sportsbet', col1: 'oc1_sbet_odds', col2: 'oc2_sbet_odds' },
+      { key: 'tab', label: 'Tab', col1: 'oc1_tab_odds', col2: 'oc2_tab_odds' },
+    ],
+    fairBooks: [
+      { key: 'pinn_fair', label: 'Pinn Fair', col1: 'oc1_pinn_fair', col2: 'oc2_pinn_fair' },
+      { key: 'sbet_fair', label: 'Sbet Fair', col1: 'oc1_sbet_fair', col2: 'oc2_sbet_fair' },
+      { key: 'tab_fair', label: 'Tab Fair', col1: 'oc1_tab_fair', col2: 'oc2_tab_fair' },
+    ],
+    hasProbs: true,
+    hasWinner: false,
+    hasDbBlend: false,
+    marketTypes: ['moneyline', 'spreads', 'totals'],
+  },
   seriea: {
     label: 'Serie A', icon: 'assets/seriea.png',
     marketsTable: 'seriea_odds',
@@ -686,9 +732,11 @@ async function loadSport(key) {
     m.sports_market_type = MARKET_TYPE_MAP[m.sports_market_type] || m.sports_market_type;
 
     // Synthetic slug and question so downstream rendering works unchanged
-    const slug = `${key}-${slugify(m.home_team)}-${slugify(m.away_team)}-${m.date}`;
+    const t1 = m.home_team || m.oc1_name || '';
+    const t2 = m.away_team || m.oc2_name || '';
+    const slug = `${key}-${slugify(t1)}-${slugify(t2)}-${m.date}`;
     m.event_slug = slug;
-    const pair = `${m.home_team} vs ${m.away_team}`;
+    const pair = `${t1} vs ${t2}`;
     if (m.sports_market_type === 'totals') {
       m.question = `${pair}: O/U ${m.line ?? ''}`.trim();
     } else if (m.sports_market_type === 'spreads') {
@@ -714,7 +762,7 @@ async function loadSport(key) {
       eventMap.set(slug, {
         slug,
         title: pair,
-        start_time_utc: `${m.date}T00:00:00Z`,
+        start_time_utc: m.commence_time || `${m.date}T00:00:00Z`,
         date: m.date,
         score: hasScore ? `${m.home_score}-${m.away_score}` : null,
         ended: hasScore,
@@ -757,6 +805,56 @@ function fmtDate(u) {
 function fmtOdds(v) { return v != null ? v.toFixed(2) : '-'; }
 function fmtProb(v) { return v != null ? v.toFixed(1) + '%' : '-'; }
 
+// ---- Sport ↔ Tournament grouping for dropdowns ----
+const SPORT_GROUPS = {
+  'American Football': ['nfl'],
+  'Australian Rules': ['afl'],
+  'Baseball': ['mlb'],
+  'Basketball': ['nba'],
+  'Football': ['epl', 'ucl', 'laliga', 'seriea'],
+  'Ice Hockey': ['nhl'],
+  'Rugby League': ['nrl'],
+  'Tennis': ['tennis'],
+};
+
+function sportGroupFor(key) {
+  for (const [group, keys] of Object.entries(SPORT_GROUPS)) {
+    if (keys.includes(key)) return group;
+  }
+  return SPORTS[key]?.label || key;
+}
+
+function renderDropdowns() {
+  const sportDD = document.getElementById('sport-dropdown');
+  const tournDD = document.getElementById('tournament-dropdown');
+  if (!sportDD || !tournDD) return;
+
+  const currentGroup = sportGroupFor(activeSport);
+
+  // Sport dropdown
+  const groups = Object.keys(SPORT_GROUPS).sort();
+  sportDD.innerHTML = groups.map(g =>
+    `<option value="${g}" ${g === currentGroup ? 'selected' : ''}>${g}</option>`
+  ).join('');
+
+  // Tournament dropdown (filtered by selected sport group)
+  const keys = SPORT_GROUPS[currentGroup] || [];
+  tournDD.innerHTML = keys.map(k =>
+    `<option value="${k}" ${k === activeSport ? 'selected' : ''}>${SPORTS[k]?.label || k}</option>`
+  ).join('');
+}
+
+function handleSportDropdown() {
+  const group = document.getElementById('sport-dropdown').value;
+  const keys = SPORT_GROUPS[group] || [];
+  if (keys.length > 0) switchSport(keys[0]);
+}
+
+function handleTournamentDropdown() {
+  const key = document.getElementById('tournament-dropdown').value;
+  if (SPORTS[key]) switchSport(key);
+}
+
 // ---- Render Sport Tabs ----
 function renderTabs() {
   const container = document.getElementById('sport-tabs');
@@ -765,6 +863,7 @@ function renderTabs() {
       <img class="icon" src="${cfg.icon}" alt="${cfg.label}">
     </div>`;
   }).join('');
+  renderDropdowns();
 }
 
 // ---- Render Match List ----
