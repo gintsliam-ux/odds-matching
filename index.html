@@ -614,6 +614,30 @@ const SPORTS = {
     hasDbBlend: false,
     marketTypes: ['moneyline', 'spreads', 'totals'],
   },
+  cricket: {
+    label: 'Cricket', icon: 'assets/cricket.png',
+    marketsTable: 'cricket_odds',
+    hasTrades: false,
+    hideTab: true,
+    threeWay: true,
+    oc: (n) => 'oc' + n + '_',
+    probField: 'fair_prob',
+    marketSelect: '*',
+    books: [
+      { key: 'pinn', label: 'Pinnacle', col1: 'oc1_pinn_odds', col2: 'oc2_pinn_odds', col3: 'oc3_pinn_odds' },
+      { key: 'sbet', label: 'Sportsbet', col1: 'oc1_sbet_odds', col2: 'oc2_sbet_odds', col3: 'oc3_sbet_odds' },
+      { key: 'tab', label: 'Tab', col1: 'oc1_tab_odds', col2: 'oc2_tab_odds', col3: 'oc3_tab_odds' },
+    ],
+    fairBooks: [
+      { key: 'pinn_fair', label: 'Pinn Fair', col1: 'oc1_pinn_fair', col2: 'oc2_pinn_fair', col3: 'oc3_pinn_fair' },
+      { key: 'sbet_fair', label: 'Sbet Fair', col1: 'oc1_sbet_fair', col2: 'oc2_sbet_fair', col3: 'oc3_sbet_fair' },
+      { key: 'tab_fair', label: 'Tab Fair', col1: 'oc1_tab_fair', col2: 'oc2_tab_fair', col3: 'oc3_tab_fair' },
+    ],
+    hasProbs: true,
+    hasWinner: false,
+    hasDbBlend: false,
+    marketTypes: ['moneyline', 'spreads', 'totals'],
+  },
   tennis: {
     label: 'Tennis', icon: 'assets/tennis.png',
     marketsTable: 'tennis_odds',
@@ -740,8 +764,8 @@ async function loadSport(key) {
       if (/^(over|under)\s/i.test(n)) return '';
       return n.replace(/\s+[+-]?\d+(\.\d+)?$/, '').trim();
     };
-    const t1 = m.home_team || stripLine(m.oc1_name) || '';
-    const t2 = m.away_team || stripLine(m.oc2_name) || '';
+    const t1 = m.home_team || m.team1 || stripLine(m.oc1_name) || '';
+    const t2 = m.away_team || m.team2 || stripLine(m.oc2_name) || '';
     // For tennis (and any sport with commence_time + no home_team), group
     // by commence_time so h2h/spread/total all land under one event.
     const slug = (!m.home_team && m.commence_time)
@@ -834,6 +858,7 @@ const SPORT_GROUPS = {
   'Australian Rules': ['afl'],
   'Baseball': ['mlb'],
   'Basketball': ['nba'],
+  'Cricket': ['cricket'],
   'Football': ['epl', 'ucl', 'laliga', 'seriea'],
   'Ice Hockey': ['nhl'],
   'Rugby League': ['nrl'],
