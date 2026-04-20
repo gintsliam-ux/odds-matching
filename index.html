@@ -663,9 +663,10 @@ const SPORTS = {
 
 // ---- State ----
 let activeSport = 'nfl';
-let sportData = {};    // { nhl: { events, markets, grouped }, ... }
+let sportData = {};    // { nhl: { events, markets, grouped, subTournaments? }, ... }
 let currentSlug = null; // selected match slug for detail view
 let upcomingCounts = {};
+let selectedSubTournament = null; // for tennis: ATP Wimbledon, etc.
 
 // ---- Data Layer ----
 const msg = t => { const e = document.getElementById('load-msg'); if (e) e.textContent = t; };
@@ -767,9 +768,17 @@ async function loadSport(key) {
         score: hasScore ? `${m.home_score}-${m.away_score}` : null,
         ended: hasScore,
         live: false,
+        tournament: m.tournament || null,
       });
     }
   }
+
+  // Collect sub-tournaments (e.g. tennis has ATP Wimbledon, ATP Australian Open, etc.)
+  const subTournamentSet = new Set();
+  for (const ev of eventMap.values()) {
+    if (ev.tournament) subTournamentSet.add(ev.tournament);
+  }
+  const subTournaments = [...subTournamentSet].sort();
 
   // Categorise by date (no live flag in new schema; today without a score = upcoming)
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -790,7 +799,7 @@ async function loadSport(key) {
 
   const events = [...live, ...upcoming, ...completed];
 
-  sportData[key] = { events, live, upcoming, completed, markets, grouped };
+  sportData[key] = { events, live, upcoming, completed, markets, grouped, subTournaments };
   upcomingCounts[key] = upcoming.length;
   return sportData[key];
 }
@@ -837,22 +846,47 @@ function renderDropdowns() {
     `<option value="${g}" ${g === currentGroup ? 'selected' : ''}>${g}</option>`
   ).join('');
 
-  // Tournament dropdown (filtered by selected sport group)
-  const keys = SPORT_GROUPS[currentGroup] || [];
-  tournDD.innerHTML = keys.map(k =>
-    `<option value="${k}" ${k === activeSport ? 'selected' : ''}>${SPORTS[k]?.label || k}</option>`
-  ).join('');
+  // Tournament dropdown
+  const data = sportData[activeSport];
+  const subs = data && data.subTournaments && data.subTournaments.length > 0 ? data.subTournaments : null;
+
+  if (subs) {
+    // Sub-tournaments from the data (e.g. tennis)
+    if (!selectedSubTournament || !subs.includes(selectedSubTournament)) {
+      selectedSubTournament = subs[0];
+    }
+    tournDD.innerHTML = subs.map(t =>
+      `<option value="${t}" ${t === selectedSubTournament ? 'selected' : ''}>${t}</option>`
+    ).join('');
+  } else {
+    // Regular: one entry per sport key in the group
+    selectedSubTournament = null;
+    const keys = SPORT_GROUPS[currentGroup] || [];
+    tournDD.innerHTML = keys.map(k =>
+      `<option value="${k}" ${k === activeSport ? 'selected' : ''}>${SPORTS[k]?.label || k}</option>`
+    ).join('');
+  }
 }
 
 function handleSportDropdown() {
   const group = document.getElementById('sport-dropdown').value;
   const keys = SPORT_GROUPS[group] || [];
-  if (keys.length > 0) switchSport(keys[0]);
+  if (keys.length > 0) {
+    selectedSubTournament = null;
+    switchSport(keys[0]);
+  }
 }
 
 function handleTournamentDropdown() {
-  const key = document.getElementById('tournament-dropdown').value;
-  if (SPORTS[key]) switchSport(key);
+  const val = document.getElementById('tournament-dropdown').value;
+  const data = sportData[activeSport];
+  const subs = data && data.subTournaments && data.subTournaments.length > 0 ? data.subTournaments : null;
+  if (subs && subs.includes(val)) {
+    selectedSubTournament = val;
+    renderMatchList();
+  } else if (SPORTS[val]) {
+    switchSport(val);
+  }
 }
 
 // ---- Render Sport Tabs ----
@@ -905,10 +939,15 @@ function renderMatchList() {
   const cfg = SPORTS[activeSport];
   const listEl = document.getElementById('match-list-view');
 
+  // Optional sub-tournament filter (e.g. ATP Wimbledon within tennis)
+  const subFilter = selectedSubTournament
+    ? (ev) => ev.tournament === selectedSubTournament
+    : () => true;
+
   // Filter live/completed to events with markets; upcoming shows everything.
-  const liveWithMkts = (data.live || []).filter(ev => evHasMarkets(ev, cfg, data.grouped));
-  const upcomingWithMkts = data.upcoming; // show all upcoming, even without odds_matching rows
-  const completedWithMkts = data.completed.filter(ev => evHasMarkets(ev, cfg, data.grouped));
+  const liveWithMkts = (data.live || []).filter(ev => subFilter(ev) && evHasMarkets(ev, cfg, data.grouped));
+  const upcomingWithMkts = data.upcoming.filter(subFilter);
+  const completedWithMkts = data.completed.filter(ev => subFilter(ev) && evHasMarkets(ev, cfg, data.grouped));
 
   // Auto-select best tab if current has no events
   if (activeStatusTab === 'live' && liveWithMkts.length === 0 && upcomingWithMkts.length > 0) {
@@ -1011,6 +1050,7 @@ function renderMatchCard(ev, mkts, isCompleted) {
       <span class="mc-status ${statusClass}">${statusText}</span>
     </div>
     <div class="mc-teams">${ev.title}</div>
+    ${ev.tournament ? `<div style="font-size:10px;color:var(--muted);margin-bottom:2px;">${ev.tournament}</div>` : ''}
     <div class="mc-meta">
       ${ev.score ? `<span class="mc-score">${ev.score}</span>` : ''}
       <span class="mc-mkts">${mktCount} markets${typeList ? ' · ' + typeList : ''}</span>
