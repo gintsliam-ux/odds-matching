@@ -732,12 +732,22 @@ async function loadSport(key) {
     // Remap market type to the names the rest of the app uses
     m.sports_market_type = MARKET_TYPE_MAP[m.sports_market_type] || m.sports_market_type;
 
-    // Synthetic slug and question so downstream rendering works unchanged
-    const t1 = m.home_team || m.oc1_name || '';
-    const t2 = m.away_team || m.oc2_name || '';
-    const slug = `${key}-${slugify(t1)}-${slugify(t2)}-${m.date}`;
+    // Strip spread/total line decorations from names for grouping.
+    // "Novak Djokovic +7.5" → "Novak Djokovic", "Over 39.5" → ""
+    const stripLine = (n) => {
+      if (!n) return '';
+      if (/^(over|under)\s/i.test(n)) return '';
+      return n.replace(/\s+[+-]?\d+(\.\d+)?$/, '').trim();
+    };
+    const t1 = m.home_team || stripLine(m.oc1_name) || '';
+    const t2 = m.away_team || stripLine(m.oc2_name) || '';
+    // For tennis (and any sport with commence_time + no home_team), group
+    // by commence_time so h2h/spread/total all land under one event.
+    const slug = (!m.home_team && m.commence_time)
+      ? `${key}-${m.date}-${slugify(m.commence_time)}`
+      : `${key}-${slugify(t1)}-${slugify(t2)}-${m.date}`;
     m.event_slug = slug;
-    const pair = `${t1} vs ${t2}`;
+    const pair = (t1 && t2) ? `${t1} vs ${t2}` : (t1 || t2 || slug);
     if (m.sports_market_type === 'totals') {
       m.question = `${pair}: O/U ${m.line ?? ''}`.trim();
     } else if (m.sports_market_type === 'spreads') {
@@ -770,6 +780,9 @@ async function loadSport(key) {
         live: false,
         tournament: m.tournament || null,
       });
+    } else if (t1 && t2 && m.sports_market_type === 'moneyline') {
+      // Update title from the moneyline row (cleanest names, no line decoration)
+      eventMap.get(slug).title = pair;
     }
   }
 
