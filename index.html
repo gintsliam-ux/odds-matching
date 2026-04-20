@@ -614,6 +614,75 @@ const SPORTS = {
     hasDbBlend: false,
     marketTypes: ['moneyline', 'spreads', 'totals'],
   },
+  baseball: {
+    label: 'Baseball (Other)', icon: 'assets/mlb.png',
+    marketsTable: 'baseball_odds',
+    hasTrades: false,
+    hideTab: true,
+    oc: (n) => 'oc' + n + '_',
+    probField: 'fair_prob',
+    marketSelect: '*',
+    books: [
+      { key: 'pinn', label: 'Pinnacle', col1: 'oc1_pinn_odds', col2: 'oc2_pinn_odds' },
+      { key: 'sbet', label: 'Sportsbet', col1: 'oc1_sbet_odds', col2: 'oc2_sbet_odds' },
+      { key: 'tab', label: 'Tab', col1: 'oc1_tab_odds', col2: 'oc2_tab_odds' },
+    ],
+    fairBooks: [
+      { key: 'pinn_fair', label: 'Pinn Fair', col1: 'oc1_pinn_fair', col2: 'oc2_pinn_fair' },
+      { key: 'sbet_fair', label: 'Sbet Fair', col1: 'oc1_sbet_fair', col2: 'oc2_sbet_fair' },
+      { key: 'tab_fair', label: 'Tab Fair', col1: 'oc1_tab_fair', col2: 'oc2_tab_fair' },
+    ],
+    hasProbs: true,
+    hasWinner: false,
+    hasDbBlend: false,
+    marketTypes: ['moneyline', 'spreads', 'totals'],
+  },
+  basketball: {
+    label: 'Basketball (Other)', icon: 'assets/nba.png',
+    marketsTable: 'basketball_odds',
+    hasTrades: false,
+    hideTab: true,
+    oc: (n) => 'oc' + n + '_',
+    probField: 'fair_prob',
+    marketSelect: '*',
+    books: [
+      { key: 'pinn', label: 'Pinnacle', col1: 'oc1_pinn_odds', col2: 'oc2_pinn_odds' },
+      { key: 'sbet', label: 'Sportsbet', col1: 'oc1_sbet_odds', col2: 'oc2_sbet_odds' },
+      { key: 'tab', label: 'Tab', col1: 'oc1_tab_odds', col2: 'oc2_tab_odds' },
+    ],
+    fairBooks: [
+      { key: 'pinn_fair', label: 'Pinn Fair', col1: 'oc1_pinn_fair', col2: 'oc2_pinn_fair' },
+      { key: 'sbet_fair', label: 'Sbet Fair', col1: 'oc1_sbet_fair', col2: 'oc2_sbet_fair' },
+      { key: 'tab_fair', label: 'Tab Fair', col1: 'oc1_tab_fair', col2: 'oc2_tab_fair' },
+    ],
+    hasProbs: true,
+    hasWinner: false,
+    hasDbBlend: false,
+    marketTypes: ['moneyline', 'spreads', 'totals'],
+  },
+  icehockey: {
+    label: 'Ice Hockey (Other)', icon: 'assets/nhl.png',
+    marketsTable: 'icehockey_odds',
+    hasTrades: false,
+    hideTab: true,
+    oc: (n) => 'oc' + n + '_',
+    probField: 'fair_prob',
+    marketSelect: '*',
+    books: [
+      { key: 'pinn', label: 'Pinnacle', col1: 'oc1_pinn_odds', col2: 'oc2_pinn_odds' },
+      { key: 'sbet', label: 'Sportsbet', col1: 'oc1_sbet_odds', col2: 'oc2_sbet_odds' },
+      { key: 'tab', label: 'Tab', col1: 'oc1_tab_odds', col2: 'oc2_tab_odds' },
+    ],
+    fairBooks: [
+      { key: 'pinn_fair', label: 'Pinn Fair', col1: 'oc1_pinn_fair', col2: 'oc2_pinn_fair' },
+      { key: 'sbet_fair', label: 'Sbet Fair', col1: 'oc1_sbet_fair', col2: 'oc2_sbet_fair' },
+      { key: 'tab_fair', label: 'Tab Fair', col1: 'oc1_tab_fair', col2: 'oc2_tab_fair' },
+    ],
+    hasProbs: true,
+    hasWinner: false,
+    hasDbBlend: false,
+    marketTypes: ['moneyline', 'spreads', 'totals'],
+  },
   cricket: {
     label: 'Cricket', icon: 'assets/cricket.png',
     marketsTable: 'cricket_odds',
@@ -856,11 +925,11 @@ function fmtProb(v) { return v != null ? v.toFixed(1) + '%' : '-'; }
 const SPORT_GROUPS = {
   'American Football': ['nfl'],
   'Australian Rules': ['afl'],
-  'Baseball': ['mlb'],
-  'Basketball': ['nba'],
+  'Baseball': ['mlb', 'baseball'],
+  'Basketball': ['nba', 'basketball'],
   'Cricket': ['cricket'],
   'Football': ['epl', 'ucl', 'laliga', 'seriea'],
-  'Ice Hockey': ['nhl'],
+  'Ice Hockey': ['nhl', 'icehockey'],
   'Rugby League': ['nrl'],
   'Tennis': ['tennis'],
 };
@@ -885,26 +954,35 @@ function renderDropdowns() {
     `<option value="${g}" ${g === currentGroup ? 'selected' : ''}>${g}</option>`
   ).join('');
 
-  // Tournament dropdown
-  const data = sportData[activeSport];
-  const subs = data && data.subTournaments && data.subTournaments.length > 0 ? data.subTournaments : null;
+  // Tournament dropdown — merges primary sport keys (e.g. "NBA") with
+  // sub-tournaments from the "other" table (e.g. "Euroleague", "NBL").
+  const keys = SPORT_GROUPS[currentGroup] || [];
+  let options = [];
 
-  if (subs) {
-    // Sub-tournaments from the data (e.g. tennis)
-    if (!selectedSubTournament || !subs.includes(selectedSubTournament)) {
-      selectedSubTournament = subs[0];
+  for (const k of keys) {
+    const d = sportData[k];
+    const subs = d && d.subTournaments && d.subTournaments.length > 0 ? d.subTournaments : null;
+    if (subs) {
+      // This key has sub-tournaments — list each one
+      for (const t of subs) {
+        const sel = k === activeSport && selectedSubTournament === t;
+        options.push(`<option value="${k}|${t}" ${sel ? 'selected' : ''}>${t}</option>`);
+      }
+    } else {
+      // Simple sport key — one option
+      const sel = k === activeSport && !selectedSubTournament;
+      options.push(`<option value="${k}" ${sel ? 'selected' : ''}>${SPORTS[k]?.label || k}</option>`);
     }
-    tournDD.innerHTML = subs.map(t =>
-      `<option value="${t}" ${t === selectedSubTournament ? 'selected' : ''}>${t}</option>`
-    ).join('');
-  } else {
-    // Regular: one entry per sport key in the group
-    selectedSubTournament = null;
-    const keys = SPORT_GROUPS[currentGroup] || [];
-    tournDD.innerHTML = keys.map(k =>
-      `<option value="${k}" ${k === activeSport ? 'selected' : ''}>${SPORTS[k]?.label || k}</option>`
-    ).join('');
   }
+
+  // If "other" tables haven't loaded yet, show a placeholder for them
+  for (const k of keys) {
+    if (!sportData[k] && SPORTS[k]?.hideTab) {
+      options.push(`<option value="${k}" disabled style="color:var(--dim)">${SPORTS[k].label} (loading...)</option>`);
+    }
+  }
+
+  tournDD.innerHTML = options.join('');
 }
 
 function handleSportDropdown() {
@@ -918,12 +996,19 @@ function handleSportDropdown() {
 
 function handleTournamentDropdown() {
   const val = document.getElementById('tournament-dropdown').value;
-  const data = sportData[activeSport];
-  const subs = data && data.subTournaments && data.subTournaments.length > 0 ? data.subTournaments : null;
-  if (subs && subs.includes(val)) {
-    selectedSubTournament = val;
-    renderMatchList();
+  if (val.includes('|')) {
+    // "sportKey|subTournament"
+    const [key, sub] = val.split('|');
+    if (key !== activeSport) {
+      selectedSubTournament = sub;
+      switchSport(key);
+    } else {
+      selectedSubTournament = sub;
+      renderMatchList();
+      renderDropdowns();
+    }
   } else if (SPORTS[val]) {
+    selectedSubTournament = null;
     switchSport(val);
   }
 }
