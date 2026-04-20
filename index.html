@@ -698,7 +698,16 @@ async function loadSport(key) {
     }
 
     if (!grouped[slug]) grouped[slug] = [];
-    grouped[slug].push(m);
+    // Deduplicate: skip if an identical (type + oc1 + oc2 + line) row already exists
+    // for this event (the DB sometimes has duplicate moneyline rows).
+    const isDup = grouped[slug].some(
+      (prev) =>
+        prev.sports_market_type === m.sports_market_type &&
+        prev.oc1_name === m.oc1_name &&
+        prev.oc2_name === m.oc2_name &&
+        prev.line === m.line
+    );
+    if (!isDup) grouped[slug].push(m);
 
     if (!eventMap.has(slug)) {
       const hasScore = m.home_score != null && m.away_score != null;
