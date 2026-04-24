@@ -730,6 +730,77 @@ const SPORTS = {
     hasDbBlend: false,
     marketTypes: ['moneyline', 'spreads', 'totals'],
   },
+  soccer: {
+    label: 'Soccer (Other)', icon: 'assets/seriea.png',
+    marketsTable: 'soccer_odds',
+    hasTrades: false,
+    hideTab: true,
+    threeWay: true,
+    oc: (n) => 'oc' + n + '_',
+    probField: 'fair_prob',
+    marketSelect: '*',
+    books: [
+      { key: 'pinn', label: 'Pinnacle', col1: 'oc1_pinn_odds', col2: 'oc2_pinn_odds', col3: 'oc3_pinn_odds' },
+      { key: 'sbet', label: 'Sportsbet', col1: 'oc1_sbet_odds', col2: 'oc2_sbet_odds', col3: 'oc3_sbet_odds' },
+      { key: 'tab', label: 'Tab', col1: 'oc1_tab_odds', col2: 'oc2_tab_odds', col3: 'oc3_tab_odds' },
+    ],
+    fairBooks: [
+      { key: 'pinn_fair', label: 'Pinn Fair', col1: 'oc1_pinn_fair', col2: 'oc2_pinn_fair', col3: 'oc3_pinn_fair' },
+      { key: 'sbet_fair', label: 'Sbet Fair', col1: 'oc1_sbet_fair', col2: 'oc2_sbet_fair', col3: 'oc3_sbet_fair' },
+      { key: 'tab_fair', label: 'Tab Fair', col1: 'oc1_tab_fair', col2: 'oc2_tab_fair', col3: 'oc3_tab_fair' },
+    ],
+    hasProbs: true,
+    hasWinner: false,
+    hasDbBlend: false,
+    marketTypes: ['moneyline', 'spreads', 'totals'],
+  },
+  rugby: {
+    label: 'Rugby', icon: 'assets/nrl.png',
+    marketsTable: 'rugby_odds',
+    hasTrades: false,
+    hideTab: true,
+    threeWay: true,
+    oc: (n) => 'oc' + n + '_',
+    probField: 'fair_prob',
+    marketSelect: '*',
+    books: [
+      { key: 'pinn', label: 'Pinnacle', col1: 'oc1_pinn_odds', col2: 'oc2_pinn_odds', col3: 'oc3_pinn_odds' },
+      { key: 'sbet', label: 'Sportsbet', col1: 'oc1_sbet_odds', col2: 'oc2_sbet_odds', col3: 'oc3_sbet_odds' },
+      { key: 'tab', label: 'Tab', col1: 'oc1_tab_odds', col2: 'oc2_tab_odds', col3: 'oc3_tab_odds' },
+    ],
+    fairBooks: [
+      { key: 'pinn_fair', label: 'Pinn Fair', col1: 'oc1_pinn_fair', col2: 'oc2_pinn_fair', col3: 'oc3_pinn_fair' },
+      { key: 'sbet_fair', label: 'Sbet Fair', col1: 'oc1_sbet_fair', col2: 'oc2_sbet_fair', col3: 'oc3_sbet_fair' },
+      { key: 'tab_fair', label: 'Tab Fair', col1: 'oc1_tab_fair', col2: 'oc2_tab_fair', col3: 'oc3_tab_fair' },
+    ],
+    hasProbs: true,
+    hasWinner: false,
+    hasDbBlend: false,
+    marketTypes: ['moneyline', 'spreads', 'totals'],
+  },
+  mma: {
+    label: 'MMA', icon: 'assets/nfl.png',
+    marketsTable: 'mma_odds',
+    hasTrades: false,
+    hideTab: true,
+    oc: (n) => 'oc' + n + '_',
+    probField: 'fair_prob',
+    marketSelect: '*',
+    books: [
+      { key: 'pinn', label: 'Pinnacle', col1: 'oc1_pinn_odds', col2: 'oc2_pinn_odds' },
+      { key: 'sbet', label: 'Sportsbet', col1: 'oc1_sbet_odds', col2: 'oc2_sbet_odds' },
+      { key: 'tab', label: 'Tab', col1: 'oc1_tab_odds', col2: 'oc2_tab_odds' },
+    ],
+    fairBooks: [
+      { key: 'pinn_fair', label: 'Pinn Fair', col1: 'oc1_pinn_fair', col2: 'oc2_pinn_fair' },
+      { key: 'sbet_fair', label: 'Sbet Fair', col1: 'oc1_sbet_fair', col2: 'oc2_sbet_fair' },
+      { key: 'tab_fair', label: 'Tab Fair', col1: 'oc1_tab_fair', col2: 'oc2_tab_fair' },
+    ],
+    hasProbs: true,
+    hasWinner: false,
+    hasDbBlend: false,
+    marketTypes: ['moneyline', 'spreads', 'totals'],
+  },
   seriea: {
     label: 'Serie A', icon: 'assets/seriea.png',
     marketsTable: 'seriea_odds',
@@ -761,6 +832,8 @@ let sportData = {};    // { nhl: { events, markets, grouped, subTournaments? }, 
 let currentSlug = null; // selected match slug for detail view
 let upcomingCounts = {};
 let selectedSubTournament = null; // for tennis: ATP Wimbledon, etc.
+let selectedYear = null;
+let selectedMonth = null;
 
 // ---- Data Layer ----
 const msg = t => { const e = document.getElementById('load-msg'); if (e) e.textContent = t; };
@@ -813,31 +886,64 @@ function slugify(s) {
   return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-async function loadSport(key) {
+// Phase 1: Load just the date range for a sport (min/max dates)
+async function loadDateRange(key) {
   const cfg = SPORTS[key];
-  msg(`Loading ${cfg.label} markets...`);
+  const [minRows, maxRows] = await Promise.all([
+    qOdds(cfg.marketsTable, 'select=date&order=date.asc&limit=1'),
+    qOdds(cfg.marketsTable, 'select=date&order=date.desc&limit=1'),
+  ]);
+  const minDate = minRows.length > 0 ? minRows[0].date : null;
+  const maxDate = maxRows.length > 0 ? maxRows[0].date : null;
 
-  // Fetch all odds rows from the odds-matching project and derive events from them.
-  const markets = await qAllOdds(cfg.marketsTable, 'select=*&order=date.desc');
+  if (!sportData[key]) sportData[key] = {};
+  sportData[key].dateRange = { min: minDate, max: maxDate };
+
+  // Generate available year-month combos
+  if (minDate && maxDate) {
+    const combos = [];
+    let cur = new Date(minDate + 'T00:00:00Z');
+    const end = new Date(maxDate + 'T00:00:00Z');
+    while (cur <= end) {
+      combos.push({ year: cur.getUTCFullYear(), month: cur.getUTCMonth() + 1 });
+      cur.setUTCMonth(cur.getUTCMonth() + 1);
+    }
+    sportData[key].dateRange.combos = combos;
+
+    // Default to latest month
+    if (!selectedYear || !selectedMonth) {
+      const last = combos[combos.length - 1];
+      selectedYear = last.year;
+      selectedMonth = last.month;
+    }
+  }
+  return sportData[key].dateRange;
+}
+
+// Phase 2: Load a specific month of data
+async function loadMonth(key, year, month) {
+  const cfg = SPORTS[key];
+  const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const nextYear = month === 12 ? year + 1 : year;
+  const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
+
+  msg(`Loading ${cfg.label} for ${year}-${String(month).padStart(2, '0')}...`);
+  const markets = await qAllOdds(cfg.marketsTable, `select=*&date=gte.${startDate}&date=lt.${endDate}&order=date.asc`);
 
   const grouped = {};
   const eventMap = new Map();
   for (const m of markets) {
-    // Remap market type to the names the rest of the app uses
     m.sports_market_type = MARKET_TYPE_MAP[m.sports_market_type] || m.sports_market_type;
 
-    // Strip spread/total line decorations from names for grouping.
-    // "Novak Djokovic +7.5" → "Novak Djokovic", "Over 39.5" → ""
     const stripLine = (n) => {
       if (!n) return '';
       if (/^(over|under)\s/i.test(n)) return '';
       return n.replace(/\s+[+-]?\d+(\.\d+)?$/, '').trim();
     };
-    const t1 = m.home_team || m.team1 || stripLine(m.oc1_name) || '';
-    const t2 = m.away_team || m.team2 || stripLine(m.oc2_name) || '';
-    // For tennis (and any sport with commence_time + no home_team), group
-    // by commence_time so h2h/spread/total all land under one event.
-    const slug = (!m.home_team && m.commence_time)
+    const t1 = m.home_team || m.team1 || m.fighter1 || stripLine(m.oc1_name) || '';
+    const t2 = m.away_team || m.team2 || m.fighter2 || stripLine(m.oc2_name) || '';
+    const slug = (!m.home_team && !m.fighter1 && m.commence_time)
       ? `${key}-${m.date}-${slugify(m.commence_time)}`
       : `${key}-${slugify(t1)}-${slugify(t2)}-${m.date}`;
     m.event_slug = slug;
@@ -851,8 +957,6 @@ async function loadSport(key) {
     }
 
     if (!grouped[slug]) grouped[slug] = [];
-    // Deduplicate: skip if an identical (type + oc1 + oc2 + line) row already exists
-    // for this event (the DB sometimes has duplicate moneyline rows).
     const isDup = grouped[slug].some(
       (prev) =>
         prev.sports_market_type === m.sports_market_type &&
@@ -875,39 +979,39 @@ async function loadSport(key) {
         tournament: m.tournament || null,
       });
     } else if (t1 && t2 && m.sports_market_type === 'moneyline') {
-      // Update title from the moneyline row (cleanest names, no line decoration)
       eventMap.get(slug).title = pair;
     }
   }
 
-  // Collect sub-tournaments (e.g. tennis has ATP Wimbledon, ATP Australian Open, etc.)
   const subTournamentSet = new Set();
   for (const ev of eventMap.values()) {
     if (ev.tournament) subTournamentSet.add(ev.tournament);
   }
   const subTournaments = [...subTournamentSet].sort();
 
-  // Categorise by date (no live flag in new schema; today without a score = upcoming)
-  const todayIso = new Date().toISOString().slice(0, 10);
-  const live = [];
-  const upcoming = [];
-  const completed = [];
-  for (const ev of eventMap.values()) {
-    if (ev.ended) {
-      completed.push(ev);
-    } else if (ev.date >= todayIso) {
-      upcoming.push(ev);
-    } else {
-      completed.push(ev);
-    }
+  const events = [...eventMap.values()].sort((a, b) => b.date.localeCompare(a.date));
+
+  if (!sportData[key]) sportData[key] = {};
+  sportData[key].events = events;
+  sportData[key].markets = markets;
+  sportData[key].grouped = grouped;
+  sportData[key].subTournaments = subTournaments;
+  upcomingCounts[key] = events.length;
+  return sportData[key];
+}
+
+async function loadSport(key) {
+  const cfg = SPORTS[key];
+  msg(`Loading ${cfg.label}...`);
+
+  // Phase 1: get date range
+  await loadDateRange(key);
+
+  // Phase 2: load the selected month (or latest)
+  if (selectedYear && selectedMonth) {
+    await loadMonth(key, selectedYear, selectedMonth);
   }
-  upcoming.sort((a, b) => a.date.localeCompare(b.date));
-  completed.sort((a, b) => b.date.localeCompare(a.date));
 
-  const events = [...live, ...upcoming, ...completed];
-
-  sportData[key] = { events, live, upcoming, completed, markets, grouped, subTournaments };
-  upcomingCounts[key] = upcoming.length;
   return sportData[key];
 }
 
@@ -928,9 +1032,11 @@ const SPORT_GROUPS = {
   'Baseball': ['mlb', 'baseball'],
   'Basketball': ['nba', 'basketball'],
   'Cricket': ['cricket'],
-  'Football': ['epl', 'ucl', 'laliga', 'seriea'],
   'Ice Hockey': ['nhl', 'icehockey'],
+  'MMA': ['mma'],
+  'Rugby': ['rugby'],
   'Rugby League': ['nrl'],
+  'Soccer': ['epl', 'ucl', 'laliga', 'seriea', 'soccer'],
   'Tennis': ['tennis'],
 };
 
@@ -1037,7 +1143,10 @@ function marketHasAnyPrice(m) {
   return (
     m.oc1_pinn_odds != null || m.oc2_pinn_odds != null || m.oc3_pinn_odds != null ||
     m.oc1_fanduel_odds != null || m.oc2_fanduel_odds != null || m.oc3_fanduel_odds != null ||
-    m.oc1_fanatics_odds != null || m.oc2_fanatics_odds != null || m.oc3_fanatics_odds != null
+    m.oc1_fanatics_odds != null || m.oc2_fanatics_odds != null || m.oc3_fanatics_odds != null ||
+    m.oc1_sbet_odds != null || m.oc2_sbet_odds != null || m.oc3_sbet_odds != null ||
+    m.oc1_tab_odds != null || m.oc2_tab_odds != null || m.oc3_tab_odds != null ||
+    m.oc1_bet365_odds != null || m.oc2_bet365_odds != null
   );
 }
 
@@ -1052,10 +1161,56 @@ function evHasMarkets(ev, cfg, grouped) {
   return getMarketsWithTrades(grouped, ev.slug, cfg).length > 0;
 }
 
-let activeStatusTab = 'live';
+function renderDateDropdowns() {
+  const data = sportData[activeSport];
+  if (!data || !data.dateRange || !data.dateRange.combos) return '';
 
-function setStatusTab(tab) {
-  activeStatusTab = tab;
+  const combos = data.dateRange.combos;
+  const years = [...new Set(combos.map(c => c.year))].sort((a, b) => b - a);
+  const monthsForYear = combos.filter(c => c.year === selectedYear).map(c => c.month);
+  const monthNames = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  let html = '<div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;">';
+  html += '<div class="dropdown-group"><label class="dropdown-label">Year</label>';
+  html += '<select class="dropdown-select" onchange="setDateFilter(parseInt(this.value), null)">';
+  for (const y of years) {
+    html += `<option value="${y}" ${y === selectedYear ? 'selected' : ''}>${y}</option>`;
+  }
+  html += '</select></div>';
+
+  html += '<div class="dropdown-group"><label class="dropdown-label">Month</label>';
+  html += '<select class="dropdown-select" onchange="setDateFilter(selectedYear, parseInt(this.value))">';
+  for (const mo of monthsForYear) {
+    html += `<option value="${mo}" ${mo === selectedMonth ? 'selected' : ''}>${monthNames[mo]}</option>`;
+  }
+  html += '</select></div>';
+  html += '</div>';
+  return html;
+}
+
+async function setDateFilter(year, month) {
+  const data = sportData[activeSport];
+  if (!data || !data.dateRange || !data.dateRange.combos) return;
+
+  selectedYear = year;
+
+  // If month not specified or not valid for this year, pick latest month in that year
+  const combos = data.dateRange.combos;
+  const monthsForYear = combos.filter(c => c.year === year).map(c => c.month);
+  if (!month || !monthsForYear.includes(month)) {
+    selectedMonth = monthsForYear[monthsForYear.length - 1];
+  } else {
+    selectedMonth = month;
+  }
+
+  showLoading(true);
+  try {
+    await loadMonth(activeSport, selectedYear, selectedMonth);
+    renderDropdowns();
+  } catch (err) {
+    console.error(err);
+  }
+  showLoading(false);
   renderMatchList();
 }
 
@@ -1070,70 +1225,38 @@ function renderMatchList() {
     ? (ev) => ev.tournament === selectedSubTournament
     : () => true;
 
-  // Filter live/completed to events with markets; upcoming shows everything.
-  const liveWithMkts = (data.live || []).filter(ev => subFilter(ev) && evHasMarkets(ev, cfg, data.grouped));
-  const upcomingWithMkts = data.upcoming.filter(subFilter);
-  const completedWithMkts = data.completed.filter(ev => subFilter(ev) && evHasMarkets(ev, cfg, data.grouped));
-
-  // Auto-select best tab if current has no events
-  if (activeStatusTab === 'live' && liveWithMkts.length === 0 && upcomingWithMkts.length > 0) {
-    activeStatusTab = 'upcoming';
-  } else if (activeStatusTab === 'live' && liveWithMkts.length === 0 && upcomingWithMkts.length === 0) {
-    activeStatusTab = 'completed';
-  }
+  // All events sorted by date descending
+  const allEvents = (data.events || []).filter(ev => subFilter(ev) && evHasMarkets(ev, cfg, data.grouped));
 
   let html = '';
 
-  // Status tabs
-  html += `<div class="status-tabs">
-    <div class="status-tab ${activeStatusTab === 'live' ? 'active' : ''}" onclick="setStatusTab('live')">
-      <span style="display:inline-flex;align-items:center;gap:4px;">
-        <span style="width:6px;height:6px;border-radius:50%;background:${liveWithMkts.length > 0 ? 'var(--green)' : 'var(--dim)'};${liveWithMkts.length > 0 ? 'animation:pulse 2s ease-in-out infinite' : ''}"></span>
-        Live
-      </span>
-      <span class="tab-badge">${liveWithMkts.length}</span>
-    </div>
-    <div class="status-tab ${activeStatusTab === 'upcoming' ? 'active' : ''}" onclick="setStatusTab('upcoming')">
-      Upcoming <span class="tab-badge">${upcomingWithMkts.length}</span>
-    </div>
-    <div class="status-tab ${activeStatusTab === 'completed' ? 'active' : ''}" onclick="setStatusTab('completed')">
-      Completed <span class="tab-badge">${completedWithMkts.length}</span>
-    </div>
-  </div>`;
+  // Date dropdowns
+  html += renderDateDropdowns();
 
-  if (activeStatusTab === 'live') {
-    if (liveWithMkts.length > 0) {
-      html += '<div class="match-grid">';
-      for (const ev of liveWithMkts) {
-        const mkts = getMarketsWithTrades(data.grouped, ev.slug, cfg);
-        html += renderMatchCard(ev, mkts, false);
+  if (allEvents.length > 0) {
+    // Group by date for date headers
+    let lastDate = null;
+    html += '<div class="match-grid">';
+    const sortedEvents = [...allEvents].sort((a, b) => b.date.localeCompare(a.date));
+
+    // Close and reopen grid at date boundaries
+    let gridOpen = false;
+    for (const ev of sortedEvents) {
+      if (ev.date !== lastDate) {
+        if (gridOpen) html += '</div>';
+        const dateObj = new Date(ev.date + 'T00:00:00Z');
+        const dateLabel = dateObj.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+        html += `<div class="section-header" style="margin-top:${lastDate ? '20px' : '0'}">${dateLabel}</div>`;
+        html += '<div class="match-grid">';
+        gridOpen = true;
+        lastDate = ev.date;
       }
-      html += '</div>';
-    } else {
-      html += `<div class="notice">No live ${cfg.label} events with markets.</div>`;
+      const mkts = getMarketsWithTrades(data.grouped, ev.slug, cfg);
+      html += renderMatchCard(ev, mkts, ev.ended);
     }
-  } else if (activeStatusTab === 'upcoming') {
-    if (upcomingWithMkts.length > 0) {
-      html += '<div class="match-grid">';
-      for (const ev of upcomingWithMkts) {
-        const mkts = getMarketsWithTrades(data.grouped, ev.slug, cfg);
-        html += renderMatchCard(ev, mkts, false);
-      }
-      html += '</div>';
-    } else {
-      html += `<div class="notice">No upcoming ${cfg.label} events with markets.</div>`;
-    }
+    if (gridOpen) html += '</div>';
   } else {
-    if (completedWithMkts.length > 0) {
-      html += '<div class="match-grid">';
-      for (const ev of completedWithMkts) {
-        const mkts = getMarketsWithTrades(data.grouped, ev.slug, cfg);
-        html += renderMatchCard(ev, mkts, true);
-      }
-      html += '</div>';
-    } else {
-      html += `<div class="notice">No completed ${cfg.label} events with markets.</div>`;
-    }
+    html += `<div class="notice">No ${cfg.label} events with markets for this period.</div>`;
   }
 
   listEl.innerHTML = html;
@@ -1614,7 +1737,7 @@ function renderErrorLog() {
       }
     }
   } else {
-    const events = [...(data.live || []), ...(data.upcoming || []), ...(data.completed || [])];
+    const events = data.events || [];
     const eventDiscs = [];
     for (const ev of events) {
       const discs = findDiscrepancies(ev.slug, cfg, data.grouped);
@@ -1759,16 +1882,18 @@ async function handleRoute() {
     const key = sport || Object.keys(SPORTS)[0];
 
     // Load sport data if needed
-    if (key !== activeSport || !sportData[key]) {
+    if (key !== activeSport || !sportData[key] || !sportData[key].events) {
       if (key !== activeSport) {
         currentSlug = null;
+        selectedYear = null;
+        selectedMonth = null;
         document.getElementById('detail-view').classList.remove('active');
         document.getElementById('detail-view').innerHTML = '';
       }
       activeSport = key;
       renderTabs();
 
-      if (!sportData[key]) {
+      if (!sportData[key] || !sportData[key].events) {
         showLoading(true);
         try {
           await loadSport(key);
@@ -1842,9 +1967,9 @@ async function init() {
   // Use the single handleRoute path for initial load
   await handleRoute();
 
-  // Lazy-load remaining sports in background for badge counts
+  // Lazy-load date ranges for remaining sports in background
   const otherKeys = Object.keys(SPORTS).filter(k => k !== activeSport);
-  Promise.allSettled(otherKeys.map(k => loadSport(k))).then(() => renderTabs());
+  Promise.allSettled(otherKeys.map(k => loadDateRange(k))).then(() => renderTabs());
 }
 
 
