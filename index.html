@@ -903,6 +903,7 @@ async function loadDateRange(key) {
   if (minDate && maxDate) {
     const combos = [];
     let cur = new Date(minDate + 'T00:00:00Z');
+    cur.setUTCDate(1); // normalize to 1st so the day doesn't overshoot the end
     const end = new Date(maxDate + 'T00:00:00Z');
     while (cur <= end) {
       combos.push({ year: cur.getUTCFullYear(), month: cur.getUTCMonth() + 1 });
