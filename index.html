@@ -1234,27 +1234,13 @@ function renderMatchList() {
   html += renderDateDropdowns();
 
   if (allEvents.length > 0) {
-    // Group by date for date headers
-    let lastDate = null;
-    html += '<div class="match-grid">';
     const sortedEvents = [...allEvents].sort((a, b) => b.date.localeCompare(a.date));
-
-    // Close and reopen grid at date boundaries
-    let gridOpen = false;
+    html += '<div class="match-grid">';
     for (const ev of sortedEvents) {
-      if (ev.date !== lastDate) {
-        if (gridOpen) html += '</div>';
-        const dateObj = new Date(ev.date + 'T00:00:00Z');
-        const dateLabel = dateObj.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
-        html += `<div class="section-header" style="margin-top:${lastDate ? '20px' : '0'}">${dateLabel}</div>`;
-        html += '<div class="match-grid">';
-        gridOpen = true;
-        lastDate = ev.date;
-      }
       const mkts = getMarketsWithTrades(data.grouped, ev.slug, cfg);
       html += renderMatchCard(ev, mkts, ev.ended);
     }
-    if (gridOpen) html += '</div>';
+    html += '</div>';
   } else {
     html += `<div class="notice">No ${cfg.label} events with markets for this period.</div>`;
   }
