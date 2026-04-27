@@ -1005,6 +1005,74 @@ async function loadMonth(key, year, month) {
   return sportData[key];
 }
 
+// ---- Score Enrichment (ESPN public API, AFL only for now) ----
+const SCORE_APIS = {
+  afl: { path: 'australian-football/afl', normalize: n => n.toLowerCase().replace(/\s+(fc|afc|utd|city)$/i, '').trim() },
+};
+const scoreCache = {};
+
+async function enrichScores(key) {
+  const apiCfg = SCORE_APIS[key];
+  if (!apiCfg) return;
+  const data = sportData[key];
+  if (!data || !data.events) return;
+
+  // Collect unique game dates
+  const dates = [...new Set(data.events.map(ev => ev.date))];
+
+  // Fetch scores in parallel (max 31 per month, typically ~10 for AFL)
+  await Promise.allSettled(dates.map(async (date) => {
+    const cacheKey = `${key}|${date}`;
+    if (scoreCache[cacheKey]) return; // already fetched
+    try {
+      const ymd = date.replace(/-/g, '');
+      const r = await fetch(`https://site.api.espn.com/apis/site/v2/sports/${apiCfg.path}/scoreboard?dates=${ymd}`);
+      if (!r.ok) return;
+      const json = await r.json();
+      const results = {};
+      for (const ev of (json.events || [])) {
+        const comp = (ev.competitions || [])[0];
+        if (!comp) continue;
+        const teams = comp.competitors || [];
+        const status = ev.status?.type?.completed;
+        if (!status) continue;
+        for (const t of teams) {
+          const name = apiCfg.normalize(t.team?.displayName || '');
+          results[name] = parseInt(t.score) || 0;
+        }
+        // Build a key from both team names sorted
+        const tNames = teams.map(t => apiCfg.normalize(t.team?.displayName || '')).sort();
+        const matchKey = tNames.join('|');
+        results['_match_' + matchKey] = {
+          scores: teams.map(t => ({ name: apiCfg.normalize(t.team?.displayName || ''), score: parseInt(t.score) || 0 })),
+          completed: true,
+        };
+      }
+      scoreCache[cacheKey] = results;
+    } catch {}
+  }));
+
+  // Attach scores to events
+  const norm = apiCfg.normalize;
+  for (const ev of data.events) {
+    if (ev.score) continue; // already has a score
+    const cached = scoreCache[`${key}|${ev.date}`];
+    if (!cached) continue;
+    const t1 = norm(ev.title.split(' vs ')[0] || '');
+    const t2 = norm(ev.title.split(' vs ')[1] || '');
+    const matchKey = [t1, t2].sort().join('|');
+    const match = cached['_match_' + matchKey];
+    if (match && match.completed) {
+      const s1 = match.scores.find(s => s.name === t1);
+      const s2 = match.scores.find(s => s.name === t2);
+      if (s1 != null && s2 != null) {
+        ev.score = `${s1.score}-${s2.score}`;
+        ev.ended = true;
+      }
+    }
+  }
+}
+
 async function loadSport(key) {
   const cfg = SPORTS[key];
   msg(`Loading ${cfg.label}...`);
@@ -1015,6 +1083,8 @@ async function loadSport(key) {
   // Phase 2: load the selected month (or latest)
   if (selectedYear && selectedMonth) {
     await loadMonth(key, selectedYear, selectedMonth);
+    // Phase 3: enrich with scores from external API (non-blocking)
+    enrichScores(key).then(() => renderMatchList()).catch(() => {});
   }
 
   return sportData[key];
