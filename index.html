@@ -1865,6 +1865,13 @@ function parseRoute() {
   return { sport, slug };
 }
 
+// Extract YYYY-MM-DD from the end of a slug (e.g. "nrl-panthers-storm-2025-03-14")
+function extractDateFromSlug(slug) {
+  if (!slug) return null;
+  const m = slug.match(/(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? { year: parseInt(m[1]), month: parseInt(m[2]) } : null;
+}
+
 let _routing = false;
 async function handleRoute() {
   if (_routing) return;
@@ -1903,6 +1910,19 @@ async function handleRoute() {
 
     // Detail view — always sync to match the URL
     if (slug && sportData[key]) {
+      // If the slug's date is from a different month than what's loaded,
+      // switch to that month first so the event exists in sportData.
+      const slugDate = extractDateFromSlug(slug);
+      if (slugDate && (slugDate.year !== selectedYear || slugDate.month !== selectedMonth)) {
+        selectedYear = slugDate.year;
+        selectedMonth = slugDate.month;
+        showLoading(true);
+        try {
+          await loadMonth(key, selectedYear, selectedMonth);
+        } catch {}
+        showLoading(false);
+        renderMatchList();
+      }
       if (slug !== currentSlug) {
         openDetailDirect(slug);
       }
