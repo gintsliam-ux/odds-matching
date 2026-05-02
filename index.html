@@ -1982,17 +1982,30 @@ async function runTeamSearch(q) {
   const container = document.getElementById('search-results');
   container.innerHTML = '<div class="search-no-results">Searching...</div>';
 
-  // Search across all sports tables
+  // Split on "vs" / "v" to support "Team1 vs Team2" searches
+  const vsParts = q.split(/\s+vs?\.?\s+/i).map(s => s.trim()).filter(Boolean);
+  const isTwoTeam = vsParts.length >= 2;
+  const q1 = vsParts[0] || q;
+  const q2 = isTwoTeam ? vsParts[1] : null;
+
   const results = [];
   const seen = new Set();
+  const teamFields = ['home_team', 'away_team', 'oc1_name', 'oc2_name', 'team1', 'team2', 'fighter1', 'fighter2'];
+  const selectCols = 'home_team,away_team,team1,team2,fighter1,fighter2,oc1_name,oc2_name,date,home_score,away_score,sports_market_type,commence_time,tournament';
 
   for (const [key, cfg] of Object.entries(SPORTS)) {
     try {
-      // Search home_team, away_team, oc1_name, oc2_name, team1, team2, fighter1, fighter2
-      // Use PostgREST 'or' filter with ilike
-      const fields = ['home_team', 'away_team', 'oc1_name', 'oc2_name', 'team1', 'team2', 'fighter1', 'fighter2'];
-      const orFilter = fields.map(f => `${f}.ilike.*${q}*`).join(',');
-      const rows = await qOdds(cfg.marketsTable, `select=home_team,away_team,team1,team2,fighter1,fighter2,oc1_name,oc2_name,date,home_score,away_score,sports_market_type,commence_time,tournament&or=(${orFilter})&sports_market_type=eq.h2h&order=date.desc&limit=20`);
+      let filterParam;
+      if (isTwoTeam) {
+        // Both teams must match — team1 in one set of fields, team2 in the other
+        const side1 = teamFields.map(f => `${f}.ilike.*${q1}*`).join(',');
+        const side2 = teamFields.map(f => `${f}.ilike.*${q2}*`).join(',');
+        filterParam = `select=${selectCols}&or=(${side1})&or=(${side2})&sports_market_type=eq.h2h&order=date.desc&limit=20`;
+      } else {
+        const orFilter = teamFields.map(f => `${f}.ilike.*${q1}*`).join(',');
+        filterParam = `select=${selectCols}&or=(${orFilter})&sports_market_type=eq.h2h&order=date.desc&limit=20`;
+      }
+      const rows = await qOdds(cfg.marketsTable, filterParam);
 
       for (const m of rows) {
         const t1 = m.home_team || m.team1 || m.fighter1 || m.oc1_name || '';
