@@ -1990,26 +1990,22 @@ async function runTeamSearch(q) {
 
   const results = [];
   const seen = new Set();
-  const teamFields = ['home_team', 'away_team', 'oc1_name', 'oc2_name', 'team1', 'team2', 'fighter1', 'fighter2'];
-  const selectCols = 'home_team,away_team,team1,team2,fighter1,fighter2,oc1_name,oc2_name,date,home_score,away_score,sports_market_type,commence_time,tournament';
+  // oc1_name / oc2_name exist on ALL tables and hold team/player names for h2h
+  const selectCols = 'home_team,away_team,oc1_name,oc2_name,date,home_score,away_score,sports_market_type,commence_time,tournament';
 
   for (const [key, cfg] of Object.entries(SPORTS)) {
     try {
       let filterParam;
       if (isTwoTeam) {
-        // Both teams must match — team1 in one set of fields, team2 in the other
-        const side1 = teamFields.map(f => `${f}.ilike.*${q1}*`).join(',');
-        const side2 = teamFields.map(f => `${f}.ilike.*${q2}*`).join(',');
-        filterParam = `select=${selectCols}&or=(${side1})&or=(${side2})&sports_market_type=eq.h2h&order=date.desc&limit=20`;
+        filterParam = `select=${selectCols}&or=(oc1_name.ilike.*${q1}*,oc2_name.ilike.*${q1}*)&or=(oc1_name.ilike.*${q2}*,oc2_name.ilike.*${q2}*)&sports_market_type=eq.h2h&order=date.desc&limit=20`;
       } else {
-        const orFilter = teamFields.map(f => `${f}.ilike.*${q1}*`).join(',');
-        filterParam = `select=${selectCols}&or=(${orFilter})&sports_market_type=eq.h2h&order=date.desc&limit=20`;
+        filterParam = `select=${selectCols}&or=(oc1_name.ilike.*${q1}*,oc2_name.ilike.*${q1}*)&sports_market_type=eq.h2h&order=date.desc&limit=20`;
       }
       const rows = await qOdds(cfg.marketsTable, filterParam);
 
       for (const m of rows) {
-        const t1 = m.home_team || m.team1 || m.fighter1 || m.oc1_name || '';
-        const t2 = m.away_team || m.team2 || m.fighter2 || m.oc2_name || '';
+        const t1 = m.home_team || m.oc1_name || '';
+        const t2 = m.away_team || m.oc2_name || '';
         const evKey = `${key}-${t1}-${t2}-${m.date}`;
         if (seen.has(evKey)) continue;
         seen.add(evKey);
