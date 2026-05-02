@@ -36,6 +36,31 @@
   .nav-item:hover { background: rgba(255,255,255,0.04); color: var(--text); }
   .nav-item.active { background: rgba(74,158,255,0.1); border-color: rgba(74,158,255,0.25); color: #fff; }
   .nav-item .nav-icon { font-size: 18px; width: 24px; text-align: center; }
+
+  /* Team Search */
+  .left-nav-search { padding: 12px 10px 8px; }
+  .left-nav-search input {
+    width: 100%; background: rgba(255,255,255,0.04); border: 1px solid var(--border2);
+    border-radius: 8px; padding: 8px 12px; font-size: 13px; color: var(--text);
+    outline: none; transition: border-color .2s;
+  }
+  .left-nav-search input:focus { border-color: var(--blue); }
+  .left-nav-search input::placeholder { color: var(--dim); }
+  .search-results {
+    max-height: 400px; overflow-y: auto; margin-top: 4px;
+  }
+  .search-results::-webkit-scrollbar { width: 4px; }
+  .search-results::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .search-result-item {
+    padding: 8px 10px; border-radius: 6px; cursor: pointer;
+    font-size: 12px; transition: all .15s; border: 1px solid transparent;
+  }
+  .search-result-item:hover { background: rgba(74,158,255,0.08); border-color: rgba(74,158,255,0.2); }
+  .search-result-item .sr-teams { color: #fff; font-weight: 600; margin-bottom: 2px; }
+  .search-result-item .sr-meta { color: var(--muted); font-size: 10px; }
+  .search-result-item .sr-score { color: var(--green); font-weight: 600; }
+  .search-result-item .sr-sport { color: var(--blue); }
+  .search-no-results { color: var(--dim); font-size: 11px; padding: 12px 10px; text-align: center; }
   .page-wrapper { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; height: 100vh; }
   .page-wrapper.hidden { display: none; }
 
@@ -352,6 +377,10 @@
 <!-- Left Navigation -->
 <nav class="left-nav">
   <div class="left-nav-brand"><b>Odds</b> Library</div>
+  <div class="left-nav-search">
+    <input type="text" id="team-search" placeholder="Search teams..." oninput="handleTeamSearch(this.value)" autocomplete="off">
+    <div id="search-results" class="search-results"></div>
+  </div>
   <div class="left-nav-items">
     <div class="nav-item active" data-page="odds-match">
       <span class="nav-icon">&#9878;</span> Odds Match
@@ -1937,6 +1966,81 @@ async function handleRoute() {
 window.addEventListener('hashchange', handleRoute);
 
 // ---- Sport Switching (now goes through router) ----
+// ---- Team Search ----
+let searchDebounce = null;
+function handleTeamSearch(query) {
+  clearTimeout(searchDebounce);
+  const container = document.getElementById('search-results');
+  if (!query || query.trim().length < 2) {
+    container.innerHTML = '';
+    return;
+  }
+  searchDebounce = setTimeout(() => runTeamSearch(query.trim().toLowerCase()), 200);
+}
+
+async function runTeamSearch(q) {
+  const container = document.getElementById('search-results');
+  container.innerHTML = '<div class="search-no-results">Searching...</div>';
+
+  // Search across all sports tables
+  const results = [];
+  const seen = new Set();
+
+  for (const [key, cfg] of Object.entries(SPORTS)) {
+    try {
+      // Search home_team, away_team, oc1_name, oc2_name, team1, team2, fighter1, fighter2
+      // Use PostgREST 'or' filter with ilike
+      const fields = ['home_team', 'away_team', 'oc1_name', 'oc2_name', 'team1', 'team2', 'fighter1', 'fighter2'];
+      const orFilter = fields.map(f => `${f}.ilike.*${q}*`).join(',');
+      const rows = await qOdds(cfg.marketsTable, `select=home_team,away_team,team1,team2,fighter1,fighter2,oc1_name,oc2_name,date,home_score,away_score,sports_market_type,commence_time,tournament&or=(${orFilter})&sports_market_type=eq.h2h&order=date.desc&limit=20`);
+
+      for (const m of rows) {
+        const t1 = m.home_team || m.team1 || m.fighter1 || m.oc1_name || '';
+        const t2 = m.away_team || m.team2 || m.fighter2 || m.oc2_name || '';
+        const evKey = `${key}-${t1}-${t2}-${m.date}`;
+        if (seen.has(evKey)) continue;
+        seen.add(evKey);
+        const hasScore = m.home_score != null && m.away_score != null;
+        results.push({
+          sport: key,
+          label: cfg.label,
+          title: `${t1} vs ${t2}`,
+          date: m.date,
+          score: hasScore ? `${m.home_score}-${m.away_score}` : null,
+          tournament: m.tournament || null,
+          slug: `${key}-${slugify(t1)}-${slugify(t2)}-${m.date}`,
+          commenceTime: m.commence_time,
+        });
+      }
+    } catch {}
+  }
+
+  results.sort((a, b) => b.date.localeCompare(a.date));
+
+  if (results.length === 0) {
+    container.innerHTML = '<div class="search-no-results">No matches found</div>';
+    return;
+  }
+
+  container.innerHTML = results.slice(0, 30).map(r => `
+    <div class="search-result-item" onclick="openSearchResult('${r.sport}', '${r.slug}')">
+      <div class="sr-teams">${escHtml(r.title)}</div>
+      <div class="sr-meta">
+        <span class="sr-sport">${r.label}</span>
+        ${r.tournament ? ' · ' + escHtml(r.tournament) : ''}
+        · ${fmtDate(r.commenceTime || r.date + 'T00:00:00Z')}
+        ${r.score ? `<span class="sr-score"> · ${r.score}</span>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+function openSearchResult(sport, slug) {
+  document.getElementById('team-search').value = '';
+  document.getElementById('search-results').innerHTML = '';
+  navigate(sport, slug);
+}
+
 function switchSport(key) {
   navigate(key, null);
 }
