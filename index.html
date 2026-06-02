@@ -25,7 +25,9 @@
   .left-nav-brand {
     padding: 20px 18px 16px; border-bottom: 1px solid var(--border2);
     font-size: 18px; font-weight: 700; color: #fff; letter-spacing: -0.3px;
+    cursor: pointer; user-select: none;
   }
+  .left-nav-brand:hover { color: var(--blue); }
   .left-nav-brand b { color: var(--blue); }
   .left-nav-items { padding: 12px 10px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
   .nav-item {
@@ -67,7 +69,8 @@
   /* Header */
   header { background: linear-gradient(135deg, #0d1525 0%, #1a2540 100%); border-bottom: 2px solid var(--border); padding: 16px 32px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
   .header-left { display: flex; align-items: center; gap: 16px; }
-  header h1 { font-size: 22px; font-weight: 700; color: #fff; white-space: nowrap; }
+  header h1 { font-size: 22px; font-weight: 700; color: #fff; white-space: nowrap; cursor: pointer; user-select: none; }
+  header h1:hover { opacity: 0.85; }
   header h1 b { color: var(--blue); }
 
   /* Sport Tabs */
@@ -376,13 +379,13 @@
 
 <!-- Left Navigation -->
 <nav class="left-nav">
-  <div class="left-nav-brand"><b>Odds</b> Library</div>
+  <div class="left-nav-brand" onclick="goHome()" title="Home"><b>Odds</b> Library</div>
   <div class="left-nav-search">
     <input type="text" id="team-search" placeholder="Search teams..." oninput="handleTeamSearch(this.value)" autocomplete="off">
     <div id="search-results" class="search-results"></div>
   </div>
   <div class="left-nav-items">
-    <div class="nav-item active" data-page="odds-match">
+    <div class="nav-item active" data-page="odds-match" onclick="goHome()">
       <span class="nav-icon">&#9878;</span> Odds Match
     </div>
   </div>
@@ -393,7 +396,7 @@
 
 <header>
   <div class="header-left">
-    <h1><b>Odds</b> Matching</h1>
+    <h1 onclick="goHome()" title="Home"><b>Odds</b> Matching</h1>
   </div>
   <div style="display:flex;align-items:center;gap:6px;opacity:0.7;">
     <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">Powered by</span>
@@ -1920,6 +1923,10 @@ function currentTournamentSlug() {
 function findTournamentBySlug(sportKey, tSlug) {
   const subs = sportData[sportKey]?.subTournaments || [];
   return subs.find(t => slugify(t) === tSlug) || null;
+}
+
+function goHome() {
+  navigate(Object.keys(SPORTS)[0], null, null);
 }
 
 function navigate(sport, slug, tournament) {
