@@ -976,11 +976,17 @@ async function loadMonth(key, year, month) {
       if (/^(over|under)\s/i.test(n)) return '';
       return n.replace(/\s+[+-]?\d+(\.\d+)?$/, '').trim();
     };
-    const t1 = m.home_team || m.team1 || m.fighter1 || stripLine(m.oc1_name) || '';
-    const t2 = m.away_team || m.team2 || m.fighter2 || stripLine(m.oc2_name) || '';
-    const slug = (!m.home_team && !m.fighter1 && m.commence_time)
-      ? `${key}-${m.date}-${slugify(m.commence_time)}`
-      : `${key}-${slugify(t1)}-${slugify(t2)}-${m.date}`;
+    const t1 = m.home_team || m.team1 || m.player1 || m.fighter1 || stripLine(m.oc1_name) || '';
+    const t2 = m.away_team || m.team2 || m.player2 || m.fighter2 || stripLine(m.oc2_name) || '';
+    // Prefer human-friendly slug from participants (stable across all markets of a match
+    // because player1/team1/etc. are populated on every row). Fall back to optic_fixture_id
+    // (guaranteed unique per match) before the date+commence_time path that previously
+    // collided whenever two matches kicked off at the same instant.
+    const slug = (t1 && t2)
+      ? `${key}-${slugify(t1)}-${slugify(t2)}-${m.date}`
+      : m.optic_fixture_id
+        ? `${key}-${m.date}-${slugify(String(m.optic_fixture_id))}`
+        : `${key}-${m.date}-${slugify(m.commence_time || '')}`;
     m.event_slug = slug;
     const pair = (t1 && t2) ? `${t1} vs ${t2}` : (t1 || t2 || slug);
     if (m.sports_market_type === 'totals') {
@@ -1894,11 +1900,15 @@ function parseRoute() {
   return { sport, slug };
 }
 
-// Extract YYYY-MM-DD from the end of a slug (e.g. "nrl-panthers-storm-2025-03-14")
+// Find a YYYY-MM-DD inside a slug. Uses the last match so dated slugs like
+// "nrl-panthers-storm-2025-03-14" still pick the trailing date, while slugs with
+// the date earlier (e.g. "tennis-2026-06-02-<optic_fixture_id>") still resolve.
 function extractDateFromSlug(slug) {
   if (!slug) return null;
-  const m = slug.match(/(\d{4})-(\d{2})-(\d{2})$/);
-  return m ? { year: parseInt(m[1]), month: parseInt(m[2]) } : null;
+  const matches = [...slug.matchAll(/(\d{4})-(\d{2})-(\d{2})/g)];
+  if (!matches.length) return null;
+  const last = matches[matches.length - 1];
+  return { year: parseInt(last[1]), month: parseInt(last[2]) };
 }
 
 let _routing = false;
