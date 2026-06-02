@@ -916,6 +916,32 @@ async function qAllOdds(table, params = '') {
 
 // Map the new DB's market type names → the labels the UI expects.
 const MARKET_TYPE_MAP = { h2h: 'moneyline', spread: 'spreads', total: 'totals' };
+// Friendly display names for market type. Covers both canonical keys (h2h, spread, total,
+// 1s_h2h, ...) and the plural aliases the page rewrites them to via MARKET_TYPE_MAP, so
+// the same lookup works at any layer.
+const MARKET_NAMES = {
+  h2h: 'Match Winner', moneyline: 'Match Winner',
+  spread: 'Handicap', spreads: 'Handicap',
+  total: 'Total', totals: 'Total',
+  '1h_h2h': '1st Half Winner',
+  '1h_spread': '1st Half Handicap',
+  '1h_total': '1st Half Total',
+  '1q_h2h': '1st Quarter Winner',
+  '1q_spread': '1st Quarter Handicap',
+  '1q_total': '1st Quarter Total',
+  '1inn_h2h': '1st Inning Winner',
+  '1inn_total': '1st Inning Total',
+  dnb: 'Draw No Bet',
+  btts: 'Both Teams To Score',
+  double_chance: 'Double Chance',
+  '1s_h2h': '1st Set Winner',
+  set_spread: 'Set Handicap',
+  game_spread: 'Game Handicap',
+  total_sets: 'Total Sets',
+  total_games: 'Total Games',
+  '1s_game_spread': '1st Set Game Handicap',
+  '1s_total_games': '1st Set Total Games',
+};
 function slugify(s) {
   return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
@@ -1144,19 +1170,11 @@ function handleSportDropdown() {
 function handleTournamentDropdown() {
   const val = document.getElementById('tournament-dropdown').value;
   if (val.includes('|')) {
-    // "sportKey|subTournament"
+    // "sportKey|subTournament" — push tournament into URL so handleRoute syncs state.
     const [key, sub] = val.split('|');
-    if (key !== activeSport) {
-      selectedSubTournament = sub;
-      switchSport(key);
-    } else {
-      selectedSubTournament = sub;
-      renderMatchList();
-      renderDropdowns();
-    }
+    navigate(key, null, slugify(sub));
   } else if (SPORTS[val]) {
-    selectedSubTournament = null;
-    switchSport(val);
+    navigate(val, null, null);
   }
 }
 
@@ -1430,7 +1448,10 @@ async function refreshDetail() {
 }
 
 function formatMarketType(t) {
-  return t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  if (!t) return '';
+  const k = String(t).toLowerCase();
+  if (MARKET_NAMES[k]) return MARKET_NAMES[k];
+  return k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
 // ---- Build Odds Table ----
@@ -1450,13 +1471,22 @@ function formatOutcome(outcome) {
 
 function formatQuestion(q, marketType, cfg, line) {
   const mt = (marketType || '').toLowerCase();
-  if (mt === 'moneyline') return 'H2H';
-  if (mt === 'spreads') return line != null ? `Line ${line}` : 'Line';
-  if (mt === 'totals') {
+  // Winner-style markets (the group title already names them; per-row label is just "H2H")
+  if (mt === 'moneyline' || mt === 'h2h' || mt.endsWith('_h2h') ||
+      mt === 'dnb' || mt === 'btts' || mt === 'double_chance') {
+    return 'H2H';
+  }
+  // Totals-style markets (incl. 1st-set/half/quarter totals + total_games/total_sets)
+  if (mt === 'totals' || mt === 'total' || mt.endsWith('_total') ||
+      mt === 'total_sets' || mt === 'total_games' || mt.endsWith('_total_games') || mt.endsWith('_total_sets')) {
     if (line != null) return `O/U ${line}`;
     const ouMatch = (q || '').match(/O\/U\s*([\d.]+)/i);
     if (ouMatch) return `O/U ${ouMatch[1]}`;
     return 'O/U';
+  }
+  // Spread-style markets (incl. set_spread, game_spread, 1s_game_spread, 1h_spread, ...)
+  if (mt === 'spreads' || mt === 'spread' || mt.endsWith('_spread')) {
+    return line != null ? `Line ${line}` : 'Line';
   }
   return q || '';
 }
@@ -1882,9 +1912,23 @@ function getSortVal(row, colIdx, colType) {
 }
 
 // ---- URL Routing ----
-// Routes: #/{sport}, #/{sport}/{slug}
-function navigate(sport, slug) {
-  const hash = slug ? `#/${sport}/${slug}` : `#/${sport}`;
+// Routes: #/{sport}, #/{sport}/{tournament-slug}, #/{sport}/{event-slug},
+//         #/{sport}/{tournament-slug}/{event-slug}
+function currentTournamentSlug() {
+  return selectedSubTournament ? slugify(selectedSubTournament) : null;
+}
+function findTournamentBySlug(sportKey, tSlug) {
+  const subs = sportData[sportKey]?.subTournaments || [];
+  return subs.find(t => slugify(t) === tSlug) || null;
+}
+
+function navigate(sport, slug, tournament) {
+  // Default tournament = the one currently selected, so detail opens preserve it.
+  // Pass `null` explicitly to clear (e.g. switching sport).
+  if (tournament === undefined) tournament = currentTournamentSlug();
+  let hash = `#/${sport}`;
+  if (tournament) hash += `/${tournament}`;
+  if (slug) hash += `/${slug}`;
   if (location.hash !== hash) {
     location.hash = hash;
   } else {
@@ -1894,10 +1938,24 @@ function navigate(sport, slug) {
 
 function parseRoute() {
   const hash = location.hash.replace(/^#\/?/, '');
-  const parts = hash.split('/');
+  const parts = hash.split('/').filter(Boolean);
   const sport = SPORTS[parts[0]] ? parts[0] : null;
-  const slug = parts.slice(1).join('/') || null;
-  return { sport, slug };
+  let tournament = null, slug = null;
+  if (sport && parts[1]) {
+    const known = new Set((sportData[sport]?.subTournaments || []).map(slugify));
+    // Event slugs always start with `${sport}-` (see loadMonth slug build).
+    if (known.has(parts[1])) {
+      tournament = parts[1];
+      slug = parts.slice(2).join('/') || null;
+    } else if (parts[1].startsWith(`${sport}-`)) {
+      slug = parts.slice(1).join('/');
+    } else {
+      // Likely a tournament whose data hasn't loaded yet — treat as tournament.
+      tournament = parts[1];
+      slug = parts.slice(2).join('/') || null;
+    }
+  }
+  return { sport, tournament, slug };
 }
 
 // Find a YYYY-MM-DD inside a slug. Uses the last match so dated slugs like
@@ -1916,7 +1974,7 @@ async function handleRoute() {
   if (_routing) return;
   _routing = true;
   try {
-    const { sport, slug } = parseRoute();
+    const { sport, tournament, slug } = parseRoute();
     const key = sport || Object.keys(SPORTS)[0];
 
     // Load sport data if needed
@@ -1925,6 +1983,7 @@ async function handleRoute() {
         currentSlug = null;
         selectedYear = null;
         selectedMonth = null;
+        selectedSubTournament = null;
         document.getElementById('detail-view').classList.remove('active');
         document.getElementById('detail-view').innerHTML = '';
       }
@@ -1945,6 +2004,14 @@ async function handleRoute() {
         showLoading(false);
       }
       renderMatchList();
+    }
+
+    // Tournament sync — resolve url slug to the real tournament name (sport data is loaded now).
+    const tournamentName = tournament ? findTournamentBySlug(key, tournament) : null;
+    if (tournamentName !== selectedSubTournament) {
+      selectedSubTournament = tournamentName;
+      renderMatchList();
+      renderDropdowns();
     }
 
     // Detail view — always sync to match the URL
@@ -2054,11 +2121,13 @@ async function runTeamSearch(q) {
 function openSearchResult(sport, slug) {
   document.getElementById('team-search').value = '';
   document.getElementById('search-results').innerHTML = '';
-  navigate(sport, slug);
+  // Search results jump cross-sport — clear tournament so we don't carry over the wrong one.
+  navigate(sport, slug, null);
 }
 
 function switchSport(key) {
-  navigate(key, null);
+  // Clear tournament explicitly — old sport's tournament doesn't apply to the new sport.
+  navigate(key, null, null);
 }
 
 function showLoading(show) {
