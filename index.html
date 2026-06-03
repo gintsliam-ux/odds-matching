@@ -1498,7 +1498,23 @@ function formatQuestion(q, marketType, cfg, line) {
   return q || '';
 }
 
+// Once per sport, append bet365 odds + fair entries to the config if they're missing.
+// Whether the columns actually render in any given table is then decided by hasBookData()
+// inside renderOddsTable — so sports without bet365 in the DB never see empty columns.
+function ensureBet365Columns(cfg) {
+  if (cfg._bet365Added) return;
+  cfg._bet365Added = true;
+  if (!cfg.books.some(b => b.key === 'bet365')) {
+    cfg.books.push({ key: 'bet365', label: 'Bet365', col1: 'oc1_bet365_odds', col2: 'oc2_bet365_odds', col3: 'oc3_bet365_odds' });
+  }
+  if (!cfg.fairBooks.some(b => b.key === 'bet365_fair')) {
+    cfg.fairBooks.push({ key: 'bet365_fair', label: 'Bet365 Fair', col1: 'oc1_bet365_fair', col2: 'oc2_bet365_fair', col3: 'oc3_bet365_fair' });
+  }
+}
+
 function renderOddsTable(markets, cfg, type) {
+  ensureBet365Columns(cfg);
+
   // Build enriched rows: each market produces 2 or 3 rows
   const tableRows = [];
   for (const m of markets) {
@@ -1512,6 +1528,15 @@ function renderOddsTable(markets, cfg, type) {
     tableRows.push({ question: formatQuestion(m.question, m.sports_market_type, cfg, m.line), line: m.line, m, rows });
   }
 
+  // Hide books that have no data in this market group (e.g. bet365 on a date/sport
+  // where no prices were captured). Keeps existing books visible by default.
+  const hasBookData = (book) => {
+    const cols = [book.col1, book.col2, book.col3].filter(Boolean);
+    return markets.some(m => cols.some(c => m[c] != null));
+  };
+  const visibleBooks = cfg.books.filter(hasBookData);
+  const visibleFairBooks = cfg.fairBooks.filter(hasBookData);
+
   // Build column definitions
   const cols = [
     { key: 'question', label: 'Question', sortable: false, type: 'text' },
@@ -1521,19 +1546,19 @@ function renderOddsTable(markets, cfg, type) {
   }
   cols.push({ key: 'outcome', label: 'Outcome', sortable: false, type: 'text' });
 
-  for (const book of cfg.books) {
+  for (const book of visibleBooks) {
     cols.push({ key: 'odds_' + book.key, label: book.label, sortable: true, type: 'num' });
   }
-  for (const fb of cfg.fairBooks) {
+  for (const fb of visibleFairBooks) {
     cols.push({ key: 'fair_' + fb.key, label: fb.label, sortable: true, type: 'num' });
   }
 
   cols.push({ key: 'blendedOdds', label: 'Blended Odds', sortable: true, type: 'num' });
-  if (cfg.fairBooks.length > 0) {
+  if (visibleFairBooks.length > 0) {
     cols.push({ key: 'blendedFair', label: 'Blended Fair', sortable: true, type: 'num' });
   }
   cols.push({ key: 'oddsRange', label: 'Odds Range', sortable: true, type: 'num' });
-  if (cfg.fairBooks.length > 0) {
+  if (visibleFairBooks.length > 0) {
     cols.push({ key: 'fairRange', label: 'Fair Range', sortable: true, type: 'num' });
   }
   if (cfg.hasProbs) {
