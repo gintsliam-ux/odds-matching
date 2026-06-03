@@ -268,8 +268,10 @@
   .odds-table td { padding: 6px 10px; border-bottom: 1px solid var(--border2); white-space: nowrap; }
   .odds-table tr:hover td { background: rgba(74,158,255,0.03); }
   .odds-table .question-cell { color: #fff; font-weight: 600; max-width: 250px; overflow: hidden; text-overflow: ellipsis; }
-  .odds-table .outcome-cell { color: var(--text); max-width: 180px; white-space: nowrap; }
+  .odds-table .outcome-cell { color: var(--text); max-width: 180px; white-space: nowrap; overflow: hidden; }
   .odds-table .outcome-cell .oc-name { overflow: hidden; text-overflow: ellipsis; display: inline-block; max-width: calc(100% - 40px); vertical-align: bottom; }
+  /* Winner-only outcomes (no trailing line) — use the full cell width. */
+  .odds-table .outcome-cell .oc-name.oc-name-solo { max-width: 100%; }
   .odds-table .outcome-cell .oc-line { white-space: nowrap; font-weight: 600; }
   .odds-table .odds-val { font-weight: 500; }
   .odds-table .null-val { color: var(--dim); }
@@ -1469,7 +1471,9 @@ function formatOutcome(outcome) {
     if (name.length <= 10) return escHtml(outcome);
     return `<span class="oc-name">${escHtml(name)}</span> <span class="oc-line">${escHtml(line)}</span>`;
   }
-  return escHtml(outcome);
+  // Winner-only outcome (no line) — wrap so long names ellipsis-truncate just like
+  // the name half of line-bearing outcomes do.
+  return `<span class="oc-name oc-name-solo" title="${escHtml(outcome)}">${escHtml(outcome)}</span>`;
 }
 
 function formatQuestion(q, marketType, cfg, line) {
