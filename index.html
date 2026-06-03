@@ -1038,20 +1038,33 @@ async function loadMonth(key, year, month) {
     );
     if (!isDup) grouped[slug].push(m);
 
+    // Score columns vary by sport: home/away (NFL-style), player1/player2 (tennis),
+    // team1/team2 or fighter1/fighter2. Coalesce so every shape lands in one place.
+    const score1 = m.home_score ?? m.player1_score ?? m.team1_score ?? m.fighter1_score ?? null;
+    const score2 = m.away_score ?? m.player2_score ?? m.team2_score ?? m.fighter2_score ?? null;
+    const hasScore = score1 != null && score2 != null;
+
     if (!eventMap.has(slug)) {
-      const hasScore = m.home_score != null && m.away_score != null;
       eventMap.set(slug, {
         slug,
         title: pair,
         start_time_utc: m.commence_time || `${m.date}T00:00:00Z`,
         date: m.date,
-        score: hasScore ? `${m.home_score}-${m.away_score}` : null,
+        score: hasScore ? `${score1}-${score2}` : null,
         ended: hasScore,
         live: false,
         tournament: m.tournament || null,
       });
-    } else if (t1 && t2 && m.sports_market_type === 'moneyline') {
-      eventMap.get(slug).title = pair;
+    } else {
+      const ev = eventMap.get(slug);
+      if (t1 && t2 && m.sports_market_type === 'moneyline') {
+        ev.title = pair;
+      }
+      // Score may live on a later market row (e.g. the moneyline row carries it).
+      if (!ev.score && hasScore) {
+        ev.score = `${score1}-${score2}`;
+        ev.ended = true;
+      }
     }
   }
 
