@@ -1385,7 +1385,12 @@ function renderMatchCard(ev, mkts, isCompleted) {
   const totalTrades = totalOc1 + totalOc2 + totalOc3;
 
   // Friendly market chips — unique market types, capped, with "+N" overflow.
-  const uniqueTypes = [...new Set(mkts.map(m => m.sports_market_type))];
+  // h2h/spread/total (and their aliases moneyline/spreads/totals) always lead so the
+  // most-trafficked markets are always visible before the chip cap kicks in.
+  const MAIN_RANK = { h2h: 0, moneyline: 0, spread: 1, spreads: 1, total: 2, totals: 2 };
+  const mainRank = (t) => MAIN_RANK[(t || '').toLowerCase()] ?? 999;
+  const uniqueTypes = [...new Set(mkts.map(m => m.sports_market_type))]
+    .sort((a, b) => (mainRank(a) - mainRank(b)) || a.localeCompare(b));
   const CHIP_LIMIT = 4;
   const visibleChips = uniqueTypes.slice(0, CHIP_LIMIT)
     .map(t => `<span class="mc-market-chip">${escHtml(formatMarketType(t))}</span>`)
