@@ -291,7 +291,9 @@
   .ht-status.off      { background: #1f2a44; color: #cbd5e1; border-color: #2f3d5e; }
   .ht-status.unknown  { background: rgba(74,158,255,0.10); color: var(--muted); border-color: var(--border2); }
   .ht-range { color: var(--muted); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
-  .ht-foot { color: var(--dim); font-size: 11px; }
+  .ht-foot { color: var(--dim); font-size: 11px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-height: 14px; }
+  .ht-season { color: var(--blue); font-weight: 600; }
+  .ht-foot .ht-season + .ht-months::before { content: '· '; color: var(--border); }
 
   /* Market Detail View */
   .detail-view { display: none; }
@@ -1839,6 +1841,37 @@ function escHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Typical season windows by sport. `months` are 1-indexed and wrap across year boundaries.
+// `yearRound` sports are always considered in-season. Used by the home view both to
+// classify In/Off-season and to render the "Sep – Feb"-style season label on each tile.
+const SEASON_RANGES = {
+  nfl:        { months: [9,10,11,12,1,2],                 label: 'Sep – Feb' },
+  nhl:        { months: [10,11,12,1,2,3,4,5,6],           label: 'Oct – Jun' },
+  nba:        { months: [10,11,12,1,2,3,4,5,6],           label: 'Oct – Jun' },
+  ucl:        { months: [9,10,11,12,2,3,4,5,6],           label: 'Sep – Jun' },
+  epl:        { months: [8,9,10,11,12,1,2,3,4,5],         label: 'Aug – May' },
+  laliga:     { months: [8,9,10,11,12,1,2,3,4,5],         label: 'Aug – May' },
+  seriea:     { months: [8,9,10,11,12,1,2,3,4,5],         label: 'Aug – May' },
+  afl:        { months: [3,4,5,6,7,8,9,10],               label: 'Mar – Oct' },
+  nrl:        { months: [3,4,5,6,7,8,9,10],               label: 'Mar – Oct' },
+  baseball:   { months: [3,4,5,6,7,8,9,10,11],            label: 'Mar – Nov' },
+  basketball: { months: [10,11,12,1,2,3,4,5,6],           label: 'Oct – Jun' },
+  icehockey:  { months: [9,10,11,12,1,2,3,4,5],           label: 'Sep – May' },
+  cricket:    { yearRound: true,                          label: 'Year-round' },
+  tennis:     { yearRound: true,                          label: 'Year-round' },
+  soccer:     { yearRound: true,                          label: 'Year-round' },
+  rugby:      { yearRound: true,                          label: 'Year-round' },
+  mma:        { yearRound: true,                          label: 'Year-round' },
+};
+function inSeasonByCalendar(key) {
+  const r = SEASON_RANGES[key];
+  if (!r) return null; // unknown — caller falls back to data freshness
+  if (r.yearRound) return true;
+  const month = new Date().getMonth() + 1;
+  return r.months.includes(month);
+}
+function seasonLabel(key) { return SEASON_RANGES[key]?.label || null; }
+
 // Render a sport icon. Falls back to an initials badge when cfg.icon is empty,
 // or when the image fails to load (e.g. assets/mlb.png missing on disk).
 function sportIconHtml(cfg, cls) {
@@ -2118,16 +2151,20 @@ function renderHomeView() {
   if (dropdownRow) dropdownRow.style.display = 'none';
   if (errorLog) errorLog.style.display = 'none';
 
-  // "Active" = data through any time in the recent past or future. The pipeline
-  // typically lags ~1 day, so a strict max >= today excludes sports that played
-  // yesterday. 14 days gives bye-weeks / between-fixtures sports room to breathe.
+  // "Active" combines two signals so a sport stays in the In-season group across
+  // bye-weeks AND finals tails:
+  //   1) Calendar — current month falls inside SEASON_RANGES for this sport.
+  //   2) Recent data — DB has rows within the last 14 days (handles sports without a
+  //      calendar entry, and catches early/late season fixtures the calendar misses).
   const ACTIVE_WINDOW_DAYS = 14;
-  const today = new Date().toISOString().slice(0, 10);
   const activeCutoff = new Date(Date.now() - ACTIVE_WINDOW_DAYS * 86400000).toISOString().slice(0, 10);
   const tiles = Object.entries(SPORTS).map(([key, cfg]) => {
     const dr = sportData[key]?.dateRange;
     const hasData = !!(dr && dr.max);
-    const isActive = hasData && dr.max >= activeCutoff;
+    const calendar = inSeasonByCalendar(key);
+    const veryRecent = hasData && dr.max >= activeCutoff;
+    // Calendar trumps when present; otherwise fall back to data freshness.
+    const isActive = calendar === null ? veryRecent : (calendar || veryRecent);
     const monthsCount = dr?.combos?.length ?? 0;
     return { key, cfg, dr, hasData, isActive, monthsCount, sortKey: dr?.max || '' };
   }).sort((a, b) => {
@@ -2152,7 +2189,10 @@ function renderHomeView() {
         <span class="ht-status ${status.cls}">${status.text}</span>
       </div>
       <div class="ht-range">${min} → ${max}</div>
-      <div class="ht-foot">${t.monthsCount ? `${t.monthsCount} month${t.monthsCount === 1 ? '' : 's'} of data` : ' '}</div>
+      <div class="ht-foot">
+        ${seasonLabel(t.key) ? `<span class="ht-season">${escHtml(seasonLabel(t.key))}</span>` : ''}
+        ${t.monthsCount ? `<span class="ht-months">${t.monthsCount} mo of data</span>` : ''}
+      </div>
     </a>`;
   };
 
