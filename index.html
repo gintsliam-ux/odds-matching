@@ -276,6 +276,15 @@
   .home-tile.off:hover { opacity: 1; }
   .ht-head { display: flex; align-items: center; gap: 10px; }
   .ht-icon { width: 28px; height: 28px; border-radius: 6px; object-fit: cover; flex-shrink: 0; }
+  /* Fallback when the sport icon image is missing/broken — render the label's initial in a circle. */
+  .sport-init {
+    display: inline-flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, var(--card2), var(--border));
+    color: #fff; font-weight: 700; border-radius: 50%;
+    line-height: 1; flex-shrink: 0; user-select: none;
+  }
+  .ht-icon.sport-init { font-size: 11px; border-radius: 6px; }
+  .sport-tab .icon.sport-init { font-size: 9px; width: 20px; height: 20px; border-radius: 50%; }
   .ht-name { flex: 1; font-size: 14px; font-weight: 700; color: #fff; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ht-status { font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .5px; line-height: 1.4; flex-shrink: 0; border: 1px solid transparent; }
   .ht-status.active   { background: rgba(52,211,153,0.18); color: #6ee7b7; border-color: rgba(52,211,153,0.4); }
@@ -876,7 +885,7 @@ const SPORTS = {
     marketTypes: ['moneyline', 'spreads', 'totals'],
   },
   mma: {
-    label: 'MMA', icon: 'assets/nfl.png',
+    label: 'MMA', icon: '',
     marketsTable: 'mma_odds',
     hasTrades: false,
     hideTab: true,
@@ -1288,7 +1297,7 @@ function renderTabs() {
     .filter(([, cfg]) => !cfg.hideTab)
     .map(([key, cfg]) => {
       return `<div class="sport-tab ${key === activeSport ? 'active' : ''}" data-sport="${key}" onclick="switchSport('${key}')" title="${cfg.label}">
-        <img class="icon" src="${cfg.icon}" alt="${cfg.label}">
+        ${sportIconHtml(cfg, 'icon')}
       </div>`;
     }).join('');
   renderDropdowns();
@@ -1830,6 +1839,21 @@ function escHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Render a sport icon. Falls back to an initials badge when cfg.icon is empty,
+// or when the image fails to load (e.g. assets/mlb.png missing on disk).
+function sportIconHtml(cfg, cls) {
+  const letter = escHtml((cfg.label || '?').charAt(0).toUpperCase());
+  if (!cfg.icon) return `<span class="${cls} sport-init" aria-hidden="true">${letter}</span>`;
+  return `<img class="${cls}" src="${cfg.icon}" alt="" data-letter="${letter}" data-cls="${cls}" onerror="onSportIconError(this)">`;
+}
+function onSportIconError(img) {
+  const span = document.createElement('span');
+  span.className = `${img.dataset.cls || ''} sport-init`;
+  span.textContent = img.dataset.letter || '?';
+  span.setAttribute('aria-hidden', 'true');
+  img.replaceWith(span);
+}
+
 // ---- Discrepancy Detection ----
 
 // Mode: prob — OG Prob vs Fair Prob
@@ -2094,11 +2118,16 @@ function renderHomeView() {
   if (dropdownRow) dropdownRow.style.display = 'none';
   if (errorLog) errorLog.style.display = 'none';
 
+  // "Active" = data through any time in the recent past or future. The pipeline
+  // typically lags ~1 day, so a strict max >= today excludes sports that played
+  // yesterday. 14 days gives bye-weeks / between-fixtures sports room to breathe.
+  const ACTIVE_WINDOW_DAYS = 14;
   const today = new Date().toISOString().slice(0, 10);
+  const activeCutoff = new Date(Date.now() - ACTIVE_WINDOW_DAYS * 86400000).toISOString().slice(0, 10);
   const tiles = Object.entries(SPORTS).map(([key, cfg]) => {
     const dr = sportData[key]?.dateRange;
     const hasData = !!(dr && dr.max);
-    const isActive = hasData && dr.max >= today;
+    const isActive = hasData && dr.max >= activeCutoff;
     const monthsCount = dr?.combos?.length ?? 0;
     return { key, cfg, dr, hasData, isActive, monthsCount, sortKey: dr?.max || '' };
   }).sort((a, b) => {
@@ -2118,7 +2147,7 @@ function renderHomeView() {
     const status = !t.hasData ? { cls: 'unknown', text: 'Loading' } : t.isActive ? { cls: 'active', text: 'Active' } : { cls: 'off', text: 'Off-season' };
     return `<a class="home-tile ${t.isActive ? '' : 'off'}" href="#/${t.key}">
       <div class="ht-head">
-        <img class="ht-icon" src="${t.cfg.icon}" alt="">
+        ${sportIconHtml(t.cfg, 'ht-icon')}
         <div class="ht-name">${escHtml(t.cfg.label)}</div>
         <span class="ht-status ${status.cls}">${status.text}</span>
       </div>
