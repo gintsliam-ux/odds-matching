@@ -256,6 +256,34 @@
 
   .mc-no-odds { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--yellow); }
 
+  /* Home view */
+  .home-hero { padding: 28px 0 18px; }
+  .home-hero h2 { font-size: 28px; font-weight: 700; color: #fff; letter-spacing: -0.4px; }
+  .home-hero h2 b { color: var(--blue); }
+  .home-hero p { color: var(--muted); font-size: 14px; margin-top: 6px; max-width: 560px; }
+
+  .home-section-title { font-size: 11px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: .8px; margin: 6px 0 10px; }
+
+  .home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; padding-bottom: 30px; }
+  .home-tile {
+    display: flex; flex-direction: column; gap: 8px;
+    background: linear-gradient(135deg, var(--card) 0%, var(--card2) 100%);
+    border: 1px solid var(--border); border-radius: 12px; padding: 14px;
+    text-decoration: none; transition: all .2s; cursor: pointer; color: inherit;
+  }
+  .home-tile:hover { border-color: var(--blue); transform: translateY(-2px); box-shadow: 0 6px 24px rgba(0,0,0,0.35); }
+  .home-tile.off { opacity: 0.72; }
+  .home-tile.off:hover { opacity: 1; }
+  .ht-head { display: flex; align-items: center; gap: 10px; }
+  .ht-icon { width: 28px; height: 28px; border-radius: 6px; object-fit: cover; flex-shrink: 0; }
+  .ht-name { flex: 1; font-size: 14px; font-weight: 700; color: #fff; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ht-status { font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .5px; line-height: 1.4; flex-shrink: 0; border: 1px solid transparent; }
+  .ht-status.active   { background: rgba(52,211,153,0.18); color: #6ee7b7; border-color: rgba(52,211,153,0.4); }
+  .ht-status.off      { background: #1f2a44; color: #cbd5e1; border-color: #2f3d5e; }
+  .ht-status.unknown  { background: rgba(74,158,255,0.10); color: var(--muted); border-color: var(--border2); }
+  .ht-range { color: var(--muted); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .ht-foot { color: var(--dim); font-size: 11px; }
+
   /* Market Detail View */
   .detail-view { display: none; }
   .detail-view.active { display: block; }
@@ -452,6 +480,7 @@
 <main>
   <div class="main-content">
     <div id="loading" style="display:none"></div>
+    <div id="home-view" style="display:none"></div>
     <div id="match-list-view" style="display:none"></div>
     <div id="detail-view" class="detail-view"></div>
   </div>
@@ -2044,7 +2073,76 @@ function findTournamentBySlug(sportKey, tSlug) {
 }
 
 function goHome() {
-  navigate(Object.keys(SPORTS)[0], null, null);
+  if (location.hash === '' || location.hash === '#' || location.hash === '#/') {
+    handleRoute();
+  } else {
+    location.hash = '#/';
+  }
+}
+
+function renderHomeView() {
+  const view = document.getElementById('home-view');
+  const matchList = document.getElementById('match-list-view');
+  const detail = document.getElementById('detail-view');
+  const dropdownRow = document.getElementById('dropdown-row');
+  const errorLog = document.getElementById('error-log');
+
+  // Hide sport-specific UI while on home
+  matchList.style.display = 'none';
+  detail.classList.remove('active');
+  detail.innerHTML = '';
+  if (dropdownRow) dropdownRow.style.display = 'none';
+  if (errorLog) errorLog.style.display = 'none';
+
+  const today = new Date().toISOString().slice(0, 10);
+  const tiles = Object.entries(SPORTS).map(([key, cfg]) => {
+    const dr = sportData[key]?.dateRange;
+    const hasData = !!(dr && dr.max);
+    const isActive = hasData && dr.max >= today;
+    const monthsCount = dr?.combos?.length ?? 0;
+    return { key, cfg, dr, hasData, isActive, monthsCount, sortKey: dr?.max || '' };
+  }).sort((a, b) => {
+    // Active sports first, then by latest max date desc, then alphabetically.
+    if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+    if (a.hasData !== b.hasData) return a.hasData ? -1 : 1;
+    return b.sortKey.localeCompare(a.sortKey) || a.cfg.label.localeCompare(b.cfg.label);
+  });
+
+  const fmtMonth = (s) => s ? new Date(s + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' }) : '—';
+  const activeTiles = tiles.filter(t => t.isActive);
+  const offTiles = tiles.filter(t => !t.isActive);
+
+  const tileHtml = (t) => {
+    const min = fmtMonth(t.dr?.min);
+    const max = fmtMonth(t.dr?.max);
+    const status = !t.hasData ? { cls: 'unknown', text: 'Loading' } : t.isActive ? { cls: 'active', text: 'Active' } : { cls: 'off', text: 'Off-season' };
+    return `<a class="home-tile ${t.isActive ? '' : 'off'}" href="#/${t.key}">
+      <div class="ht-head">
+        <img class="ht-icon" src="${t.cfg.icon}" alt="">
+        <div class="ht-name">${escHtml(t.cfg.label)}</div>
+        <span class="ht-status ${status.cls}">${status.text}</span>
+      </div>
+      <div class="ht-range">${min} → ${max}</div>
+      <div class="ht-foot">${t.monthsCount ? `${t.monthsCount} month${t.monthsCount === 1 ? '' : 's'} of data` : ' '}</div>
+    </a>`;
+  };
+
+  let html = `<div class="home-hero">
+      <h2><b>Odds</b> Library</h2>
+      <p>Bookmaker odds, fair values and discrepancies across every sport with data. Pick a sport to dive in.</p>
+    </div>`;
+
+  if (activeTiles.length > 0) {
+    html += `<div class="home-section-title">In season</div>
+      <div class="home-grid">${activeTiles.map(tileHtml).join('')}</div>`;
+  }
+  if (offTiles.length > 0) {
+    html += `<div class="home-section-title">Off-season / archive</div>
+      <div class="home-grid">${offTiles.map(tileHtml).join('')}</div>`;
+  }
+
+  view.innerHTML = html;
+  view.style.display = '';
 }
 
 function navigate(sport, slug, tournament) {
@@ -2100,7 +2198,35 @@ async function handleRoute() {
   _routing = true;
   try {
     const { sport, tournament, slug } = parseRoute();
-    const key = sport || Object.keys(SPORTS)[0];
+
+    // HOME — no sport in the URL. Render the sport-tile dashboard and bail out.
+    if (!sport) {
+      activeSport = null;
+      currentSlug = null;
+      selectedSubTournament = null;
+      selectedYear = null;
+      selectedMonth = null;
+      renderHomeView();
+      renderTabs();
+      // Fill in tiles for sports whose date range isn't loaded yet.
+      const missing = Object.keys(SPORTS).filter(k => !sportData[k]?.dateRange);
+      if (missing.length > 0) {
+        Promise.allSettled(missing.map(k => loadDateRange(k))).then(() => {
+          if (!parseRoute().sport) renderHomeView();
+        });
+      }
+      document.title = 'Odds Library';
+      return;
+    }
+
+    const key = sport;
+
+    // Coming from home → need to un-hide sport UI before rendering.
+    document.getElementById('home-view').style.display = 'none';
+    const _dropdownRow = document.getElementById('dropdown-row');
+    if (_dropdownRow) _dropdownRow.style.display = '';
+    const _errorLog = document.getElementById('error-log');
+    if (_errorLog) _errorLog.style.display = '';
 
     // Load sport data if needed
     if (key !== activeSport || !sportData[key] || !sportData[key].events) {
@@ -2285,17 +2411,17 @@ function skeletonDetail() {
 
 // ---- Init ----
 async function init() {
-  // Set default hash if none present
-  if (!location.hash || location.hash === '#' || location.hash === '#/') {
-    history.replaceState(null, '', `#/${Object.keys(SPORTS)[0]}`);
-  }
-
-  // Use the single handleRoute path for initial load
+  // No default hash — empty hash lands on the home view.
   await handleRoute();
 
-  // Lazy-load date ranges for remaining sports in background
-  const otherKeys = Object.keys(SPORTS).filter(k => k !== activeSport);
-  Promise.allSettled(otherKeys.map(k => loadDateRange(k))).then(() => renderTabs());
+  // Lazy-load date ranges for any sport whose data isn't loaded so home tiles can populate.
+  const missing = Object.keys(SPORTS).filter(k => !sportData[k]?.dateRange);
+  if (missing.length > 0) {
+    Promise.allSettled(missing.map(k => loadDateRange(k))).then(() => {
+      renderTabs();
+      if (!parseRoute().sport) renderHomeView();
+    });
+  }
 }
 
 
