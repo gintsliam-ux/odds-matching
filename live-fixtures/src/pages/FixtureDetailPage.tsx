@@ -893,10 +893,20 @@ const BET_COLS = ['Placed', 'User', 'Type', 'Market', 'Outcome', 'Result', 'Stak
 /** One market's bets, as a card with its own aggregate header + bet table. */
 function MarketBetsCard({ title, bets, fixture: f }: { title: string; bets: SwiftBetRow[]; fixture: Fixture }) {
   const agg = aggregateBets(bets, scoreCtx(f))
+  const lateCount = bets.filter((b) => b.placed_after_start).length
   return (
-    <div className="overflow-hidden rounded-lg border border-[color:var(--line-soft)]">
+    <div
+      className={`overflow-hidden rounded-lg border ${
+        lateCount > 0 ? 'border-[color:var(--live)]/40' : 'border-[color:var(--line-soft)]'
+      }`}
+    >
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-[color:var(--line-soft)] bg-black/[0.2] px-4 py-2.5">
         <span className="text-[13px] font-semibold text-gray-100">{title}</span>
+        {lateCount > 0 && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-[color:var(--live)]/10 px-2 py-0.5 text-[10px] font-semibold text-[color:var(--live)]">
+            ⚠ {lateCount} after start
+          </span>
+        )}
         <span className="text-[11px] text-[color:var(--muted-2)]">
           {agg.count} {agg.count === 1 ? 'bet' : 'bets'} · {agg.users} {agg.users === 1 ? 'user' : 'users'}
         </span>
@@ -979,15 +989,26 @@ function BetsTab({
     )
   }
 
-  // Group by market, most-staked market first.
+  // Group by market. Bets placed AFTER the actual start are the worrying ones,
+  // so they float to the top — both within each card and by bumping any card
+  // that contains one ahead of the rest (then by stake).
   const groups = new Map<string, SwiftBetRow[]>()
   for (const b of list) {
     const k = marketGroupKey(b)
     ;(groups.get(k) ?? groups.set(k, []).get(k)!).push(b)
   }
-  const ordered = [...groups.entries()].sort(
-    (a, b) => b[1].reduce((s, x) => s + legStake(x), 0) - a[1].reduce((s, x) => s + legStake(x), 0),
-  )
+  for (const gbets of groups.values()) {
+    // stable sort (API already returns bet_time desc) → late bets first
+    gbets.sort((a, b) => Number(b.placed_after_start) - Number(a.placed_after_start))
+  }
+  const hasLate = (gbets: SwiftBetRow[]) => gbets.some((x) => x.placed_after_start)
+  const stakeOf = (gbets: SwiftBetRow[]) => gbets.reduce((s, x) => s + legStake(x), 0)
+  const ordered = [...groups.entries()].sort((a, b) => {
+    const la = hasLate(a[1])
+    const lb = hasLate(b[1])
+    if (la !== lb) return la ? -1 : 1
+    return stakeOf(b[1]) - stakeOf(a[1])
+  })
 
   return (
     <div className="space-y-3 px-5 py-5">
