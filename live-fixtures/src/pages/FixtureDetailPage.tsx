@@ -858,13 +858,14 @@ function BetsTab({ fixture: f, mappingInfo }: { fixture: Fixture; mappingInfo: M
         // Horizontal scroll on narrow viewports so the leg/market column gets
         // enough room without crushing the others.
         <div className="overflow-x-auto rounded-lg border border-[color:var(--line-soft)]">
-          <table className="w-full min-w-[960px] text-[12px]">
+          <table className="w-full min-w-[1060px] text-[12px]">
             <thead>
               <tr className="border-b border-[color:var(--line-soft)] bg-black/[0.15] text-left text-[11px] uppercase tracking-wide text-[color:var(--muted-2)]">
                 <th className="px-3 py-2 font-medium">Placed</th>
                 <th className="px-3 py-2 font-medium">User</th>
                 <th className="px-3 py-2 font-medium">Type</th>
                 <th className="px-3 py-2 font-medium">Market</th>
+                <th className="px-3 py-2 font-medium">Outcome</th>
                 <th className="px-3 py-2 font-medium">Result</th>
                 <th className="px-3 py-2 text-right font-medium">Stake</th>
                 <th className="px-3 py-2 text-right font-medium">Odds</th>
@@ -952,10 +953,8 @@ function BetRow({ bet: b }: { bet: SwiftBetRow }) {
           <div className="mt-0.5 text-[10px] text-[color:var(--muted-2)]">scratched</div>
         )}
       </td>
-      <td className="px-3 py-2 align-top text-gray-200">
-        <div>{marketLabel}</div>
-        {outcome && <div className="mt-0.5 text-[11px] text-gray-400">{outcome}</div>}
-      </td>
+      <td className="px-3 py-2 align-top text-gray-200">{marketLabel}</td>
+      <td className="px-3 py-2 align-top text-gray-300">{outcome ?? '—'}</td>
       <td className={`px-3 py-2 align-top text-[11.5px] font-medium ${resultTone}`}>
         {resultLabel ?? '—'}
       </td>
