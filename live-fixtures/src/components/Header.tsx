@@ -104,21 +104,14 @@ export function Header({ counts, now, nextPollAt, feed, lastUpdated, mongoState,
 
   const mongo = mongoHealth(mongoState)
   const mAge = mongoPulse?.ageSec ?? null
-  const mongoDetail =
-    mongoState === 'down'
-      ? 'down'
-      : mongoPulse && mongoPulse.live > 0
-        ? `${mongoPulse.live} live`
-        : mAge != null
-          ? shortAge(mAge)
-          : null
+  // Show last-write age, not a live count — Mongo's `inprogress` status is
+  // unreliable (events flip to in-progress and never clear), so a "live" tally
+  // would be wildly wrong. Freshness of the newest write is the real signal.
+  const mongoDetail = mongoState === 'down' ? 'down' : mAge != null ? shortAge(mAge) : null
   const mongoTitle =
     mongoPulse && mongoPulse.ok
-      ? `SwiftBet feed (Mongo)\n${mongoPulse.live} live · ${mongoPulse.prematch} upcoming · ${mongoPulse.total} events` +
-        (mAge != null ? `\nLast write ${shortAge(mAge)} ago` : '') +
-        (mongoPulse.sports.some((s) => s.live > 0)
-          ? '\n' + mongoPulse.sports.filter((s) => s.live > 0).map((s) => `${s.name} ${s.live}`).join(' · ')
-          : '')
+      ? `SwiftBet feed (Mongo)\n${mongoPulse.total} events · ${mongoPulse.prematch} upcoming` +
+        (mAge != null ? `\nLast write ${shortAge(mAge)} ago` : '')
       : 'SwiftBet feed (Mongo) — unreachable'
 
   return (
