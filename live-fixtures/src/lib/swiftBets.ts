@@ -17,6 +17,15 @@ export interface SwiftBetRow {
   event_key: string | null
   legs_event_keys: string[]
   matched_leg_index: number
+  // Leg-specific market / outcome / price for the leg that IS this game (for a
+  // single, the whole bet). Lets the UI show the actual selection + leg odds
+  // rather than a multi's combined headline.
+  matched_leg: {
+    market: string | null
+    outcome: string | null
+    odds: number | null
+    status: string | null
+  } | null
   leg_count: number
   leg_breakdown:
     | Array<{ sport: string; market_category: string; result: string | null; share: number }>

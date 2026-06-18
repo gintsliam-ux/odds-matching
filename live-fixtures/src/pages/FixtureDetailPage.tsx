@@ -917,6 +917,12 @@ function BetRow({ bet: b }: { bet: SwiftBetRow }) {
       : resultLabel === 'Lost'
         ? 'text-[color:var(--live)]'
         : 'text-gray-300'
+  // The leg that IS this game carries its own selection + price. Show those —
+  // for a multi the Odds column shows the LEG price (the multi's combined odds
+  // moves to a sub-label), so the row describes this game's actual bet.
+  const outcome = (b.matched_leg?.outcome ?? '').trim() || null
+  const legOdds = b.matched_leg?.odds ?? null
+  const shownOdds = legOdds ?? odd
   return (
     <tr
       className={`border-t border-[color:var(--line-soft)] ${
@@ -946,13 +952,19 @@ function BetRow({ bet: b }: { bet: SwiftBetRow }) {
           <div className="mt-0.5 text-[10px] text-[color:var(--muted-2)]">scratched</div>
         )}
       </td>
-      <td className="px-3 py-2 align-top text-gray-200">{marketLabel}</td>
+      <td className="px-3 py-2 align-top text-gray-200">
+        <div>{marketLabel}</div>
+        {outcome && <div className="mt-0.5 text-[11px] text-gray-400">{outcome}</div>}
+      </td>
       <td className={`px-3 py-2 align-top text-[11.5px] font-medium ${resultTone}`}>
         {resultLabel ?? '—'}
       </td>
       <td className="px-3 py-2 text-right align-top tabular-nums text-gray-200">${stake.toFixed(2)}</td>
       <td className="px-3 py-2 text-right align-top tabular-nums text-gray-200">
-        {odd != null ? odd.toFixed(2) : '—'}
+        {shownOdds != null ? shownOdds.toFixed(2) : '—'}
+        {isMulti && odd != null && (
+          <div className="mt-0.5 text-[10px] text-[color:var(--muted-2)]">multi {odd.toFixed(2)}</div>
+        )}
       </td>
       <td
         className={`px-3 py-2 text-right align-top tabular-nums ${

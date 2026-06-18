@@ -41,6 +41,49 @@ function esc(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+export interface MatchedLeg {
+  market: string | null
+  outcome: string | null
+  odds: number | null
+  status: string | null
+}
+
+/**
+ * Pull the leg-specific market / outcome / price for the leg that IS this game,
+ * from the raw `legs` JSON (a stringified array, one entry per leg, in the same
+ * order as `legs_event_keys`). For a single this is just leg 0. Lets the UI show
+ * "Total Goals Over/Under · Under +2.5 @ 1.88" for the relevant leg instead of a
+ * multi's combined headline odds.
+ */
+function extractLeg(legsRaw: unknown, index: number): MatchedLeg | null {
+  if (index < 0) return null
+  let legs: unknown
+  try {
+    legs = typeof legsRaw === 'string' ? JSON.parse(legsRaw) : legsRaw
+  } catch {
+    return null
+  }
+  if (!Array.isArray(legs)) return null
+  const leg = legs[index] as
+    | { dividend?: unknown; selections?: Array<{ fixed_odds?: unknown; status?: unknown; selection_data?: Array<{ market_name?: unknown; market_type?: unknown; name?: unknown }> }> }
+    | undefined
+  if (!leg) return null
+  const sel = Array.isArray(leg.selections) ? leg.selections[0] : null
+  const sd = sel && Array.isArray(sel.selection_data) ? sel.selection_data[0] : null
+  // Decimal odds are always > 1; singles store 0 in the leg dividend (the real
+  // price is the bet's top-level `odd`), so treat ≤1 as missing → UI falls back.
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 1 ? v : null)
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+  // market_name is the project's source-of-truth for the market (market_type
+  // mislabels some h2h/DNB cases); fall back to market_type only if absent.
+  return {
+    market: str(sd?.market_name) ?? str(sd?.market_type),
+    outcome: str(sd?.name),
+    odds: num(leg.dividend) ?? num(sel?.fixed_odds),
+    status: str(sel?.status),
+  }
+}
+
 /**
  * `bet_time` in gutsy.bets is Melbourne wall-clock with a misleading `Z`
  * suffix. To compare against UTC timestamps (swift_actual_start) we strip
@@ -125,6 +168,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             'derived.sport': 1,
             'derived.type': 1,
             'derived.legs_breakdown': 1,
+            legs: 1,
             'enrichment.blendFair': 1,
             'enrichment.emPercent': 1,
             'enrichment.scratched': 1,
@@ -162,6 +206,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         event_key: d.derived?.event_key ?? null,
         legs_event_keys: legs,
         matched_leg_index: matchedLegIndex,
+        matched_leg: extractLeg(d.legs, matchedLegIndex),
         leg_count: legs.length,
         leg_breakdown: d.derived?.legs_breakdown ?? null,
         em_percent: d.enrichment?.emPercent ?? null,

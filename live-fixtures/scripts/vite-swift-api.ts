@@ -80,6 +80,34 @@ function slugify(s: string): string {
   return (s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }
 
+/** Mirror of api/swift-bets.ts extractLeg — leg-specific market/outcome/odds. */
+function extractLeg(legsRaw: unknown, index: number): { market: string | null; outcome: string | null; odds: number | null; status: string | null } | null {
+  if (index < 0) return null
+  let legs: unknown
+  try {
+    legs = typeof legsRaw === 'string' ? JSON.parse(legsRaw) : legsRaw
+  } catch {
+    return null
+  }
+  if (!Array.isArray(legs)) return null
+  const leg = legs[index] as
+    | { dividend?: unknown; selections?: Array<{ fixed_odds?: unknown; status?: unknown; selection_data?: Array<{ market_name?: unknown; market_type?: unknown; name?: unknown }> }> }
+    | undefined
+  if (!leg) return null
+  const sel = Array.isArray(leg.selections) ? leg.selections[0] : null
+  const sd = sel && Array.isArray(sel.selection_data) ? sel.selection_data[0] : null
+  // Decimal odds are always > 1; singles store 0 in the leg dividend → treat ≤1
+  // as missing so the UI falls back to the bet's top-level odd.
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 1 ? v : null)
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+  return {
+    market: str(sd?.market_name) ?? str(sd?.market_type),
+    outcome: str(sd?.name),
+    odds: num(leg.dividend) ?? num(sel?.fixed_odds),
+    status: str(sel?.status),
+  }
+}
+
 /** bet_time is Melbourne wall-clock with a misleading `Z` suffix; convert to a real UTC moment. */
 function melbWallToUtc(raw: string | Date): Date | null {
   if (!raw) return null
@@ -329,6 +357,7 @@ export function swiftApiPlugin(): Plugin {
                   'derived.event_key': 1, 'derived.legs_event_keys': 1,
                   'derived.event_name': 1, 'derived.market_category': 1,
                   'derived.sport': 1, 'derived.type': 1, 'derived.legs_breakdown': 1,
+                  legs: 1,
                   'enrichment.blendFair': 1, 'enrichment.emPercent': 1, 'enrichment.scratched': 1,
                 },
               },
@@ -342,13 +371,15 @@ export function swiftApiPlugin(): Plugin {
             const placedAfterStart =
               cutoff != null && betUtc != null ? betUtc.getTime() > cutoff : false
             const legs: string[] = d.derived?.legs_event_keys ?? []
+            const matchedLegIndex = legs.findIndex((k) => re.test(k))
             return {
               id: d._id, bet_id: d.bet_id, user_id: d.user_id, bet_time: d.bet_time,
               bet_amount: d.bet_amount, bet_type: d.bet_type, odd: d.odd, pl: d.pl,
               is_bonus: !!d.is_bonus, sport: d.derived?.sport ?? null,
               type: d.derived?.type ?? null, market_category: d.derived?.market_category ?? null,
               event_key: d.derived?.event_key ?? null, legs_event_keys: legs,
-              matched_leg_index: legs.findIndex((k) => re.test(k)),
+              matched_leg_index: matchedLegIndex,
+              matched_leg: extractLeg(d.legs, matchedLegIndex),
               leg_count: legs.length, leg_breakdown: d.derived?.legs_breakdown ?? null,
               em_percent: d.enrichment?.emPercent ?? null,
               scratched: d.enrichment?.scratched ?? false,
