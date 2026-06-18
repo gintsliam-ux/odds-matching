@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft, Check, Copy } from 'lucide-react'
+import { ArrowLeft, Check, ChevronDown, ChevronRight, Copy } from 'lucide-react'
 import { useTerminal } from '../components/Layout'
 import { DetailSkeleton, PanelSkeleton } from '../components/Skeleton'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
@@ -925,12 +925,27 @@ const MULTI_STATUS_BADGE: Record<MultiStatus, string> = {
   Lost: 'bg-[color:var(--live)]/10 text-[color:var(--live)]',
 }
 
+/** Normalize a raw SwiftBet selection status (ResultedWin/ResultedLoss/
+ *  Unresulted) to a display label + tone. */
+function normResult(status: string | null): { label: string; tone: string } {
+  const s = (status ?? '').toLowerCase()
+  if (s.includes('win') || s === 'won') return { label: 'Won', tone: 'text-[color:var(--total)]' }
+  if (s.includes('los') || s === 'lost') return { label: 'Lost', tone: 'text-[color:var(--live)]' }
+  return { label: 'Open', tone: 'text-gray-400' }
+}
+
 function BetRow({ bet: b }: { bet: SwiftBetRow }) {
+  const [open, setOpen] = useState(false)
   const late = b.placed_after_start
   const stake = b.bet_amount ?? 0
   const pl = b.pl ?? 0
   const odd = b.odd ?? null
   const isMulti = (b.type ?? '').toUpperCase() === 'MULTI'
+  const isSgm = (b.type ?? '').toUpperCase() === 'SGM'
+  // Selections inside the leg that IS this game. An SGM has several (each a
+  // market/outcome on the same game) and is expandable to show them all.
+  const sels = b.matched_leg?.selections ?? []
+  const expandable = sels.length > 1
   // For multis, pull the breakdown row that corresponds to THIS game so the
   // panel shows the leg-specific market/outcome rather than the multi's
   // headline. matched_leg_index points into legs_event_keys, which mirrors
@@ -953,74 +968,116 @@ function BetRow({ bet: b }: { bet: SwiftBetRow }) {
   const outcome = (b.matched_leg?.outcome ?? '').trim() || null
   const legOdds = b.matched_leg?.odds ?? null
   const shownOdds = legOdds ?? odd
-  const mStatus = isMulti ? multiStatus(b.leg_breakdown) : null
+  const mStatus = isMulti || isSgm ? multiStatus(b.leg_breakdown) : null
   const perLegStake = legStake(b)
+  const typeBadge = isSgm ? `SGM · ${sels.length}` : isMulti ? `MULTI · ${b.leg_count}` : null
   return (
-    <tr
-      className={`border-t border-[color:var(--line-soft)] ${
-        late ? 'bg-[color:var(--live)]/[0.06]' : 'hover:bg-white/[0.02]'
-      }`}
-    >
-      <td className="px-3 py-2 align-top text-[11px] tabular-nums text-gray-200">
-        {b.bet_time ? `${melbWallClock(b.bet_time)} MEL` : '—'}
-        {late && (
-          <div className="mt-0.5 inline-flex items-center gap-1 rounded bg-[color:var(--live)]/15 px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--live)]">
-            after start
-          </div>
-        )}
-      </td>
-      <td className="px-3 py-2 align-top font-mono text-[10.5px] text-[color:var(--muted-2)]">
-        {b.user_id?.slice(0, 8) ?? '—'}
-      </td>
-      <td className="px-3 py-2 align-top text-gray-200">
-        {isMulti ? (
-          <span className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-medium text-gray-200">
-            MULTI · {b.leg_count}
-          </span>
-        ) : (
-          <span className="text-[11.5px]">{b.bet_type ?? '—'}</span>
-        )}
-        {mStatus && (
-          <div className="mt-1">
-            <span
-              className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold ${MULTI_STATUS_BADGE[mStatus]}`}
-            >
-              {mStatus === 'Alive' && (
-                <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--up)] pulse-dot" />
-              )}
-              {mStatus === 'Alive' ? 'ALIVE' : mStatus === 'Won' ? 'WON' : 'LOST'}
-            </span>
-          </div>
-        )}
-        {b.scratched && (
-          <div className="mt-0.5 text-[10px] text-[color:var(--muted-2)]">scratched</div>
-        )}
-      </td>
-      <td className="px-3 py-2 align-top text-gray-200">{marketLabel}</td>
-      <td className="px-3 py-2 align-top text-gray-300">{outcome ?? '—'}</td>
-      <td className={`px-3 py-2 align-top text-[11.5px] font-medium ${resultTone}`}>
-        {resultLabel ?? '—'}
-      </td>
-      <td className="px-3 py-2 text-right align-top tabular-nums text-gray-200">
-        ${perLegStake.toFixed(2)}
-        {isMulti && (
-          <div className="mt-0.5 text-[10px] text-[color:var(--muted-2)]">of ${stake.toFixed(2)}</div>
-        )}
-      </td>
-      <td className="px-3 py-2 text-right align-top tabular-nums text-gray-200">
-        {shownOdds != null ? shownOdds.toFixed(2) : '—'}
-        {isMulti && odd != null && (
-          <div className="mt-0.5 text-[10px] text-[color:var(--muted-2)]">multi {odd.toFixed(2)}</div>
-        )}
-      </td>
-      <td
-        className={`px-3 py-2 text-right align-top tabular-nums ${
-          pl > 0 ? 'text-[color:var(--total)]' : pl < 0 ? 'text-[color:var(--live)]' : 'text-gray-300'
+    <>
+      <tr
+        className={`border-t border-[color:var(--line-soft)] ${
+          late ? 'bg-[color:var(--live)]/[0.06]' : 'hover:bg-white/[0.02]'
         }`}
       >
-        ${pl.toFixed(2)}
-      </td>
-    </tr>
+        <td className="px-3 py-2 align-top text-[11px] tabular-nums text-gray-200">
+          {b.bet_time ? `${melbWallClock(b.bet_time)} MEL` : '—'}
+          {late && (
+            <div className="mt-0.5 inline-flex items-center gap-1 rounded bg-[color:var(--live)]/15 px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--live)]">
+              after start
+            </div>
+          )}
+        </td>
+        <td className="px-3 py-2 align-top font-mono text-[10.5px] text-[color:var(--muted-2)]">
+          {b.user_id?.slice(0, 8) ?? '—'}
+        </td>
+        <td className="px-3 py-2 align-top text-gray-200">
+          {typeBadge ? (
+            <span className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-medium text-gray-200">
+              {typeBadge}
+            </span>
+          ) : (
+            <span className="text-[11.5px]">{b.bet_type ?? '—'}</span>
+          )}
+          {mStatus && (
+            <div className="mt-1">
+              <span
+                className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold ${MULTI_STATUS_BADGE[mStatus]}`}
+              >
+                {mStatus === 'Alive' && (
+                  <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--up)] pulse-dot" />
+                )}
+                {mStatus === 'Alive' ? 'ALIVE' : mStatus === 'Won' ? 'WON' : 'LOST'}
+              </span>
+            </div>
+          )}
+          {b.scratched && (
+            <div className="mt-0.5 text-[10px] text-[color:var(--muted-2)]">scratched</div>
+          )}
+        </td>
+        {/* Market / Outcome — an expandable SGM collapses its legs behind a toggle. */}
+        {expandable ? (
+          <td className="px-3 py-2 align-top text-gray-200" colSpan={2}>
+            <button
+              onClick={() => setOpen((o) => !o)}
+              className="inline-flex items-center gap-1 text-left text-gray-200 hover:text-white"
+            >
+              {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              <span>Same Game Multi</span>
+              <span className="text-[color:var(--muted-2)]">· {sels.length} legs</span>
+            </button>
+          </td>
+        ) : (
+          <>
+            <td className="px-3 py-2 align-top text-gray-200">{marketLabel}</td>
+            <td className="px-3 py-2 align-top text-gray-300">{outcome ?? '—'}</td>
+          </>
+        )}
+        <td className={`px-3 py-2 align-top text-[11.5px] font-medium ${resultTone}`}>
+          {resultLabel ?? '—'}
+        </td>
+        <td className="px-3 py-2 text-right align-top tabular-nums text-gray-200">
+          ${perLegStake.toFixed(2)}
+          {isMulti && (
+            <div className="mt-0.5 text-[10px] text-[color:var(--muted-2)]">of ${stake.toFixed(2)}</div>
+          )}
+        </td>
+        <td className="px-3 py-2 text-right align-top tabular-nums text-gray-200">
+          {shownOdds != null ? shownOdds.toFixed(2) : '—'}
+          {isMulti && odd != null && (
+            <div className="mt-0.5 text-[10px] text-[color:var(--muted-2)]">multi {odd.toFixed(2)}</div>
+          )}
+        </td>
+        <td
+          className={`px-3 py-2 text-right align-top tabular-nums ${
+            pl > 0 ? 'text-[color:var(--total)]' : pl < 0 ? 'text-[color:var(--live)]' : 'text-gray-300'
+          }`}
+        >
+          ${pl.toFixed(2)}
+        </td>
+      </tr>
+      {/* Expanded SGM legs: one sub-row per selection (market · outcome · price). */}
+      {expandable &&
+        open &&
+        sels.map((s, i) => {
+          const r = normResult(s.status)
+          return (
+            <tr key={i} className="border-t border-[color:var(--line-soft)]/40 bg-black/[0.18]">
+              <td />
+              <td />
+              <td className="px-3 py-1.5 align-top text-[10px] text-[color:var(--muted-2)]">
+                leg {i + 1}
+              </td>
+              <td className="px-3 py-1.5 align-top text-[11.5px] text-gray-200">{s.market ?? '—'}</td>
+              <td className="px-3 py-1.5 align-top text-[11.5px] text-gray-300">{s.outcome ?? '—'}</td>
+              <td className={`px-3 py-1.5 align-top text-[11px] font-medium ${r.tone}`}>{r.label}</td>
+              <td />
+              <td className="px-3 py-1.5 text-right align-top tabular-nums text-[11.5px] text-gray-300">
+                {s.odds != null ? s.odds.toFixed(2) : '—'}
+              </td>
+              <td />
+            </tr>
+          )
+        })}
+    </>
   )
 }
 

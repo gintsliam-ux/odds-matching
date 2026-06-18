@@ -80,8 +80,10 @@ function slugify(s: string): string {
   return (s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }
 
-/** Mirror of api/swift-bets.ts extractLeg — leg-specific market/outcome/odds. */
-function extractLeg(legsRaw: unknown, index: number): { market: string | null; outcome: string | null; odds: number | null; status: string | null } | null {
+/** Mirror of api/swift-bets.ts extractLeg — leg market/outcome/odds + all
+ *  selections (an SGM is one leg with several selections). */
+interface LegSelection { market: string | null; outcome: string | null; odds: number | null; status: string | null }
+function extractLeg(legsRaw: unknown, index: number): (LegSelection & { selections: LegSelection[] }) | null {
   if (index < 0) return null
   let legs: unknown
   try {
@@ -94,17 +96,27 @@ function extractLeg(legsRaw: unknown, index: number): { market: string | null; o
     | { dividend?: unknown; selections?: Array<{ fixed_odds?: unknown; status?: unknown; selection_data?: Array<{ market_name?: unknown; market_type?: unknown; name?: unknown }> }> }
     | undefined
   if (!leg) return null
-  const sel = Array.isArray(leg.selections) ? leg.selections[0] : null
-  const sd = sel && Array.isArray(sel.selection_data) ? sel.selection_data[0] : null
   // Decimal odds are always > 1; singles store 0 in the leg dividend → treat ≤1
   // as missing so the UI falls back to the bet's top-level odd.
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 1 ? v : null)
   const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+  const rawSels = Array.isArray(leg.selections) ? leg.selections : []
+  const selections: LegSelection[] = rawSels.map((sel) => {
+    const sd = Array.isArray(sel?.selection_data) ? sel.selection_data[0] : null
+    return {
+      market: str(sd?.market_name) ?? str(sd?.market_type),
+      outcome: str(sd?.name),
+      odds: num(sel?.fixed_odds),
+      status: str(sel?.status),
+    }
+  })
+  const first = selections[0] ?? { market: null, outcome: null, odds: null, status: null }
   return {
-    market: str(sd?.market_name) ?? str(sd?.market_type),
-    outcome: str(sd?.name),
-    odds: num(leg.dividend) ?? num(sel?.fixed_odds),
-    status: str(sel?.status),
+    market: first.market,
+    outcome: first.outcome,
+    odds: num(leg.dividend) ?? first.odds,
+    status: first.status,
+    selections,
   }
 }
 

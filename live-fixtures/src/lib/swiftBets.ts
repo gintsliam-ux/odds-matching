@@ -18,13 +18,20 @@ export interface SwiftBetRow {
   legs_event_keys: string[]
   matched_leg_index: number
   // Leg-specific market / outcome / price for the leg that IS this game (for a
-  // single, the whole bet). Lets the UI show the actual selection + leg odds
-  // rather than a multi's combined headline.
+  // single, the whole bet). `selections` holds every pick in that leg — one for
+  // a single/normal multi leg, several for a Same Game Multi (where `odds` is
+  // the combined SGM price). Lets the UI show the real selection and expand SGMs.
   matched_leg: {
     market: string | null
     outcome: string | null
     odds: number | null
     status: string | null
+    selections: Array<{
+      market: string | null
+      outcome: string | null
+      odds: number | null
+      status: string | null
+    }>
   } | null
   leg_count: number
   leg_breakdown:
