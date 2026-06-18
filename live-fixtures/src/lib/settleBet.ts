@@ -51,11 +51,20 @@ function teamSide(text: string, home: string, away: string): 'home' | 'away' | '
 }
 
 /**
- * Returns a settlement if (and only if) this is a full-match market a final
- * score can decide; otherwise null (caller leaves the leg pending).
+ * Returns a settlement if (and only if) this is a full-match market a score can
+ * decide; otherwise null (caller leaves the leg pending).
+ *
+ * By default only settles COMPLETED games (a final result). Pass
+ * `{ allowLive: true }` to also evaluate a LIVE game against its current score —
+ * a provisional mark-to-now used for the live-liability P/L, NOT for claiming a
+ * leg has settled.
  */
-export function settleFromScore(sel: SettleSel, ctx: ScoreCtx): Settlement | null {
-  if (ctx.status !== 'completed') return null
+export function settleFromScore(
+  sel: SettleSel,
+  ctx: ScoreCtx,
+  opts?: { allowLive?: boolean },
+): Settlement | null {
+  if (ctx.status !== 'completed' && !(opts?.allowLive && ctx.status === 'live')) return null
   const hs = ctx.homeScore
   const as = ctx.awayScore
   if (hs == null || as == null) return null

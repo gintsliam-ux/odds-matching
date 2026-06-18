@@ -154,6 +154,11 @@ function Detail({
 }) {
   const [tab, setTab] = useState<DetailTab>('details')
   const isLive = f.status === 'live'
+  // Bets are fetched here (not inside BetsTab) so the liability overview under
+  // the scoreboard can read them on every tab.
+  const swiftActualStart = mappingInfo.swiftEvent?.actualStart ?? null
+  const betsState = useSwiftBets(f, swiftActualStart)
+  const bets = betsState.bets ?? []
 
   return (
     <div
@@ -194,6 +199,9 @@ function Detail({
         </span>
       </div>
 
+      {/* LIABILITY OVERVIEW — users/bets/stake/live-P&L, always visible. */}
+      {bets.length > 0 && <LiabilityOverview bets={bets} fixture={f} />}
+
       {/* TAB STRIP */}
       <div className="flex items-center gap-1 border-b border-white/[0.05] bg-black/[0.1] px-3 py-2">
         <TabButton active={tab === 'details'} onClick={() => setTab('details')}>
@@ -209,7 +217,15 @@ function Detail({
 
       {tab === 'details' && <DetailsTab fixture={f} now={now} mappingInfo={mappingInfo} />}
       {tab === 'markets' && <MarketsTab fixture={f} />}
-      {tab === 'bets' && <BetsTab fixture={f} mappingInfo={mappingInfo} />}
+      {tab === 'bets' && (
+        <BetsTab
+          fixture={f}
+          bets={betsState.bets}
+          loading={betsState.loading}
+          error={betsState.error}
+          swiftActualStart={swiftActualStart}
+        />
+      )}
     </div>
   )
 }
@@ -768,17 +784,14 @@ function MarketCard<K extends string>({
   )
 }
 
-function BetsTab({ fixture: f, mappingInfo }: { fixture: Fixture; mappingInfo: MappingInfo }) {
-  // Bets from gutsy.bets joined to this game via the indexed
-  // `derived.event_key` / `derived.legs_event_keys` slug. We highlight any
-  // bet whose `bet_time` is after the SWIFT actual-start — those landed
-  // after the market should have closed.
+/** Bets for a fixture, fetched once per (date, teams). Lifted out of BetsTab so
+ *  the liability overview can read the same data above the tab strip. The score
+ *  changing doesn't refetch — the deps are stable — so P/L just recomputes. */
+function useSwiftBets(f: Fixture, swiftActualStart: string | null) {
   const [bets, setBets] = useState<SwiftBetRow[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const date = (f.scheduledStart ?? f.startTime ?? '').slice(0, 10)
-  const swiftActualStart = mappingInfo.swiftEvent?.actualStart ?? null
-
   useEffect(() => {
     if (!date || !f.homeName || !f.awayName) return
     let alive = true
@@ -792,7 +805,149 @@ function BetsTab({ fixture: f, mappingInfo }: { fixture: Fixture; mappingInfo: M
       alive = false
     }
   }, [date, f.homeName, f.awayName, swiftActualStart])
+  return { bets, loading, error, date }
+}
 
+function scoreCtx(f: Fixture): ScoreCtx {
+  return {
+    status: f.status,
+    homeScore: f.homeScore,
+    awayScore: f.awayScore,
+    homeName: f.homeName,
+    awayName: f.awayName,
+  }
+}
+
+function plTone(pl: number): string {
+  return pl > 0 ? 'text-[color:var(--total)]' : pl < 0 ? 'text-[color:var(--live)]' : 'text-gray-100'
+}
+
+function StatCard({
+  label,
+  value,
+  tone,
+  badge,
+  live,
+  sub,
+}: {
+  label: string
+  value: string | number
+  tone?: string
+  badge?: string
+  live?: boolean
+  sub?: string
+}) {
+  return (
+    <div className="rounded-md border border-[color:var(--line-soft)] bg-[color:var(--panel)] px-3 py-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] uppercase tracking-wide text-[color:var(--muted-2)]">{label}</span>
+        {badge && (
+          <span
+            className={`inline-flex items-center gap-1 text-[9px] font-bold tracking-wide ${
+              live ? 'text-[color:var(--live)]' : 'text-[color:var(--muted-2)]'
+            }`}
+          >
+            {live && <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--live)] pulse-dot" />}
+            {badge}
+          </span>
+        )}
+      </div>
+      <div className={`mt-0.5 text-[15px] font-semibold tabular-nums ${tone ?? 'text-gray-100'}`}>{value}</div>
+      {sub && <div className="text-[10px] text-[color:var(--muted-2)]">{sub}</div>}
+    </div>
+  )
+}
+
+/** Users / Bets / Stake / P/L summary shown directly under the scoreboard. P/L
+ *  is computed from the current score (so it ticks while live) and flips its
+ *  badge LIVE → FINAL when the game ends. */
+function LiabilityOverview({ bets, fixture: f }: { bets: SwiftBetRow[]; fixture: Fixture }) {
+  const agg = aggregateBets(bets, scoreCtx(f))
+  const live = f.status === 'live'
+  const mode = f.status === 'completed' ? 'FINAL' : live ? 'LIVE' : 'PENDING'
+  return (
+    <div className="grid grid-cols-2 gap-2 border-t border-white/[0.05] bg-black/[0.1] px-5 py-3 sm:grid-cols-4">
+      <StatCard label="Users" value={agg.users} />
+      <StatCard label="Bets" value={agg.count} />
+      <StatCard label="Stake" value={`$${agg.stake.toFixed(2)}`} />
+      <StatCard
+        label="P/L"
+        value={`${agg.pl < 0 ? '-' : ''}$${Math.abs(agg.pl).toFixed(2)}`}
+        tone={plTone(agg.pl)}
+        badge={mode}
+        live={live}
+        sub={agg.open > 0 ? `${agg.open} open` : undefined}
+      />
+    </div>
+  )
+}
+
+/** Market bucket for a bet — its market type, or "Same Game Multi" for SGMs. */
+function marketGroupKey(b: SwiftBetRow): string {
+  if ((b.type ?? '').toUpperCase() === 'SGM') return 'Same Game Multi'
+  return b.matched_leg?.mt ?? b.matched_leg?.market ?? b.market_category ?? 'Other'
+}
+
+const BET_COLS = ['Placed', 'User', 'Type', 'Market', 'Outcome', 'Result', 'Stake', 'Odds', 'P/L'] as const
+
+/** One market's bets, as a card with its own aggregate header + bet table. */
+function MarketBetsCard({ title, bets, fixture: f }: { title: string; bets: SwiftBetRow[]; fixture: Fixture }) {
+  const agg = aggregateBets(bets, scoreCtx(f))
+  return (
+    <div className="overflow-hidden rounded-lg border border-[color:var(--line-soft)]">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-[color:var(--line-soft)] bg-black/[0.2] px-4 py-2.5">
+        <span className="text-[13px] font-semibold text-gray-100">{title}</span>
+        <span className="text-[11px] text-[color:var(--muted-2)]">
+          {agg.count} {agg.count === 1 ? 'bet' : 'bets'} · {agg.users} {agg.users === 1 ? 'user' : 'users'}
+        </span>
+        <span className="ml-auto text-[11px] text-[color:var(--muted)]">
+          Stake <span className="tabular-nums font-semibold text-gray-200">${agg.stake.toFixed(2)}</span>
+        </span>
+        <span className="text-[11px] text-[color:var(--muted)]">
+          P/L{' '}
+          <span className={`tabular-nums font-semibold ${plTone(agg.pl)}`}>
+            {agg.pl < 0 ? '-' : ''}${Math.abs(agg.pl).toFixed(2)}
+          </span>
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1000px] text-[12px]">
+          <thead>
+            <tr className="border-b border-[color:var(--line-soft)] bg-black/[0.12] text-left text-[11px] uppercase tracking-wide text-[color:var(--muted-2)]">
+              {BET_COLS.map((c) => (
+                <th
+                  key={c}
+                  className={`px-3 py-2 font-medium ${c === 'Stake' || c === 'Odds' || c === 'P/L' ? 'text-right' : ''}`}
+                >
+                  {c}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {bets.map((b) => (
+              <BetRow key={b.bet_id ?? b.id} bet={b} fixture={f} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function BetsTab({
+  fixture: f,
+  bets,
+  loading,
+  error,
+  swiftActualStart,
+}: {
+  fixture: Fixture
+  bets: SwiftBetRow[] | null
+  loading: boolean
+  error: string | null
+  swiftActualStart: string | null
+}) {
   if (loading && !bets) {
     return (
       <div className="px-5 py-6">
@@ -811,79 +966,49 @@ function BetsTab({ fixture: f, mappingInfo }: { fixture: Fixture; mappingInfo: M
   }
   const list = bets ?? []
   const lateCount = list.filter((b) => b.placed_after_start).length
-  // A multi's stake is shared across its legs, so attribute only this game's
-  // share (stake ÷ legs) — both per row and in this total — so the figure
-  // reflects exposure to THIS game, not the whole combo.
-  const totalStake = list.reduce((sum, b) => sum + legStake(b), 0)
-  const totalPnl = list.reduce((sum, b) => sum + (b.pl ?? 0), 0)
 
-  return (
-    <div className="px-5 py-5">
-      <div className="mb-4 flex flex-wrap items-baseline gap-x-6 gap-y-2 text-[12px] text-[color:var(--muted)]">
-        <span>
-          Bets:{' '}
-          <span className="tabular-nums font-semibold text-gray-200">{list.length}</span>
-        </span>
-        <span>
-          Stake:{' '}
-          <span className="tabular-nums font-semibold text-gray-200">${totalStake.toFixed(2)}</span>
-        </span>
-        <span>
-          P/L:{' '}
-          <span
-            className={`tabular-nums font-semibold ${
-              totalPnl > 0 ? 'text-[color:var(--total)]' : totalPnl < 0 ? 'text-[color:var(--live)]' : 'text-gray-200'
-            }`}
-          >
-            ${totalPnl.toFixed(2)}
-          </span>
-        </span>
-        {swiftActualStart && (
-          <span>
-            SWIFT actual start:{' '}
-            <span className="tabular-nums font-medium text-gray-300">{melbDateTime(swiftActualStart)}</span>{' '}
-            MEL
-          </span>
-        )}
-        {lateCount > 0 && (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-[color:var(--live)]/10 px-2.5 py-0.5 text-[11px] font-semibold text-[color:var(--live)]">
-            ⚠ {lateCount} placed after start
-          </span>
-        )}
-      </div>
-
-      {list.length === 0 ? (
+  if (list.length === 0) {
+    return (
+      <div className="px-5 py-6">
         <div className="rounded-lg border border-dashed border-[color:var(--line-soft)] p-6 text-center text-[12.5px] text-[color:var(--muted)]">
-          No bets matched on the SwiftBet side for this game on {date || '—'}. Linkage:{' '}
+          No bets matched on the SwiftBet side for this game. Linkage:{' '}
           <code className="text-gray-300">derived.event_key</code> /{' '}
           <code className="text-gray-300">legs_event_keys</code> regex.
         </div>
-      ) : (
-        // Horizontal scroll on narrow viewports so the leg/market column gets
-        // enough room without crushing the others.
-        <div className="overflow-x-auto rounded-lg border border-[color:var(--line-soft)]">
-          <table className="w-full min-w-[1060px] text-[12px]">
-            <thead>
-              <tr className="border-b border-[color:var(--line-soft)] bg-black/[0.15] text-left text-[11px] uppercase tracking-wide text-[color:var(--muted-2)]">
-                <th className="px-3 py-2 font-medium">Placed</th>
-                <th className="px-3 py-2 font-medium">User</th>
-                <th className="px-3 py-2 font-medium">Type</th>
-                <th className="px-3 py-2 font-medium">Market</th>
-                <th className="px-3 py-2 font-medium">Outcome</th>
-                <th className="px-3 py-2 font-medium">Result</th>
-                <th className="px-3 py-2 text-right font-medium">Stake</th>
-                <th className="px-3 py-2 text-right font-medium">Odds</th>
-                <th className="px-3 py-2 text-right font-medium">P/L</th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.map((b) => (
-                <BetRow key={b.bet_id ?? b.id} bet={b} fixture={f} />
-              ))}
-            </tbody>
-          </table>
+      </div>
+    )
+  }
+
+  // Group by market, most-staked market first.
+  const groups = new Map<string, SwiftBetRow[]>()
+  for (const b of list) {
+    const k = marketGroupKey(b)
+    ;(groups.get(k) ?? groups.set(k, []).get(k)!).push(b)
+  }
+  const ordered = [...groups.entries()].sort(
+    (a, b) => b[1].reduce((s, x) => s + legStake(x), 0) - a[1].reduce((s, x) => s + legStake(x), 0),
+  )
+
+  return (
+    <div className="space-y-3 px-5 py-5">
+      {(swiftActualStart || lateCount > 0) && (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px] text-[color:var(--muted)]">
+          {swiftActualStart && (
+            <span>
+              SWIFT actual start:{' '}
+              <span className="tabular-nums font-medium text-gray-300">{melbDateTime(swiftActualStart)}</span> MEL
+            </span>
+          )}
+          {lateCount > 0 && (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-[color:var(--live)]/10 px-2.5 py-0.5 text-[11px] font-semibold text-[color:var(--live)]">
+              ⚠ {lateCount} placed after start
+            </span>
+          )}
         </div>
       )}
+      {ordered.map(([key, gbets]) => (
+        <MarketBetsCard key={key} title={key} bets={gbets} fixture={f} />
+      ))}
     </div>
   )
 }
@@ -957,10 +1082,11 @@ function resolveResult(
   officialRaw: string | null,
   sel: { market: string | null; mt: string | null; outcome: string | null },
   ctx: ScoreCtx,
+  allowLive = false,
 ): ResolvedResult {
   const off = normLabel(officialRaw)
   if (off !== 'Open') return { label: off, tone: RES_TONE[off], derived: false }
-  const d = settleFromScore(sel, ctx)
+  const d = settleFromScore(sel, ctx, { allowLive })
   if (d) return { label: d, tone: RES_TONE[d], derived: true }
   return { label: 'Open', tone: RES_TONE.Open, derived: false }
 }
@@ -976,6 +1102,76 @@ function ResultCell({ r }: { r: ResolvedResult }) {
       {r.label}
     </span>
   )
+}
+
+/** Overall result of a bet w.r.t. THIS game: prefer the granular selection
+ *  status, then leg_breakdown, then score-derivation; an SGM combines its
+ *  selections (any lost → lost, all won → won). */
+function resolveBet(b: SwiftBetRow, ctx: ScoreCtx, allowLive = false): ResolvedResult {
+  const isSgm = (b.type ?? '').toUpperCase() === 'SGM'
+  const sels = b.matched_leg?.selections ?? []
+  const leg =
+    b.leg_breakdown && b.matched_leg_index >= 0 ? b.leg_breakdown[b.matched_leg_index] ?? null : null
+  if (isSgm && sels.length) {
+    const official = normLabel(leg?.result ?? null)
+    if (official !== 'Open') return { label: official, tone: RES_TONE[official], derived: false }
+    const sr = sels.map((s) => resolveResult(s.status, s, ctx, allowLive))
+    if (sr.some((r) => r.label === 'Lost'))
+      return { label: 'Lost', tone: RES_TONE.Lost, derived: sr.some((r) => r.label === 'Lost' && r.derived) }
+    if (sr.every((r) => r.label === 'Won' || r.label === 'Push'))
+      return { label: 'Won', tone: RES_TONE.Won, derived: sr.some((r) => r.derived) }
+    return { label: 'Open', tone: RES_TONE.Open, derived: false }
+  }
+  const selStatus = b.matched_leg?.status ?? null
+  const best = normLabel(selStatus) !== 'Open' ? selStatus : leg?.result ?? null
+  return resolveResult(best, b.matched_leg ?? { market: null, mt: null, outcome: null }, ctx, allowLive)
+}
+
+/**
+ * Customer P/L for a bet at the CURRENT score (so it ticks live in-play and
+ * lands on the final P/L once the game ends). A single/SGM resolves fully; a
+ * multi only resolves to a loss when this game's leg loses (which kills it) or,
+ * once the game is over, to the book's settled `pl` (its other legs are on games
+ * we don't fetch). `decided=false` → still open at the current score.
+ */
+function projectBet(b: SwiftBetRow, ctx: ScoreCtx): { pl: number; decided: boolean } {
+  const stake = b.bet_amount ?? 0
+  const odd = b.odd ?? 1
+  const isMulti = (b.type ?? '').toUpperCase() === 'MULTI'
+  // allowLive: provisionally settle from the in-play score so the liability
+  // ticks while the game is live.
+  const res = resolveBet(b, ctx, true)
+  if (res.label === 'Lost') return { pl: -stake, decided: true }
+  if (res.label === 'Won') {
+    if (isMulti) {
+      if (ctx.status === 'completed') return { pl: b.pl ?? 0, decided: true }
+      return { pl: 0, decided: false } // leg ahead, but the multi rides on other games
+    }
+    return { pl: stake * (odd - 1), decided: true }
+  }
+  return { pl: 0, decided: false }
+}
+
+export interface BetsAgg {
+  users: number
+  count: number
+  stake: number
+  pl: number
+  open: number // bets not yet decided at the current score
+}
+function aggregateBets(list: SwiftBetRow[], ctx: ScoreCtx): BetsAgg {
+  const users = new Set<string>()
+  let stake = 0
+  let pl = 0
+  let open = 0
+  for (const b of list) {
+    users.add(b.user_id)
+    stake += legStake(b)
+    const p = projectBet(b, ctx)
+    pl += p.pl
+    if (!p.decided) open++
+  }
+  return { users: users.size, count: list.length, stake, pl, open }
 }
 
 function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) {
@@ -1020,26 +1216,9 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
     awayName: f.awayName,
   }
   const selResults = sels.map((s) => resolveResult(s.status, s, ctx))
-  // Main-row result. An SGM combines its selections (any lost → lost, all won →
-  // won). Everything else resolves the matched selection — preferring the
-  // granular selection STATUS (`sel.status`, reliably settled) over the often-
-  // stale `leg_breakdown` summary, then score-derivation. (The book frequently
-  // leaves leg_breakdown=Pending on a leg whose selection is already resulted —
-  // that mismatch was showing settled legs as "Open".)
-  const mainRes: ResolvedResult = (() => {
-    if (isSgm && selResults.length) {
-      const official = normLabel(leg?.result ?? null)
-      if (official !== 'Open') return { label: official, tone: RES_TONE[official], derived: false }
-      if (selResults.some((r) => r.label === 'Lost'))
-        return { label: 'Lost', tone: RES_TONE.Lost, derived: selResults.some((r) => r.label === 'Lost' && r.derived) }
-      if (selResults.every((r) => r.label === 'Won' || r.label === 'Push'))
-        return { label: 'Won', tone: RES_TONE.Won, derived: selResults.some((r) => r.derived) }
-      return { label: 'Open', tone: RES_TONE.Open, derived: false }
-    }
-    const selStatus = b.matched_leg?.status ?? null
-    const best = normLabel(selStatus) !== 'Open' ? selStatus : leg?.result ?? null
-    return resolveResult(best, b.matched_leg ?? { market: null, mt: null, outcome: null }, ctx)
-  })()
+  // Main-row result (prefers granular selection status, then leg_breakdown,
+  // then score-derivation; SGMs combine their selections).
+  const mainRes = resolveBet(b, ctx)
   // Badge. SGM reflects its (possibly derived) overall result. A multi combines
   // ALL legs: this game's leg uses the resolved result above; sibling legs
   // (other games, not fetched here) fall back to their leg_breakdown summary.
