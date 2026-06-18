@@ -33,6 +33,11 @@ export interface Notification {
 const OVERDUE_MIN = 15
 /** Poll SWIFT statuses every 10s for in-progress mapped events. */
 const POLL_MS = 10_000
+/** Grace before the "SwiftBet still open" alert fires. SwiftBet routinely lags
+ *  OPTIC's prematch→live flip by up to a couple of minutes (normal scraper
+ *  delay) and those always resolve fine, so don't alert until the game has been
+ *  started for longer than this. */
+const SWIFT_OPEN_GRACE_MS = 2 * 60_000
 
 /**
  * The core alert that this project exists for: SwiftBet is still taking
@@ -182,8 +187,14 @@ export function useNotifications(fixtures: Fixture[]): {
 
       if (sid && swiftStatus === 'prematch') {
         const startMs = f.scheduledStart ? Date.parse(f.scheduledStart) : NaN
+        const actualMs = f.actualStart ? Date.parse(f.actualStart) : NaN
         const opticStarted = f.status === 'live' || (Number.isFinite(startMs) && startMs <= nowMs)
-        if (opticStarted) {
+        // 2-min grace: OPTIC's actual_start (preferred) or scheduled start must
+        // be at least that far in the past before we alert — SwiftBet's flip
+        // lags by up to ~2 min and those are fine.
+        const startedMs = Number.isFinite(actualMs) ? actualMs : startMs
+        const pastGrace = Number.isFinite(startedMs) && startedMs <= nowMs - SWIFT_OPEN_GRACE_MS
+        if (opticStarted && pastGrace) {
           out.push({ id: `swiftopen-${f.id}`, kind: 'swift_still_open', ...base })
         }
       }

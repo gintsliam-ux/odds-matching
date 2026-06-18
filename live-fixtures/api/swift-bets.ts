@@ -203,7 +203,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .limit(200)
 
     const docs = await cursor.toArray()
-    const cutoff = body.swiftActualStart ? Date.parse(body.swiftActualStart) : null
+    // 2-min grace on the recorded actual-start: bets within ~2 min of the flip
+    // always check out fine (the stamp's resolution is the polling interval), so
+    // only flag bets placed clearly after start.
+    const AFTER_START_GRACE_MS = 2 * 60_000
+    const cutoff = body.swiftActualStart ? Date.parse(body.swiftActualStart) + AFTER_START_GRACE_MS : null
     const result = docs.map((d) => {
       // bet_time is Melbourne wall-clock with a misleading Z; convert to a
       // real UTC moment for the after-start comparison.

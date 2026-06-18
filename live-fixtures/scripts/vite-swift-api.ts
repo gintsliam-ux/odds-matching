@@ -379,7 +379,9 @@ export function swiftApiPlugin(): Plugin {
             .sort({ bet_time: -1 })
             .limit(200)
             .toArray()
-          const cutoff = body.swiftActualStart ? Date.parse(body.swiftActualStart) : null
+          // 2-min grace — see api/swift-bets.ts.
+          const AFTER_START_GRACE_MS = 2 * 60_000
+          const cutoff = body.swiftActualStart ? Date.parse(body.swiftActualStart) + AFTER_START_GRACE_MS : null
           const out = docs.map((d) => {
             const betUtc = d.bet_time ? melbWallToUtc(d.bet_time) : null
             const placedAfterStart =
