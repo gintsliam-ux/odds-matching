@@ -908,15 +908,14 @@ function legStake(b: SwiftBetRow): number {
   return isMulti && b.leg_count > 0 ? stake / b.leg_count : stake
 }
 
-/** Overall multi status from the per-leg results: dead the moment any leg
- *  loses, won when every leg won, otherwise still alive (legs pending, none
- *  lost yet). Drives the live/settled badge so the whole-multi P/L is legible. */
+/** Overall multi status from per-leg result labels: dead the moment any leg
+ *  loses, won when every leg won (pushes don't kill it), otherwise still alive
+ *  (legs pending, none lost). Drives the live/settled badge. */
 type MultiStatus = 'Alive' | 'Won' | 'Lost'
-function multiStatus(breakdown: SwiftBetRow['leg_breakdown']): MultiStatus | null {
-  if (!breakdown || breakdown.length === 0) return null
-  const r = (x: string | null) => (x ?? '').toLowerCase()
-  if (breakdown.some((l) => r(l.result).includes('lost'))) return 'Lost'
-  if (breakdown.every((l) => r(l.result) === 'won')) return 'Won'
+function statusFromLabels(labels: Array<'Won' | 'Lost' | 'Open' | 'Push'>): MultiStatus | null {
+  if (labels.length === 0) return null
+  if (labels.some((l) => l === 'Lost')) return 'Lost'
+  if (labels.every((l) => l === 'Won' || l === 'Push')) return 'Won'
   return 'Alive'
 }
 
@@ -1021,23 +1020,29 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
     awayName: f.awayName,
   }
   const selResults = sels.map((s) => resolveResult(s.status, s, ctx))
-  // Main-row result: an SGM combines its selections (any lost → lost, all won →
-  // won); everything else resolves its single matched selection. The book's
-  // settled leg result wins when present.
+  // Main-row result. An SGM combines its selections (any lost → lost, all won →
+  // won). Everything else resolves the matched selection — preferring the
+  // granular selection STATUS (`sel.status`, reliably settled) over the often-
+  // stale `leg_breakdown` summary, then score-derivation. (The book frequently
+  // leaves leg_breakdown=Pending on a leg whose selection is already resulted —
+  // that mismatch was showing settled legs as "Open".)
   const mainRes: ResolvedResult = (() => {
-    const official = normLabel(leg?.result ?? null)
-    if (official !== 'Open') return { label: official, tone: RES_TONE[official], derived: false }
     if (isSgm && selResults.length) {
+      const official = normLabel(leg?.result ?? null)
+      if (official !== 'Open') return { label: official, tone: RES_TONE[official], derived: false }
       if (selResults.some((r) => r.label === 'Lost'))
         return { label: 'Lost', tone: RES_TONE.Lost, derived: selResults.some((r) => r.label === 'Lost' && r.derived) }
-      if (selResults.every((r) => r.label === 'Won'))
+      if (selResults.every((r) => r.label === 'Won' || r.label === 'Push'))
         return { label: 'Won', tone: RES_TONE.Won, derived: selResults.some((r) => r.derived) }
       return { label: 'Open', tone: RES_TONE.Open, derived: false }
     }
-    return resolveResult(leg?.result ?? null, b.matched_leg ?? { market: null, mt: null, outcome: null }, ctx)
+    const selStatus = b.matched_leg?.status ?? null
+    const best = normLabel(selStatus) !== 'Open' ? selStatus : leg?.result ?? null
+    return resolveResult(best, b.matched_leg ?? { market: null, mt: null, outcome: null }, ctx)
   })()
-  // Badge: an SGM reflects its (possibly derived) overall result; a multi can
-  // only use the book's results (we don't have its other games' legs here).
+  // Badge. SGM reflects its (possibly derived) overall result. A multi combines
+  // ALL legs: this game's leg uses the resolved result above; sibling legs
+  // (other games, not fetched here) fall back to their leg_breakdown summary.
   const mStatus: MultiStatus | null = isSgm
     ? mainRes.label === 'Won'
       ? 'Won'
@@ -1045,7 +1050,11 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
         ? 'Lost'
         : 'Alive'
     : isMulti
-      ? multiStatus(b.leg_breakdown)
+      ? statusFromLabels(
+          (b.leg_breakdown ?? []).map((l, i) =>
+            i === b.matched_leg_index ? mainRes.label : normLabel(l.result),
+          ),
+        )
       : null
   return (
     <>
