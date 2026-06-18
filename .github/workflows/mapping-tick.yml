@@ -1,0 +1,31 @@
+name: live-fixtures mapping-tick
+
+# 24/7 backstop that refreshes the OpticOdds ↔ SwiftBet mappings even when the
+# terminal isn't open. It just pings the app's /api/mapping-tick endpoint, which
+# is server-throttled to rebuild at most once per 10 min — so this needs no
+# secret and safely dedupes with the in-app pinger.
+#
+# GitHub's scheduled runs are best-effort and often a few minutes late, so we
+# ask for every 5 min; combined with the 10-min server throttle that keeps
+# mappings reliably <~15 min stale. Public repo → Actions minutes are free.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+# If a run is still going when the next fires, skip the new one rather than queue.
+concurrency:
+  group: mapping-tick
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Trigger mapping refresh
+        run: |
+          echo "Pinging mapping-tick…"
+          curl -sS --fail --max-time 150 https://live-fixtures.vercel.app/api/mapping-tick
+          echo
