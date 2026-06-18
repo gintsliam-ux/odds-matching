@@ -156,8 +156,23 @@ function Detail({
   const isLive = f.status === 'live'
   // Bets are fetched here (not inside BetsTab) so the liability overview under
   // the scoreboard can read them on every tab.
-  const swiftActualStart = mappingInfo.swiftEvent?.actualStart ?? null
-  const betsState = useSwiftBets(f, swiftActualStart)
+  //
+  // Late-bet cutoff = the LATER of OPTIC's actual_start and our SWIFT inprogress
+  // observation — BUT only trusting stamps that aren't implausibly early. Two
+  // real failure modes produced false "after start" flags: the SWIFT stamp can
+  // fire ~an hour early on a brief false `inprogress`, and a stamp can come from
+  // the wrong game in a same-teams series (a day off). So we drop any actual
+  // that predates the scheduled start by more than a small tolerance, and only
+  // flag when a trustworthy stamp remains.
+  const schedMs = f.scheduledStart ? Date.parse(f.scheduledStart) : NaN
+  const START_TOLERANCE_MS = 30 * 60_000
+  const trustedStarts = [f.actualStart, mappingInfo.swiftEvent?.actualStart].filter(
+    (x): x is string => !!x && (!Number.isFinite(schedMs) || Date.parse(x) >= schedMs - START_TOLERANCE_MS),
+  )
+  const actualStart = trustedStarts.length
+    ? trustedStarts.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a))
+    : null
+  const betsState = useSwiftBets(f, actualStart)
   const bets = betsState.bets ?? []
 
   return (
@@ -223,7 +238,7 @@ function Detail({
           bets={betsState.bets}
           loading={betsState.loading}
           error={betsState.error}
-          swiftActualStart={swiftActualStart}
+          swiftActualStart={actualStart}
         />
       )}
     </div>
@@ -1016,7 +1031,7 @@ function BetsTab({
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px] text-[color:var(--muted)]">
           {swiftActualStart && (
             <span>
-              SWIFT actual start:{' '}
+              Actual start:{' '}
               <span className="tabular-nums font-medium text-gray-300">{melbDateTime(swiftActualStart)}</span> MEL
             </span>
           )}
