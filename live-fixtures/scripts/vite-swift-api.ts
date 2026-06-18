@@ -31,6 +31,25 @@ function getClient(): Promise<MongoClient> {
   return (clientPromise = new MongoClient(uri, { maxPoolSize: 4 }).connect())
 }
 
+// --- mapping-tick throttle (mirrors api/mapping-tick.ts) ------------------
+const MAPPING_THROTTLE_MS = 10 * 60 * 1000
+let mappingRunning = false
+
+/** Newest event_mapping.resolved_at in epoch-ms (= last matcher run), or null. */
+async function mappingLastRunMs(): Promise<number | null> {
+  const url = process.env.VITE_SUPABASE_URL
+  const key = process.env.VITE_SUPABASE_ANON_KEY
+  if (!url || !key) return null
+  const r = await fetch(
+    `${url}/rest/v1/event_mapping?select=resolved_at&order=resolved_at.desc.nullslast&limit=1`,
+    { headers: { apikey: key, Authorization: `Bearer ${key}` } },
+  )
+  if (!r.ok) return null
+  const rows = (await r.json()) as Array<{ resolved_at: string | null }>
+  const ts = rows?.[0]?.resolved_at
+  return ts ? Date.parse(ts) : null
+}
+
 function send(res: ServerResponse, status: number, body: unknown): void {
   res.statusCode = status
   res.setHeader('Content-Type', 'application/json')
@@ -129,6 +148,42 @@ export function swiftApiPlugin(): Plugin {
           return send(res, 200, { events })
         } catch (e) {
           return send(res, 500, { error: String((e as { message?: unknown })?.message ?? e) })
+        }
+      })
+
+      // GET /api/mapping-tick — see api/mapping-tick.ts. Server-throttled
+      // self-trigger for the matcher; the open terminal pings it on a timer.
+      server.middlewares.use('/api/mapping-tick', async (req, res) => {
+        if (req.method !== 'GET' && req.method !== 'POST') {
+          return send(res, 405, { ok: false, error: 'GET only' })
+        }
+        try {
+          const last = await mappingLastRunMs()
+          const now = Date.now()
+          const ageMs = last == null ? Infinity : now - last
+          if (ageMs < MAPPING_THROTTLE_MS) {
+            return send(res, 200, {
+              ok: true, ran: false, reason: 'throttled',
+              ageSec: Math.round(ageMs / 1000),
+              nextInSec: Math.ceil((MAPPING_THROTTLE_MS - ageMs) / 1000),
+            })
+          }
+          if (mappingRunning) return send(res, 200, { ok: true, ran: false, reason: 'busy' })
+          mappingRunning = true
+          const t0 = Date.now()
+          try {
+            // build-mapping.mjs is plain JS with no .d.ts — runMapping() is
+            // typed via the cast on the import result.
+            // @ts-expect-error untyped local .mjs module
+            const mod = (await import('./build-mapping.mjs')) as { runMapping: () => Promise<void> }
+            await mod.runMapping()
+          } finally {
+            mappingRunning = false
+          }
+          return send(res, 200, { ok: true, ran: true, ms: Date.now() - t0 })
+        } catch (e) {
+          mappingRunning = false
+          return send(res, 500, { ok: false, error: String((e as { message?: unknown })?.message ?? e) })
         }
       })
 

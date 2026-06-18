@@ -1,9 +1,10 @@
-// Cron (every 10 min): re-runs the OPTIC ↔ SWIFT matcher and upserts fresh rows
-// into `competition_mapping` + `event_mapping`. The matcher does a full
-// idempotent rebuild each run, so a fixture that only just appeared in
-// live_fixtures / gutsy.events gets mapped within ~10 min instead of waiting
-// for the next day. Does NOT touch /public — the dev snapshot ages out
-// gracefully now that the picker also queries Mongo live via /api/swift-search.
+// Daily cron backstop: re-runs the OPTIC ↔ SWIFT matcher and upserts fresh rows
+// into `competition_mapping` + `event_mapping`. Vercel Hobby caps cron at once
+// per day, so the ~10-min refresh is driven instead by /api/mapping-tick, which
+// the open terminal pings on a timer (server-side throttled). This daily run is
+// the floor for when the app is closed. Does NOT touch /public — the dev
+// snapshot ages out gracefully now that the picker queries Mongo live via
+// /api/swift-search.
 //
 // Schedule lives in vercel.json (`crons`). Vercel posts a Bearer token in
 // `Authorization: Bearer <CRON_SECRET>` — we verify that to keep the endpoint

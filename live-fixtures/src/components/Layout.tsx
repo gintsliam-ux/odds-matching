@@ -4,6 +4,7 @@ import { Header } from './Header'
 import { Sidebar } from './Sidebar'
 import { useFixtures, type FeedState } from '../hooks/useFixtures'
 import { useMongoPulse } from '../hooks/useMongoPulse'
+import { useMappingTick } from '../hooks/useMappingTick'
 import { useNow } from '../hooks/useNow'
 import { useStableOrder } from '../hooks/useStableOrder'
 import { useDayFixtures } from '../hooks/useDayFixtures'
@@ -51,6 +52,9 @@ export default function Layout() {
   // SWIFT (Mongo) feed health — shown next to the OpticOdds feed pulse in the
   // header. Independent poll; the two upstreams can fail separately.
   const { pulse: mongoPulse, state: mongoState } = useMongoPulse()
+  // Self-trigger the mapping rebuild ~every 10 min (server-throttled) since
+  // Vercel Hobby cron can only fire once a day.
+  useMappingTick()
 
   // /upcoming and /completed browse a specific Melbourne day; fetch it here so
   // both the board and the sidebar counts share one source.

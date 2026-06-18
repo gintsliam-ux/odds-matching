@@ -3,6 +3,6 @@
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
   "crons": [
-    { "path": "/api/cron/build-mapping", "schedule": "*/10 * * * *" }
+    { "path": "/api/cron/build-mapping", "schedule": "0 4 * * *" }
   ]
 }
