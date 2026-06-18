@@ -810,7 +810,10 @@ function BetsTab({ fixture: f, mappingInfo }: { fixture: Fixture; mappingInfo: M
   }
   const list = bets ?? []
   const lateCount = list.filter((b) => b.placed_after_start).length
-  const totalStake = list.reduce((sum, b) => sum + (b.bet_amount ?? 0), 0)
+  // A multi's stake is shared across its legs, so attribute only this game's
+  // share (stake ÷ legs) — both per row and in this total — so the figure
+  // reflects exposure to THIS game, not the whole combo.
+  const totalStake = list.reduce((sum, b) => sum + legStake(b), 0)
   const totalPnl = list.reduce((sum, b) => sum + (b.pl ?? 0), 0)
 
   return (
@@ -896,6 +899,32 @@ function melbWallClock(raw: string): string {
   return `${d}/${mo} ${h}:${mi}`
 }
 
+/** This game's share of a bet's stake: a multi spreads its stake across legs,
+ *  so attribute stake ÷ legs; a single keeps its full stake. */
+function legStake(b: SwiftBetRow): number {
+  const stake = b.bet_amount ?? 0
+  const isMulti = (b.type ?? '').toUpperCase() === 'MULTI'
+  return isMulti && b.leg_count > 0 ? stake / b.leg_count : stake
+}
+
+/** Overall multi status from the per-leg results: dead the moment any leg
+ *  loses, won when every leg won, otherwise still alive (legs pending, none
+ *  lost yet). Drives the live/settled badge so the whole-multi P/L is legible. */
+type MultiStatus = 'Alive' | 'Won' | 'Lost'
+function multiStatus(breakdown: SwiftBetRow['leg_breakdown']): MultiStatus | null {
+  if (!breakdown || breakdown.length === 0) return null
+  const r = (x: string | null) => (x ?? '').toLowerCase()
+  if (breakdown.some((l) => r(l.result).includes('lost'))) return 'Lost'
+  if (breakdown.every((l) => r(l.result) === 'won')) return 'Won'
+  return 'Alive'
+}
+
+const MULTI_STATUS_BADGE: Record<MultiStatus, string> = {
+  Alive: 'bg-[color:var(--up)]/10 text-[color:var(--up)]',
+  Won: 'bg-[color:var(--total)]/10 text-[color:var(--total)]',
+  Lost: 'bg-[color:var(--live)]/10 text-[color:var(--live)]',
+}
+
 function BetRow({ bet: b }: { bet: SwiftBetRow }) {
   const late = b.placed_after_start
   const stake = b.bet_amount ?? 0
@@ -924,6 +953,8 @@ function BetRow({ bet: b }: { bet: SwiftBetRow }) {
   const outcome = (b.matched_leg?.outcome ?? '').trim() || null
   const legOdds = b.matched_leg?.odds ?? null
   const shownOdds = legOdds ?? odd
+  const mStatus = isMulti ? multiStatus(b.leg_breakdown) : null
+  const perLegStake = legStake(b)
   return (
     <tr
       className={`border-t border-[color:var(--line-soft)] ${
@@ -949,6 +980,18 @@ function BetRow({ bet: b }: { bet: SwiftBetRow }) {
         ) : (
           <span className="text-[11.5px]">{b.bet_type ?? '—'}</span>
         )}
+        {mStatus && (
+          <div className="mt-1">
+            <span
+              className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold ${MULTI_STATUS_BADGE[mStatus]}`}
+            >
+              {mStatus === 'Alive' && (
+                <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--up)] pulse-dot" />
+              )}
+              {mStatus === 'Alive' ? 'ALIVE' : mStatus === 'Won' ? 'WON' : 'LOST'}
+            </span>
+          </div>
+        )}
         {b.scratched && (
           <div className="mt-0.5 text-[10px] text-[color:var(--muted-2)]">scratched</div>
         )}
@@ -958,7 +1001,12 @@ function BetRow({ bet: b }: { bet: SwiftBetRow }) {
       <td className={`px-3 py-2 align-top text-[11.5px] font-medium ${resultTone}`}>
         {resultLabel ?? '—'}
       </td>
-      <td className="px-3 py-2 text-right align-top tabular-nums text-gray-200">${stake.toFixed(2)}</td>
+      <td className="px-3 py-2 text-right align-top tabular-nums text-gray-200">
+        ${perLegStake.toFixed(2)}
+        {isMulti && (
+          <div className="mt-0.5 text-[10px] text-[color:var(--muted-2)]">of ${stake.toFixed(2)}</div>
+        )}
+      </td>
       <td className="px-3 py-2 text-right align-top tabular-nums text-gray-200">
         {shownOdds != null ? shownOdds.toFixed(2) : '—'}
         {isMulti && odd != null && (
