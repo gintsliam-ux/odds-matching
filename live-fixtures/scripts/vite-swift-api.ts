@@ -82,7 +82,7 @@ function slugify(s: string): string {
 
 /** Mirror of api/swift-bets.ts extractLeg — leg market/outcome/odds + all
  *  selections (an SGM is one leg with several selections). */
-interface LegSelection { market: string | null; outcome: string | null; odds: number | null; status: string | null }
+interface LegSelection { market: string | null; mt: string | null; outcome: string | null; odds: number | null; status: string | null }
 function extractLeg(legsRaw: unknown, index: number): (LegSelection & { selections: LegSelection[] }) | null {
   if (index < 0) return null
   let legs: unknown
@@ -105,14 +105,16 @@ function extractLeg(legsRaw: unknown, index: number): (LegSelection & { selectio
     const sd = Array.isArray(sel?.selection_data) ? sel.selection_data[0] : null
     return {
       market: str(sd?.market_name) ?? str(sd?.market_type),
+      mt: str(sd?.market_type),
       outcome: str(sd?.name),
       odds: num(sel?.fixed_odds),
       status: str(sel?.status),
     }
   })
-  const first = selections[0] ?? { market: null, outcome: null, odds: null, status: null }
+  const first = selections[0] ?? { market: null, mt: null, outcome: null, odds: null, status: null }
   return {
     market: first.market,
+    mt: first.mt,
     outcome: first.outcome,
     odds: num(leg.dividend) ?? first.odds,
     status: first.status,

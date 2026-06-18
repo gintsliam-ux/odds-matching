@@ -43,6 +43,10 @@ function esc(s: string): string {
 
 export interface LegSelection {
   market: string | null
+  // Structured market type (e.g. "Total Goals Over / Under", "Match winner") —
+  // used to classify the market for client-side score settlement. Display still
+  // uses `market` (market_name); market_type alone mislabels some h2h cases.
+  mt: string | null
   outcome: string | null
   odds: number | null
   status: string | null
@@ -85,14 +89,16 @@ function extractLeg(legsRaw: unknown, index: number): MatchedLeg | null {
     const sd = Array.isArray(sel?.selection_data) ? sel.selection_data[0] : null
     return {
       market: str(sd?.market_name) ?? str(sd?.market_type),
+      mt: str(sd?.market_type),
       outcome: str(sd?.name),
       odds: num(sel?.fixed_odds),
       status: str(sel?.status),
     }
   })
-  const first = selections[0] ?? { market: null, outcome: null, odds: null, status: null }
+  const first = selections[0] ?? { market: null, mt: null, outcome: null, odds: null, status: null }
   return {
     market: first.market,
+    mt: first.mt,
     outcome: first.outcome,
     // Headline odds: the leg dividend (the SGM's combined price), else the lone
     // selection's price.

@@ -7,6 +7,7 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { fetchFixtureById } from '../lib/dataSource'
 import { fetchSwiftEvent } from '../lib/swiftStatus'
 import { fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
+import { settleFromScore, type ScoreCtx } from '../lib/settleBet'
 import { periodAbbrev, periodNoun, periodState, sportEmoji } from '../lib/sports'
 import { Avatar } from '../components/Avatar'
 import type { Fixture } from '../lib/types'
@@ -877,7 +878,7 @@ function BetsTab({ fixture: f, mappingInfo }: { fixture: Fixture; mappingInfo: M
             </thead>
             <tbody>
               {list.map((b) => (
-                <BetRow key={b.bet_id ?? b.id} bet={b} />
+                <BetRow key={b.bet_id ?? b.id} bet={b} fixture={f} />
               ))}
             </tbody>
           </table>
@@ -925,16 +926,60 @@ const MULTI_STATUS_BADGE: Record<MultiStatus, string> = {
   Lost: 'bg-[color:var(--live)]/10 text-[color:var(--live)]',
 }
 
-/** Normalize a raw SwiftBet selection status (ResultedWin/ResultedLoss/
- *  Unresulted) to a display label + tone. */
-function normResult(status: string | null): { label: string; tone: string } {
-  const s = (status ?? '').toLowerCase()
-  if (s.includes('win') || s === 'won') return { label: 'Won', tone: 'text-[color:var(--total)]' }
-  if (s.includes('los') || s === 'lost') return { label: 'Lost', tone: 'text-[color:var(--live)]' }
-  return { label: 'Open', tone: 'text-gray-400' }
+type ResLabel = 'Won' | 'Lost' | 'Open' | 'Push'
+interface ResolvedResult {
+  label: ResLabel
+  tone: string
+  derived: boolean // true → we settled it from the final score, book hadn't
 }
 
-function BetRow({ bet: b }: { bet: SwiftBetRow }) {
+const RES_TONE: Record<ResLabel, string> = {
+  Won: 'text-[color:var(--total)]',
+  Lost: 'text-[color:var(--live)]',
+  Push: 'text-gray-300',
+  Open: 'text-gray-400',
+}
+
+/** Won/Lost/Open from a raw status (ResultedWin/Lost/Unresulted or Won/Lost/Pending). */
+function normLabel(raw: string | null): 'Won' | 'Lost' | 'Open' {
+  const s = (raw ?? '').toLowerCase()
+  if (s.includes('win') || s === 'won') return 'Won'
+  if (s.includes('los') || s === 'lost') return 'Lost'
+  return 'Open'
+}
+
+/**
+ * Resolve a selection's result: prefer the book's settlement; when it's still
+ * Open, fall back to deriving it from the fixture's final score (full-match
+ * markets only — see settleFromScore). `derived` flags the latter so the UI can
+ * mark it as inferred.
+ */
+function resolveResult(
+  officialRaw: string | null,
+  sel: { market: string | null; mt: string | null; outcome: string | null },
+  ctx: ScoreCtx,
+): ResolvedResult {
+  const off = normLabel(officialRaw)
+  if (off !== 'Open') return { label: off, tone: RES_TONE[off], derived: false }
+  const d = settleFromScore(sel, ctx)
+  if (d) return { label: d, tone: RES_TONE[d], derived: true }
+  return { label: 'Open', tone: RES_TONE.Open, derived: false }
+}
+
+/** Renders a result with a "~" + tooltip when it was derived from the score. */
+function ResultCell({ r }: { r: ResolvedResult }) {
+  return (
+    <span
+      className={`${r.tone} ${r.derived ? 'italic' : ''}`}
+      title={r.derived ? 'Derived from the final score — the book had not settled this leg' : undefined}
+    >
+      {r.derived ? '~' : ''}
+      {r.label}
+    </span>
+  )
+}
+
+function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) {
   const [open, setOpen] = useState(false)
   const late = b.placed_after_start
   const stake = b.bet_amount ?? 0
@@ -955,13 +1000,6 @@ function BetRow({ bet: b }: { bet: SwiftBetRow }) {
   const marketLabel = isMulti
     ? leg?.market_category ?? b.market_category ?? '—'
     : b.market_category ?? '—'
-  const resultLabel = (leg?.result ?? '').trim() || null
-  const resultTone =
-    resultLabel === 'Won'
-      ? 'text-[color:var(--total)]'
-      : resultLabel === 'Lost'
-        ? 'text-[color:var(--live)]'
-        : 'text-gray-300'
   // The leg that IS this game carries its own selection + price. Show those —
   // for a multi the Odds column shows the LEG price (the multi's combined odds
   // moves to a sub-label), so the row describes this game's actual bet.
@@ -971,9 +1009,44 @@ function BetRow({ bet: b }: { bet: SwiftBetRow }) {
   // odd (the per-leg `dividend` is often 0 for SGMs). A multi/single shows the
   // leg price, falling back to the bet odd.
   const shownOdds = isSgm ? odd : legOdds ?? odd
-  const mStatus = isMulti || isSgm ? multiStatus(b.leg_breakdown) : null
   const perLegStake = legStake(b)
   const typeBadge = isSgm ? `SGM · ${sels.length}` : isMulti ? `MULTI · ${b.leg_count}` : null
+
+  // Fill in unsettled legs from the fixture's final score (full-match markets).
+  const ctx: ScoreCtx = {
+    status: f.status,
+    homeScore: f.homeScore,
+    awayScore: f.awayScore,
+    homeName: f.homeName,
+    awayName: f.awayName,
+  }
+  const selResults = sels.map((s) => resolveResult(s.status, s, ctx))
+  // Main-row result: an SGM combines its selections (any lost → lost, all won →
+  // won); everything else resolves its single matched selection. The book's
+  // settled leg result wins when present.
+  const mainRes: ResolvedResult = (() => {
+    const official = normLabel(leg?.result ?? null)
+    if (official !== 'Open') return { label: official, tone: RES_TONE[official], derived: false }
+    if (isSgm && selResults.length) {
+      if (selResults.some((r) => r.label === 'Lost'))
+        return { label: 'Lost', tone: RES_TONE.Lost, derived: selResults.some((r) => r.label === 'Lost' && r.derived) }
+      if (selResults.every((r) => r.label === 'Won'))
+        return { label: 'Won', tone: RES_TONE.Won, derived: selResults.some((r) => r.derived) }
+      return { label: 'Open', tone: RES_TONE.Open, derived: false }
+    }
+    return resolveResult(leg?.result ?? null, b.matched_leg ?? { market: null, mt: null, outcome: null }, ctx)
+  })()
+  // Badge: an SGM reflects its (possibly derived) overall result; a multi can
+  // only use the book's results (we don't have its other games' legs here).
+  const mStatus: MultiStatus | null = isSgm
+    ? mainRes.label === 'Won'
+      ? 'Won'
+      : mainRes.label === 'Lost'
+        ? 'Lost'
+        : 'Alive'
+    : isMulti
+      ? multiStatus(b.leg_breakdown)
+      : null
   return (
     <>
       <tr
@@ -1034,8 +1107,8 @@ function BetRow({ bet: b }: { bet: SwiftBetRow }) {
             <td className="px-3 py-2 align-top text-gray-300">{outcome ?? '—'}</td>
           </>
         )}
-        <td className={`px-3 py-2 align-top text-[11.5px] font-medium ${resultTone}`}>
-          {resultLabel ?? '—'}
+        <td className="px-3 py-2 align-top text-[11.5px] font-medium">
+          <ResultCell r={mainRes} />
         </td>
         <td className="px-3 py-2 text-right align-top tabular-nums text-gray-200">
           ${perLegStake.toFixed(2)}
@@ -1061,7 +1134,7 @@ function BetRow({ bet: b }: { bet: SwiftBetRow }) {
       {expandable &&
         open &&
         sels.map((s, i) => {
-          const r = normResult(s.status)
+          const r = selResults[i]
           return (
             <tr key={i} className="border-t border-[color:var(--line-soft)]/40 bg-black/[0.18]">
               <td />
@@ -1071,7 +1144,9 @@ function BetRow({ bet: b }: { bet: SwiftBetRow }) {
               </td>
               <td className="px-3 py-1.5 align-top text-[11.5px] text-gray-200">{s.market ?? '—'}</td>
               <td className="px-3 py-1.5 align-top text-[11.5px] text-gray-300">{s.outcome ?? '—'}</td>
-              <td className={`px-3 py-1.5 align-top text-[11px] font-medium ${r.tone}`}>{r.label}</td>
+              <td className="px-3 py-1.5 align-top text-[11px] font-medium">
+                <ResultCell r={r} />
+              </td>
               <td />
               <td className="px-3 py-1.5 text-right align-top tabular-nums text-[11.5px] text-gray-300">
                 {s.odds != null ? s.odds.toFixed(2) : '—'}

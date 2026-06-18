@@ -23,11 +23,13 @@ export interface SwiftBetRow {
   // the combined SGM price). Lets the UI show the real selection and expand SGMs.
   matched_leg: {
     market: string | null
+    mt: string | null
     outcome: string | null
     odds: number | null
     status: string | null
     selections: Array<{
       market: string | null
+      mt: string | null
       outcome: string | null
       odds: number | null
       status: string | null
