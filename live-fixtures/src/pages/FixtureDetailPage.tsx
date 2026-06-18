@@ -967,7 +967,10 @@ function BetRow({ bet: b }: { bet: SwiftBetRow }) {
   // moves to a sub-label), so the row describes this game's actual bet.
   const outcome = (b.matched_leg?.outcome ?? '').trim() || null
   const legOdds = b.matched_leg?.odds ?? null
-  const shownOdds = legOdds ?? odd
+  // An SGM is one bet on this game, so its combined price IS the bet's total
+  // odd (the per-leg `dividend` is often 0 for SGMs). A multi/single shows the
+  // leg price, falling back to the bet odd.
+  const shownOdds = isSgm ? odd : legOdds ?? odd
   const mStatus = isMulti || isSgm ? multiStatus(b.leg_breakdown) : null
   const perLegStake = legStake(b)
   const typeBadge = isSgm ? `SGM · ${sels.length}` : isMulti ? `MULTI · ${b.leg_count}` : null
@@ -995,7 +998,7 @@ function BetRow({ bet: b }: { bet: SwiftBetRow }) {
               {typeBadge}
             </span>
           ) : (
-            <span className="text-[11.5px]">{b.bet_type ?? '—'}</span>
+            <span className="text-[11.5px]">{(b.type ?? 'SINGLE').toUpperCase()}</span>
           )}
           {mStatus && (
             <div className="mt-1">
