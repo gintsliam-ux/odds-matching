@@ -1,0 +1,104 @@
+@import "tailwindcss";
+
+:root {
+  /* Surfaces — slightly bluer-dark, less harsh than pure #050608 */
+  --bg: #0b0f17;
+  --panel: #141a25;
+  --panel-2: #1c2331;
+  --line: #252b3a;
+  --line-soft: #1a1f29;
+
+  /* Text */
+  --text: #e6eaf2;
+  --muted: #8b94a8;
+  --muted-2: #5e6679;
+
+  /* Accents — softer than the original neon */
+  --total: #4ade80;     /* mapped/best/positive (green) */
+  --up: #fbbf24;        /* upcoming / warning (amber) */
+  --live: #f43f5e;      /* live / negative (rose) */
+}
+
+html, body, #root {
+  height: 100%;
+  background: var(--bg);
+}
+
+body {
+  margin: 0;
+  color: var(--text);
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-feature-settings: 'cv11', 'ss01';
+  font-size: 13.5px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: radial-gradient(ellipse at top, #131826 0%, var(--bg) 60%);
+  min-height: 100vh;
+}
+
+/* Reserve the mono font for things that genuinely benefit from it — odds,
+   IDs, scores. Apply it via .tabular-nums or .mono. */
+.tabular-nums,
+code,
+kbd,
+samp {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-feature-settings: 'tnum';
+}
+
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* Live cards keep a glow but in the new rose rather than neon red */
+.glow-live {
+  box-shadow:
+    0 0 0 1px rgba(244, 63, 94, 0.45),
+    0 0 24px -10px rgba(244, 63, 94, 0.55),
+    inset 0 0 28px -22px rgba(244, 63, 94, 0.6);
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.pulse-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+@keyframes flash-cell {
+  from { background-color: rgba(244, 63, 94, 0.16); }
+  to { background-color: transparent; }
+}
+.flash-cell {
+  animation: flash-cell 0.6s ease-out;
+}
+
+/* Skeleton shimmer (kept) */
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 6px;
+}
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  animation: shimmer 1.5s infinite;
+}
+
+/* Form elements look heavy by default on dark — soften */
+select, input[type="text"], input[type="date"], input[type="search"] {
+  color-scheme: dark;
+}
