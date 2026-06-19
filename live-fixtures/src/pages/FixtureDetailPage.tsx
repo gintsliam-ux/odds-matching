@@ -807,19 +807,20 @@ function useSwiftBets(f: Fixture, swiftActualStart: string | null) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const date = (f.scheduledStart ?? f.startTime ?? '').slice(0, 10)
+  const scheduledStart = f.scheduledStart ?? f.startTime ?? null
   useEffect(() => {
     if (!date || !f.homeName || !f.awayName) return
     let alive = true
     setLoading(true)
     setError(null)
-    fetchSwiftBets({ date, home: f.homeName, away: f.awayName, swiftActualStart })
+    fetchSwiftBets({ date, home: f.homeName, away: f.awayName, swiftActualStart, scheduledStart })
       .then((rows) => alive && setBets(rows))
       .catch((e) => alive && setError(String(e?.message ?? e)))
       .finally(() => alive && setLoading(false))
     return () => {
       alive = false
     }
-  }, [date, f.homeName, f.awayName, swiftActualStart])
+  }, [date, f.homeName, f.awayName, swiftActualStart, scheduledStart])
   return { bets, loading, error, date }
 }
 

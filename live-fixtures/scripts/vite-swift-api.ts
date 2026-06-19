@@ -80,6 +80,21 @@ function slugify(s: string): string {
   return (s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }
 
+/** The matched leg's event_time (epoch ms) — to pin a bet to the right game. */
+function legEventTimeMs(legsRaw: unknown, index: number): number | null {
+  if (index < 0) return null
+  let legs: unknown
+  try {
+    legs = typeof legsRaw === 'string' ? JSON.parse(legsRaw) : legsRaw
+  } catch {
+    return null
+  }
+  if (!Array.isArray(legs)) return null
+  const et = (legs[index] as { event_time?: unknown } | undefined)?.event_time
+  const t = typeof et === 'string' ? Date.parse(et) : NaN
+  return Number.isFinite(t) ? t : null
+}
+
 /** Mirror of api/swift-bets.ts extractLeg — leg market/outcome/odds + all
  *  selections (an SGM is one leg with several selections). */
 interface LegSelection { market: string | null; mt: string | null; outcome: string | null; odds: number | null; status: string | null }
@@ -342,7 +357,7 @@ export function swiftApiPlugin(): Plugin {
         if (req.method !== 'POST') return send(res, 405, { error: 'POST only' })
         try {
           const body = await readJson(req) as {
-            date?: string; home?: string; away?: string; swiftActualStart?: string
+            date?: string; home?: string; away?: string; swiftActualStart?: string; scheduledStart?: string
           }
           if (!body.date || !body.home || !body.away) {
             return send(res, 400, { error: 'date, home and away are required' })
@@ -381,14 +396,21 @@ export function swiftApiPlugin(): Plugin {
             .toArray()
           // 2-min grace — see api/swift-bets.ts.
           const AFTER_START_GRACE_MS = 2 * 60_000
+          const SAME_GAME_TOLERANCE_MS = 3 * 60 * 60 * 1000
           const cutoff = body.swiftActualStart ? Date.parse(body.swiftActualStart) + AFTER_START_GRACE_MS : null
-          const out = docs.map((d) => {
+          const schedMs = body.scheduledStart ? Date.parse(body.scheduledStart) : null
+          const out = docs.flatMap((d) => {
+            const legs: string[] = d.derived?.legs_event_keys ?? []
+            const matchedLegIndex = legs.findIndex((k) => re.test(k))
+            // Pin to the correct game in a same-teams doubleheader/series.
+            if (Number.isFinite(schedMs)) {
+              const evtMs = legEventTimeMs(d.legs, matchedLegIndex)
+              if (evtMs != null && Math.abs(evtMs - (schedMs as number)) > SAME_GAME_TOLERANCE_MS) return []
+            }
             const betUtc = d.bet_time ? melbWallToUtc(d.bet_time) : null
             const placedAfterStart =
               cutoff != null && betUtc != null ? betUtc.getTime() > cutoff : false
-            const legs: string[] = d.derived?.legs_event_keys ?? []
-            const matchedLegIndex = legs.findIndex((k) => re.test(k))
-            return {
+            return [{
               id: d._id, bet_id: d.bet_id, user_id: d.user_id, bet_time: d.bet_time,
               bet_amount: d.bet_amount, bet_type: d.bet_type, odd: d.odd, pl: d.pl,
               is_bonus: !!d.is_bonus, sport: d.derived?.sport ?? null,
@@ -400,7 +422,7 @@ export function swiftApiPlugin(): Plugin {
               em_percent: d.enrichment?.emPercent ?? null,
               scratched: d.enrichment?.scratched ?? false,
               placed_after_start: placedAfterStart,
-            }
+            }]
           })
           send(res, 200, { bets: out, count: out.length, matchPattern: re.source })
         } catch (e) {

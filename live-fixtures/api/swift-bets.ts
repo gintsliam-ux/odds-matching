@@ -134,6 +134,28 @@ function melbWallToUtc(raw: string | Date): Date | null {
   return new Date(`${wall}+11:00`)
 }
 
+/** The matched leg's own event_time (epoch ms) — used to pin a bet to the
+ *  correct game when the same teams play more than once in the window. */
+function legEventTimeMs(legsRaw: unknown, index: number): number | null {
+  if (index < 0) return null
+  let legs: unknown
+  try {
+    legs = typeof legsRaw === 'string' ? JSON.parse(legsRaw) : legsRaw
+  } catch {
+    return null
+  }
+  if (!Array.isArray(legs)) return null
+  const et = (legs[index] as { event_time?: unknown } | undefined)?.event_time
+  const t = typeof et === 'string' ? Date.parse(et) : NaN
+  return Number.isFinite(t) ? t : null
+}
+
+// Same-teams doubleheaders/series share a date+teams slug. A bet's leg
+// event_time matches OPTIC's scheduled_start, so keep only bets within this of
+// the fixture's scheduled start — wide enough for reschedules, tight enough to
+// separate a day-night doubleheader.
+const SAME_GAME_TOLERANCE_MS = 3 * 60 * 60 * 1000
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'POST only' })
@@ -145,6 +167,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       home?: string
       away?: string
       swiftActualStart?: string
+      scheduledStart?: string
     }
     if (!body.date || !body.home || !body.away) {
       res.status(400).json({ error: 'date, home and away are required' })
@@ -208,17 +231,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // only flag bets placed clearly after start.
     const AFTER_START_GRACE_MS = 2 * 60_000
     const cutoff = body.swiftActualStart ? Date.parse(body.swiftActualStart) + AFTER_START_GRACE_MS : null
-    const result = docs.map((d) => {
+    const schedMs = body.scheduledStart ? Date.parse(body.scheduledStart) : null
+    const result = docs.flatMap((d) => {
+      // Pinpoint which leg in a multi corresponds to this game so the UI can
+      // call it out — match on the regex against each leg key.
+      const legs: string[] = d.derived?.legs_event_keys ?? []
+      const matchedLegIndex = legs.findIndex((k) => matchPattern.test(k))
+      // Disambiguate same-teams doubleheaders/series: drop the bet if its leg's
+      // event_time isn't near THIS fixture's scheduled start. (Skip when we have
+      // no scheduled start or no leg event_time — keep the bet rather than guess.)
+      if (Number.isFinite(schedMs)) {
+        const evtMs = legEventTimeMs(d.legs, matchedLegIndex)
+        if (evtMs != null && Math.abs(evtMs - (schedMs as number)) > SAME_GAME_TOLERANCE_MS) return []
+      }
       // bet_time is Melbourne wall-clock with a misleading Z; convert to a
       // real UTC moment for the after-start comparison.
       const betUtc = d.bet_time ? melbWallToUtc(d.bet_time) : null
       const placedAfterStart =
         cutoff != null && betUtc != null ? betUtc.getTime() > cutoff : false
-      // Pinpoint which leg in a multi corresponds to this game so the UI can
-      // call it out — match on the regex against each leg key.
-      const legs: string[] = d.derived?.legs_event_keys ?? []
-      const matchedLegIndex = legs.findIndex((k) => matchPattern.test(k))
-      return {
+      return [{
         id: d._id,
         bet_id: d.bet_id,
         user_id: d.user_id,
@@ -240,7 +271,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         em_percent: d.enrichment?.emPercent ?? null,
         scratched: d.enrichment?.scratched ?? false,
         placed_after_start: placedAfterStart,
-      }
+      }]
     })
     res.setHeader('Cache-Control', 'no-store')
     res.status(200).json({ bets: result, matchPattern: matchPattern.source, count: result.length })

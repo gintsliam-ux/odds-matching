@@ -59,6 +59,10 @@ export async function fetchSwiftBets(args: {
   home: string
   away: string
   swiftActualStart?: string | null
+  /** The fixture's scheduled start. Same-teams doubleheaders/series share a
+   *  date+teams slug, so the server keeps only bets whose leg event_time is
+   *  near this — pinning each bet to the correct game. */
+  scheduledStart?: string | null
 }): Promise<SwiftBetRow[]> {
   const res = await fetch('/api/swift-bets', {
     method: 'POST',
@@ -68,6 +72,7 @@ export async function fetchSwiftBets(args: {
       home: args.home,
       away: args.away,
       swiftActualStart: args.swiftActualStart ?? undefined,
+      scheduledStart: args.scheduledStart ?? undefined,
     }),
   })
   if (!res.ok) throw new Error(`swift-bets ${res.status}`)
