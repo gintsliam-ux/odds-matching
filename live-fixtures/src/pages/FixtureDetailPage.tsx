@@ -922,6 +922,11 @@ function MarketBetsCard({ title, bets, fixture: f }: { title: string; bets: Swif
             ⚠ {lateCount} after start
           </span>
         )}
+        {agg.mismatch > 0 && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-[color:var(--up)]/10 px-2 py-0.5 text-[10px] font-semibold text-[color:var(--up)]">
+            ⚠ {agg.mismatch} check settle
+          </span>
+        )}
         <span className="text-[11px] text-[color:var(--muted-2)]">
           {agg.count} {agg.count === 1 ? 'bet' : 'bets'} · {agg.users} {agg.users === 1 ? 'user' : 'users'}
         </span>
@@ -990,7 +995,9 @@ function BetsTab({
     )
   }
   const list = bets ?? []
+  const ctx = scoreCtx(f)
   const lateCount = list.filter((b) => b.placed_after_start).length
+  const mismatchCount = list.filter((b) => betMismatch(b, ctx)).length
 
   if (list.length === 0) {
     return (
@@ -1012,22 +1019,23 @@ function BetsTab({
     const k = marketGroupKey(b)
     ;(groups.get(k) ?? groups.set(k, []).get(k)!).push(b)
   }
+  const isFlagged = (x: SwiftBetRow) => x.placed_after_start || betMismatch(x, ctx)
   for (const gbets of groups.values()) {
-    // stable sort (API already returns bet_time desc) → late bets first
-    gbets.sort((a, b) => Number(b.placed_after_start) - Number(a.placed_after_start))
+    // stable sort (API already returns bet_time desc) → flagged bets first
+    gbets.sort((a, b) => Number(isFlagged(b)) - Number(isFlagged(a)))
   }
-  const hasLate = (gbets: SwiftBetRow[]) => gbets.some((x) => x.placed_after_start)
+  const hasFlag = (gbets: SwiftBetRow[]) => gbets.some(isFlagged)
   const stakeOf = (gbets: SwiftBetRow[]) => gbets.reduce((s, x) => s + legStake(x), 0)
   const ordered = [...groups.entries()].sort((a, b) => {
-    const la = hasLate(a[1])
-    const lb = hasLate(b[1])
+    const la = hasFlag(a[1])
+    const lb = hasFlag(b[1])
     if (la !== lb) return la ? -1 : 1
     return stakeOf(b[1]) - stakeOf(a[1])
   })
 
   return (
     <div className="space-y-3 px-5 py-5">
-      {(swiftActualStart || lateCount > 0) && (
+      {(swiftActualStart || lateCount > 0 || mismatchCount > 0) && (
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px] text-[color:var(--muted)]">
           {swiftActualStart && (
             <span>
@@ -1038,6 +1046,14 @@ function BetsTab({
           {lateCount > 0 && (
             <span className="inline-flex items-center gap-1.5 rounded-full bg-[color:var(--live)]/10 px-2.5 py-0.5 text-[11px] font-semibold text-[color:var(--live)]">
               ⚠ {lateCount} placed after start
+            </span>
+          )}
+          {mismatchCount > 0 && (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full bg-[color:var(--up)]/10 px-2.5 py-0.5 text-[11px] font-semibold text-[color:var(--up)]"
+              title="Bets whose settled result contradicts the final score — worth a manual review"
+            >
+              ⚠ {mismatchCount} to review (settle vs score)
             </span>
           )}
         </div>
@@ -1091,6 +1107,10 @@ interface ResolvedResult {
   label: ResLabel
   tone: string
   derived: boolean // true → we settled it from the final score, book hadn't
+  // Set when the book HAS settled this leg but the final score implies the
+  // opposite — i.e. a possible mis-settlement to review. Holds what the score
+  // says it should be.
+  expected?: 'Won' | 'Lost' | null
 }
 
 const RES_TONE: Record<ResLabel, string> = {
@@ -1121,14 +1141,33 @@ function resolveResult(
   allowLive = false,
 ): ResolvedResult {
   const off = normLabel(officialRaw)
-  if (off !== 'Open') return { label: off, tone: RES_TONE[off], derived: false }
+  if (off !== 'Open') {
+    // Book settled it — cross-check against the FINAL score (completed only, no
+    // allowLive) for a possible mis-settlement. A Won↔Lost contradiction is the
+    // signal; a Push vs Won/Lost is too noisy to flag.
+    const check = settleFromScore(sel, ctx)
+    const expected = (check === 'Won' || check === 'Lost') && check !== off ? check : null
+    return { label: off, tone: RES_TONE[off], derived: false, expected }
+  }
   const d = settleFromScore(sel, ctx, { allowLive })
   if (d) return { label: d, tone: RES_TONE[d], derived: true }
   return { label: 'Open', tone: RES_TONE.Open, derived: false }
 }
 
-/** Renders a result with a "~" + tooltip when it was derived from the score. */
+/** Renders a result: "~" + tooltip when derived from the score; a ⚠ + tooltip
+ *  when the book's settled result contradicts the final score. */
 function ResultCell({ r }: { r: ResolvedResult }) {
+  if (r.expected) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 text-[color:var(--up)]"
+        title={`Possible mis-settlement: book settled ${r.label}, but the final score implies ${r.expected}`}
+      >
+        ⚠ {r.label}
+        <span className="text-[10px] text-[color:var(--muted-2)]">→ {r.expected}?</span>
+      </span>
+    )
+  }
   return (
     <span
       className={`${r.tone} ${r.derived ? 'italic' : ''}`}
@@ -1138,6 +1177,14 @@ function ResultCell({ r }: { r: ResolvedResult }) {
       {r.label}
     </span>
   )
+}
+
+/** Does any leg/selection of this bet look mis-settled vs the final score? */
+function betMismatch(b: SwiftBetRow, ctx: ScoreCtx): boolean {
+  const sels = b.matched_leg?.selections ?? []
+  if (sels.length) return sels.some((s) => !!resolveResult(s.status, s, ctx).expected)
+  const ml = b.matched_leg
+  return ml ? !!resolveResult(ml.status, ml, ctx).expected : false
 }
 
 /** Overall result of a bet w.r.t. THIS game: prefer the granular selection
@@ -1194,20 +1241,23 @@ export interface BetsAgg {
   stake: number
   pl: number
   open: number // bets not yet decided at the current score
+  mismatch: number // bets whose settled result contradicts the final score
 }
 function aggregateBets(list: SwiftBetRow[], ctx: ScoreCtx): BetsAgg {
   const users = new Set<string>()
   let stake = 0
   let pl = 0
   let open = 0
+  let mismatch = 0
   for (const b of list) {
     users.add(b.user_id)
     stake += legStake(b)
     const p = projectBet(b, ctx)
     pl += p.pl
     if (!p.decided) open++
+    if (betMismatch(b, ctx)) mismatch++
   }
-  return { users: users.size, count: list.length, stake, pl, open }
+  return { users: users.size, count: list.length, stake, pl, open, mismatch }
 }
 
 function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) {
