@@ -102,16 +102,21 @@ export default function MappingPage() {
     }
     if (missing.length === 0) return
     for (const id of missing) resolveAttempted.current.add(id)
-    fetchSwiftStatuses(missing)
-      .then((evs) => {
-        if (!alive || evs.length === 0) return
-        setSwiftEventById((prev) => {
-          const next = new Map(prev)
-          for (const e of evs) next.set(e.id, e)
-          return next
+    // Resolve in chunks that each merge as they arrive, so names fill in
+    // progressively instead of after one big all-or-nothing request.
+    const CHUNK = 300
+    for (let i = 0; i < missing.length; i += CHUNK) {
+      fetchSwiftStatuses(missing.slice(i, i + CHUNK))
+        .then((evs) => {
+          if (!alive || evs.length === 0) return
+          setSwiftEventById((prev) => {
+            const next = new Map(prev)
+            for (const e of evs) next.set(e.id, e)
+            return next
+          })
         })
-      })
-      .catch(() => {/* keep id fallback */})
+        .catch(() => {/* keep id fallback */})
+    }
     return () => {
       alive = false
     }
