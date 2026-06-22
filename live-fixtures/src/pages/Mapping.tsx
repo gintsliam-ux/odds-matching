@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ArrowLeftRight, Check, ChevronRight, Database, GitMerge, Loader2, Pencil, Sparkles } from 'lucide-react'
 import { TableSkeleton } from '../components/Skeleton'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
@@ -8,6 +8,7 @@ import { useSportUniverse } from '../hooks/useSportUniverse'
 import { useTournamentFixtures } from '../hooks/useTournamentFixtures'
 import { MappingEditor, type EditorTarget } from '../components/MappingEditor'
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
+import { fetchSwiftStatuses } from '../lib/swiftStatus'
 import { displaySport, sportEmoji, sportGroupKey, sportLabel } from '../lib/sports'
 import { kickoffLabel, melbDateTimeShort, utcDateTimeShort } from '../lib/format'
 import {
@@ -85,6 +86,36 @@ export default function MappingPage() {
       alive = false
     }
   }, [])
+
+  // The static catalogue is a daily snapshot, so a freshly-mapped (or aged-out)
+  // event isn't in it and the row would show a bare id. Resolve any such mapped
+  // ids live from Mongo (/api/swift-status) so the row shows team names. Each id
+  // is fetched at most once (attemptedRef) to avoid a refetch loop.
+  const resolveAttempted = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (eventMap.size === 0) return
+    let alive = true
+    const missing: string[] = []
+    for (const m of eventMap.values()) {
+      const id = m.swift_event_id
+      if (id && !swiftEventById.has(id) && !resolveAttempted.current.has(id)) missing.push(id)
+    }
+    if (missing.length === 0) return
+    for (const id of missing) resolveAttempted.current.add(id)
+    fetchSwiftStatuses(missing)
+      .then((evs) => {
+        if (!alive || evs.length === 0) return
+        setSwiftEventById((prev) => {
+          const next = new Map(prev)
+          for (const e of evs) next.set(e.id, e)
+          return next
+        })
+      })
+      .catch(() => {/* keep id fallback */})
+    return () => {
+      alive = false
+    }
+  }, [eventMap, swiftEventById])
 
   useEffect(() => {
     let alive = true
