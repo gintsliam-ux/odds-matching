@@ -340,6 +340,12 @@ function scoreTennis(ot, gutsyComp) {
   if (ot.isDoubles && !gcDoubles) s -= 0.4
   if (!ot.isDoubles && gcDoubles) s -= 0.4
 
+  // qualifying vs main draw must match too — else a main-draw tournament
+  // ("Berlin, Germany") wrongly binds to "…Qualification" (same city bonus).
+  const optQual = /qualif/i.test(ot.full)
+  const gcQual = /qualif/i.test(gc)
+  if (optQual !== gcQual) s -= 0.4
+
   // gender alignment (best-effort; many gutsy names omit gender for ATP/men)
   if (ot.gender === 'women' && /\bwomen|women's\b/.test(gc)) s += 0.15
   if (ot.gender === 'men' && /\bmen|men's\b/.test(gc) && !/women/.test(gc)) s += 0.15
@@ -521,6 +527,29 @@ async function main(opts = { writeSnapshot: true }) {
     gutsyByComp.set(cid, list)
   }
 
+  // Tennis is matched by PLAYER NAMES + start time across the WHOLE sport, not
+  // scoped to a paired competition: OPTIC labels tournaments by city
+  // ("Berlin, Germany") while SWIFT uses sponsor names ("Berlin Tennis Open by
+  // HYLO"), so competition mapping is too unreliable to gate events on. Index
+  // all SWIFT tennis events by UTC day for a fast same-window candidate pool.
+  const tennisByDay = new Map() // 'YYYY-MM-DD' → events[]
+  for (const e of gutsy) {
+    if ((e.sport?.name ?? '').toLowerCase() !== 'tennis' || !e.start_date) continue
+    const day = String(e.start_date).slice(0, 10)
+    const list = tennisByDay.get(day) ?? []
+    list.push(e)
+    tennisByDay.set(day, list)
+  }
+  const tennisCandidates = (startMs) => {
+    const out = []
+    for (let off = -1; off <= 1; off++) {
+      const k = new Date(startMs + off * 86_400_000).toISOString().slice(0, 10)
+      const list = tennisByDay.get(k)
+      if (list) out.push(...list)
+    }
+    return out
+  }
+
   // Map (optic_sport, optic_league, optic_tournament) → list of mapped SWIFT
   // competition ids. With 1-to-N a tournament may pair with multiple comps;
   // events get to choose from any of them. Include results from THIS run plus
@@ -557,9 +586,17 @@ async function main(opts = { writeSnapshot: true }) {
     if (!r.optic_fixture_id) continue
     if (r.league && EXCLUDE_LEAGUES.has(r.league)) continue
     const isTennis = (r.sport ?? '').toLowerCase() === 'tennis'
-    const tournament = isTennis ? (r.season_type ?? '') : ''
-    const cids = compIdsByOptic.get(`${r.sport}|${r.league}|${tournament}`)
-    if (!cids || cids.length === 0) {
+    const opticStart = r.scheduled_start ? Date.parse(r.scheduled_start) : NaN
+    // Tennis: pool ALL same-window SWIFT tennis events (player+time match, no
+    // competition gate). Everything else: pool the paired competitions' events.
+    let cands
+    if (isTennis) {
+      cands = Number.isFinite(opticStart) ? tennisCandidates(opticStart) : []
+    } else {
+      const cids = compIdsByOptic.get(`${r.sport}|${r.league}|`)
+      cands = cids && cids.length ? cids.flatMap((cid) => gutsyByComp.get(cid) ?? []) : []
+    }
+    if (!cands.length) {
       eventResults.push({
         optic_fixture_id: r.optic_fixture_id,
         gutsy_event_id: null,
@@ -569,10 +606,7 @@ async function main(opts = { writeSnapshot: true }) {
       continue
     }
     opticPairedComp++
-    // Pool candidates from every mapped SWIFT competition for this OPTIC tournament.
-    const cands = cids.flatMap((cid) => gutsyByComp.get(cid) ?? [])
     const opticTeams = `${r.home_team ?? ''} ${r.away_team ?? ''}`
-    const opticStart = r.scheduled_start ? Date.parse(r.scheduled_start) : NaN
     let best = null
     let bestScore = 0
     // Both gates must pass: name similarity ≥ MIN_EVENT_SIM AND start-time skew
