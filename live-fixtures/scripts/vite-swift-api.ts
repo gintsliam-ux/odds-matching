@@ -433,13 +433,14 @@ export function swiftApiPlugin(): Plugin {
   }
 }
 
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL
-const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY
-
 /** See api/swift-status.ts for the rationale. */
 async function captureActualStarts(
   events: Array<{ id: string; status: string | null; start: string | null; actualStart: string | null }>,
 ): Promise<void> {
+  // Read lazily — vite.config injects .env into process.env after this module
+  // is imported (same reason getClient() reads MONGO_URI lazily).
+  const SUPABASE_URL = process.env.VITE_SUPABASE_URL
+  const SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY
   if (!SUPABASE_URL || !SUPABASE_KEY) return
   if (events.length === 0) return
   const headers = {
@@ -459,17 +460,20 @@ async function captureActualStarts(
   const byId = new Map(rows.map((r) => [r.gutsy_event_id, r.swift_actual_start]))
   const now = new Date().toISOString()
   const toWrite: Array<{ id: string; stamp: string }> = []
+  const toClear: string[] = []
   for (const ev of events) {
     const existing = byId.get(ev.id) ?? null
+    // Delayed/reopened: back to prematch after we stamped → clear (see api/swift-status.ts).
+    if (existing && ev.status === 'prematch') { ev.actualStart = null; toClear.push(ev.id); continue }
     if (existing) { ev.actualStart = existing; continue }
     if (ev.status !== 'inprogress') continue
     if (!byId.has(ev.id)) continue
     ev.actualStart = now
     toWrite.push({ id: ev.id, stamp: now })
   }
-  if (toWrite.length === 0) return
-  await Promise.all(
-    toWrite.map(({ id, stamp }) =>
+  if (toWrite.length === 0 && toClear.length === 0) return
+  await Promise.all([
+    ...toWrite.map(({ id, stamp }) =>
       fetch(
         `${SUPABASE_URL}/rest/v1/event_mapping?gutsy_event_id=eq.${id}&swift_actual_start=is.null`,
         {
@@ -479,5 +483,12 @@ async function captureActualStarts(
         },
       ),
     ),
-  )
+    ...toClear.map((id) =>
+      fetch(`${SUPABASE_URL}/rest/v1/event_mapping?gutsy_event_id=eq.${id}`, {
+        method: 'PATCH',
+        headers: { ...headers, Prefer: 'return=minimal' },
+        body: JSON.stringify({ swift_actual_start: null }),
+      }),
+    ),
+  ])
 }

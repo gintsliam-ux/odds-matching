@@ -141,10 +141,20 @@ async function captureActualStarts(
   // _before_ the game began (seen with Bangladesh vs Australia ODI). NOW()
   // is always observation-true.
   const toWrite: Array<{ id: string; stamp: string }> = []
+  const toClear: string[] = []
   for (const ev of events) {
+    const existing = byId.get(ev.id) ?? null
+    // Delayed / reopened: SWIFT moved BACK to prematch after we'd stamped a
+    // start, so the stamp was premature (a brief false flip, or the game got
+    // pushed back). Clear it and re-capture when it really starts. A finished
+    // game is `postmatch`, not `prematch`, so this won't wipe real stamps.
+    if (existing && ev.status === 'prematch') {
+      ev.actualStart = null
+      toClear.push(ev.id)
+      continue
+    }
     // Hydrate existing stamp regardless of current status — so postmatch /
     // finished events still show their recorded start on the detail page.
-    const existing = byId.get(ev.id) ?? null
     if (existing) {
       ev.actualStart = existing
       continue
@@ -156,14 +166,14 @@ async function captureActualStarts(
     ev.actualStart = now
     toWrite.push({ id: ev.id, stamp: now })
   }
-  if (toWrite.length === 0) return
+  if (toWrite.length === 0 && toClear.length === 0) return
 
   // PATCH each row individually because Supabase doesn't support a
   // multi-PK conditional update in one call. The set is tiny (≤ a handful per
-  // call) so the latency is negligible. The `is.null` guard makes this
+  // call) so the latency is negligible. The `is.null` guard makes the write
   // idempotent — earlier observations never get overwritten.
-  await Promise.all(
-    toWrite.map(({ id, stamp }) =>
+  await Promise.all([
+    ...toWrite.map(({ id, stamp }) =>
       fetch(
         `${SUPABASE_URL}/rest/v1/event_mapping?gutsy_event_id=eq.${id}&swift_actual_start=is.null`,
         {
@@ -173,5 +183,12 @@ async function captureActualStarts(
         },
       ),
     ),
-  )
+    ...toClear.map((id) =>
+      fetch(`${SUPABASE_URL}/rest/v1/event_mapping?gutsy_event_id=eq.${id}`, {
+        method: 'PATCH',
+        headers: { ...headers, Prefer: 'return=minimal' },
+        body: JSON.stringify({ swift_actual_start: null }),
+      }),
+    ),
+  ])
 }
