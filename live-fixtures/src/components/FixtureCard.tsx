@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import type { Fixture } from '../lib/types'
 import { periodState, sportEmoji } from '../lib/sports'
-import { fmtOdds, melbTime, startsInLabel } from '../lib/format'
+import { fmtOdds, melbTime, overdueMinutes, startsInLabel } from '../lib/format'
 import { Avatar } from './Avatar'
 
 interface Props {
@@ -95,9 +95,19 @@ function StatusBadge({ fixture: f, now }: Props) {
   if (f.status === 'completed') {
     return <span className="text-[11.5px] font-medium text-[color:var(--muted)]">Final</span>
   }
+  const overdue = overdueMinutes(f.startTime, now) >= 3
   return (
-    <span className="text-[11.5px] font-medium text-[color:var(--up)]">
+    <span className="flex items-center gap-1.5 text-[11.5px] font-medium text-[color:var(--up)]">
       {startsInLabel(f.startTime, now)}
+      {overdue && (
+        <span
+          className="inline-flex items-center gap-1 rounded-full bg-[color:var(--live)]/10 px-1.5 py-0.5 text-[9px] font-semibold text-[color:var(--live)]"
+          title="Scheduled start has passed but it hasn't gone live — possibly delayed"
+        >
+          <span className="h-1 w-1 rounded-full bg-[color:var(--live)] pulse-dot" />
+          delay?
+        </span>
+      )}
     </span>
   )
 }
@@ -173,7 +183,12 @@ function Footer({ fixture: f, now }: Props) {
   if (f.status === 'completed') {
     return <span className="font-medium text-[color:var(--muted-2)]">FT</span>
   }
-  return <span className="text-[color:var(--muted-2)]">{startsInLabel(f.startTime, now)}</span>
+  return (
+    <span className="text-[color:var(--muted-2)]">
+      {startsInLabel(f.startTime, now)}
+      {overdueMinutes(f.startTime, now) >= 3 && <span className="ml-1 text-[color:var(--live)]">· delay?</span>}
+    </span>
+  )
 }
 
 function leads(a: number | null, b: number | null): boolean {

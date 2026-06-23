@@ -11,7 +11,7 @@ import { settleFromScore, type ScoreCtx } from '../lib/settleBet'
 import { periodAbbrev, periodNoun, periodState, sportEmoji } from '../lib/sports'
 import { Avatar } from '../components/Avatar'
 import type { Fixture } from '../lib/types'
-import { agoLabel, fmtDateTime, fmtLine, melbDateTime, startsInLabel } from '../lib/format'
+import { agoLabel, fmtDateTime, fmtLine, melbDateTime, overdueMinutes, startsInLabel } from '../lib/format'
 import { fetchEventMappings, fetchCompetitionMappings, type EventMapping, type CompetitionMapping } from '../lib/mappingData'
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
 
@@ -205,12 +205,21 @@ function Detail({
         <span>
           MEL <span className="ml-1 text-gray-200 tabular-nums">{melbDateTime(f.startTime)}</span>
         </span>
-        <span className="ml-auto font-medium text-gray-200">
+        <span className="ml-auto flex items-center gap-2 font-medium text-gray-200">
           {isLive
             ? (periodState(f.sport, f.periods) ?? 'Live')
             : f.status === 'upcoming'
               ? startsInLabel(f.startTime, now)
               : 'Full time'}
+          {f.status === 'upcoming' && overdueMinutes(f.startTime, now) >= 3 && (
+            <span
+              className="inline-flex items-center gap-1 rounded-full bg-[color:var(--live)]/10 px-2 py-0.5 text-[10px] font-semibold text-[color:var(--live)]"
+              title="Scheduled start has passed but it hasn't gone live — possibly delayed"
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--live)] pulse-dot" />
+              possible delay
+            </span>
+          )}
         </span>
       </div>
 
@@ -1446,9 +1455,19 @@ function StatusBadge({ fixture: f, now }: { fixture: Fixture; now: Date }) {
   if (f.status === 'completed') {
     return <span className="text-[12.5px] font-medium text-[color:var(--muted)]">Final</span>
   }
+  const overdue = overdueMinutes(f.startTime, now)
   return (
-    <span className="text-[12.5px] font-medium text-[color:var(--up)]">
+    <span className="flex items-center gap-1.5 text-[12.5px] font-medium text-[color:var(--up)]">
       {startsInLabel(f.startTime, now)}
+      {overdue >= 3 && (
+        <span
+          className="inline-flex items-center gap-1 rounded-full bg-[color:var(--live)]/10 px-2 py-0.5 text-[10px] font-semibold text-[color:var(--live)]"
+          title={`Scheduled start was ${overdue} min ago but it hasn't gone live — possibly delayed`}
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--live)] pulse-dot" />
+          possible delay
+        </span>
+      )}
     </span>
   )
 }

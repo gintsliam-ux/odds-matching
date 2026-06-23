@@ -78,6 +78,12 @@ export function liveClock(f: Fixture, now: Date): string {
 }
 
 /** Countdown to kickoff for upcoming fixtures, e.g. "in 12m" / "in 2h 05m". */
+/** How overdue (minutes) a still-upcoming fixture is past its scheduled start —
+ *  > a few minutes suggests a possible delay (OPTIC hasn't flipped it live). */
+export function overdueMinutes(iso: string, now: Date): number {
+  return Math.floor((now.getTime() - new Date(iso).getTime()) / 60_000)
+}
+
 export function startsInLabel(iso: string, now: Date): string {
   const diffSec = Math.floor((new Date(iso).getTime() - now.getTime()) / 1000)
   if (diffSec <= 0) return 'starting'
