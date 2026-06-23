@@ -402,9 +402,10 @@ async function main(opts = { writeSnapshot: true }) {
     'competition_mapping?select=optic_sport,optic_league,optic_tournament,gutsy_competition_id,source,verified',
   )) {
     const k = `${r.optic_sport}|${r.optic_league}|${r.optic_tournament}`
-    const cur = compStatus.get(k) ?? { hasSticky: false, hasAuto: false }
+    const cur = compStatus.get(k) ?? { hasSticky: false, hasAuto: false, hasManual: false }
     if (r.source === 'manual' || r.verified) cur.hasSticky = true
-    else cur.hasAuto = true
+    if (r.source === 'manual') cur.hasManual = true
+    if (r.source !== 'manual' && !r.verified) cur.hasAuto = true
     compStatus.set(k, cur)
   }
   const existingEvent = new Map(
@@ -651,6 +652,86 @@ async function main(opts = { writeSnapshot: true }) {
     `• Stage 2: ${opticPairedComp}/${eventResults.length} fixtures in mapped competitions, paired ${eventPaired} events (manual kept: ${eventManualKept}).`,
   )
   await upsertAll('event_mapping?on_conflict=optic_fixture_id', eventAutoUpserts)
+
+  // -- Stage 3: confirm competitions from where their events actually land.
+  // High-confidence event matches are ground truth, so:
+  //  • TENNIS — competition names never align (city vs sponsor), so DERIVE the
+  //    competition from the dominant landing-spot of the events and fix+verify
+  //    it (replacing a wrong/missing name-match like "Halle"→Tucuman).
+  //  • Everything else — events are pooled from the mapped competition, so we
+  //    just verify the pairing once enough events confirm it.
+  // Manual rows are never touched.
+  const VERIFY_CONF = 0.9
+  const MIN_VERIFY = 3
+  const stamp = new Date().toISOString()
+  const eventById = new Map(eventResults.map((r) => [r.optic_fixture_id, r]))
+  const evtComp = new Map() // gutsy_event_id → { cid, name, sport }
+  for (const e of gutsy) {
+    const cid = e.competition?.id
+    if (cid) evtComp.set(String(e._id), { cid, name: e.competition?.name ?? null, sport: e.sport?.name ?? null })
+  }
+
+  // Tally, per OPTIC tournament, which SWIFT competition its high-conf events landed in.
+  const tourTally = new Map() // key → Map(cid → { n, name, sport, sport_optic, league, tournament })
+  for (const r of opticRows) {
+    if (!r.sport || !r.league) continue
+    const isTennis = r.sport.toLowerCase() === 'tennis'
+    const tournament = isTennis ? (r.season_type ?? '') : ''
+    if (isTennis && !tournament) continue
+    const er = eventById.get(r.optic_fixture_id)
+    if (!er?.gutsy_event_id || er.confidence < VERIFY_CONF) continue
+    const ec = evtComp.get(String(er.gutsy_event_id))
+    if (!ec) continue
+    const key = `${r.sport}|${r.league}|${tournament}`
+    let m = tourTally.get(key)
+    if (!m) tourTally.set(key, (m = new Map()))
+    const cur = m.get(ec.cid) ?? { n: 0, name: ec.name, sport: ec.sport, league: r.league, tournament }
+    cur.n++
+    m.set(ec.cid, cur)
+  }
+
+  let verified = 0
+  let fixed = 0
+  for (const [key, m] of tourTally) {
+    const [optic_sport, optic_league, optic_tournament] = key.split('|')
+    if (compStatus.get(key)?.hasManual) continue // never override a human mapping
+    // dominant landing competition
+    let domCid = null
+    let dom = null
+    for (const [cid, info] of m) if (!dom || info.n > dom.n) { dom = info; domCid = cid }
+    if (!dom || dom.n < MIN_VERIFY) continue
+    const isTennis = canonSport(optic_sport) === 'tennis'
+
+    if (isTennis) {
+      // Upsert the evidence-derived mapping (fixes wrong/missing), verified.
+      await upsertAll('competition_mapping?on_conflict=optic_sport,optic_league,optic_tournament,gutsy_competition_id', [{
+        optic_sport, optic_league, optic_tournament,
+        gutsy_sport: dom.sport, gutsy_competition: dom.name, gutsy_competition_id: domCid,
+        confidence: 1, source: 'auto', verified: true, verified_at: stamp,
+      }])
+      // Remove any other AUTO rows for this tournament (stale/wrong guesses).
+      const del = new URLSearchParams({
+        optic_sport: `eq.${optic_sport}`, optic_league: `eq.${optic_league}`,
+        optic_tournament: `eq.${optic_tournament}`, source: 'eq.auto', gutsy_competition_id: `neq.${domCid}`,
+      })
+      await fetch(`${REST}/competition_mapping?${del}`, { method: 'DELETE', headers: { ...HDR, Prefer: 'return=minimal' } })
+      fixed++
+    } else {
+      // Non-tennis: events only match when they're in the mapped competition
+      // (Stage 2 pools candidates from it), so ≥3 high-conf hits prove the
+      // pairing is right — verify the tournament's auto mapping(s).
+      const q = new URLSearchParams({
+        optic_sport: `eq.${optic_sport}`, optic_league: `eq.${optic_league}`,
+        optic_tournament: `eq.${optic_tournament}`, source: 'eq.auto',
+      })
+      await fetch(`${REST}/competition_mapping?${q}`, {
+        method: 'PATCH', headers: { ...HDR, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+        body: JSON.stringify({ verified: true, verified_at: stamp }),
+      })
+    }
+    verified++
+  }
+  console.log(`• Stage 3: confirmed ${verified} competitions from event evidence (tennis fixed/derived: ${fixed}).`)
 
   console.log('✓ done.')
 }
