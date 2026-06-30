@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import type { Fixture } from '../lib/types'
-import { periodState, sportEmoji } from '../lib/sports'
+import { leagueLabel, periodState, sportEmoji } from '../lib/sports'
 import { fmtOdds, melbTime, overdueMinutes, startsInLabel } from '../lib/format'
 import { Avatar } from './Avatar'
 
@@ -35,7 +35,9 @@ export const FixtureCard = memo(function FixtureCard({ fixture: f, now, onSelect
           >
             {sportEmoji(f.sport)}
           </span>
-          <span className="truncate text-[12.5px] font-semibold text-gray-100">{f.league}</span>
+          <span className="truncate text-[12.5px] font-semibold text-gray-100">
+            {leagueLabel(f.sport, f.league, f.seasonType)}
+          </span>
         </div>
         <StatusBadge fixture={f} now={now} />
       </div>

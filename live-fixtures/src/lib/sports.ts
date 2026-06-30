@@ -244,6 +244,25 @@ const SPORT_DISPLAY_OVERRIDES: Record<string, string> = {
   tabletennis: 'Table Tennis',
 }
 
+/** Tennis tournament (season_type) condensed to its city + a short qualifier:
+ *  "Halle, Germany" → "Halle"; "Berlin, Germany, Qualifying" → "Berlin (Qual)";
+ *  "S-Hertogenbosch, Netherlands, Doubles" → "S-Hertogenbosch (Doubles)". */
+function tennisTournamentShort(seasonType: string): string {
+  const city = seasonType.split(',')[0].trim()
+  const tags: string[] = []
+  if (/qualif/i.test(seasonType)) tags.push('Qual')
+  if (/doubles/i.test(seasonType)) tags.push('Doubles')
+  return tags.length ? `${city} (${tags.join(', ')})` : city
+}
+
+/** League label for display. Tennis appends the tournament — "ATP" alone is
+ *  uninformative — e.g. "ATP · Halle". Other sports' leagues are already
+ *  specific ("Brazil - Serie A"), so they're returned as-is. */
+export function leagueLabel(sport: string, league: string, seasonType: string | null): string {
+  if (canon(sport) === 'tennis' && seasonType) return `${league} · ${tennisTournamentShort(seasonType)}`
+  return league
+}
+
 export function sportLabel(raw: string): string {
   const k = canon(raw)
   if (SPORT_DISPLAY_OVERRIDES[k]) return SPORT_DISPLAY_OVERRIDES[k]

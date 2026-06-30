@@ -8,7 +8,7 @@ import { fetchFixtureById } from '../lib/dataSource'
 import { fetchSwiftEvent } from '../lib/swiftStatus'
 import { fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
 import { settleFromScore, type ScoreCtx } from '../lib/settleBet'
-import { periodAbbrev, periodNoun, periodState, sportEmoji } from '../lib/sports'
+import { leagueLabel, periodAbbrev, periodNoun, periodState, sportEmoji } from '../lib/sports'
 import { Avatar } from '../components/Avatar'
 import type { Fixture } from '../lib/types'
 import { agoLabel, fmtDateTime, fmtLine, melbDateTime, overdueMinutes, startsInLabel } from '../lib/format'
@@ -187,7 +187,9 @@ function Detail({
           <span className="cursor-help text-base leading-none" title={f.sport} aria-label={f.sport}>
             {sportEmoji(f.sport)}
           </span>
-          <span className="text-[14px] font-semibold text-gray-100">{f.league}</span>
+          <span className="text-[14px] font-semibold text-gray-100">
+            {leagueLabel(f.sport, f.league, f.seasonType)}
+          </span>
         </div>
         <StatusBadge fixture={f} now={now} />
       </div>
