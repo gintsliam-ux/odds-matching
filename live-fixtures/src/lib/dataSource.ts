@@ -2,6 +2,7 @@ import type { Fixture, FixtureStatus, PeriodScore } from './types'
 import { prettyLeague, prettySport, reclassifyRugbySport } from './sports'
 import { espnLogoUrl } from './teamLogos'
 import { cachedLogo, ensureLogoCache } from './logoCache'
+import { countryFlagUrl } from './countryFlags'
 import { melbDayRangeUtc } from './dates'
 import { getSupabase } from './supabase'
 
@@ -169,9 +170,12 @@ export async function fetchFixtureById(id: string): Promise<Fixture | null> {
   return row ? mapRow(row, Date.now()) : null
 }
 
-/** Logo precedence: feed column → ESPN majors → resolved cache → monogram (null). */
+/** Logo precedence: feed column → soccer national-team flag → ESPN majors →
+ *  resolved cache → monogram (null). */
 function resolveLogo(sport: string, league: string, name: string, feedLogo: string | null): string | null {
-  return feedLogo ?? espnLogoUrl(sport, league, name) ?? cachedLogo(sport, name) ?? null
+  // World Cup / international fixtures name teams by country → show its flag.
+  const flag = sport.toLowerCase() === 'soccer' ? countryFlagUrl(name) : null
+  return feedLogo ?? flag ?? espnLogoUrl(sport, league, name) ?? cachedLogo(sport, name) ?? null
 }
 
 // --- column mapping -------------------------------------------------------
