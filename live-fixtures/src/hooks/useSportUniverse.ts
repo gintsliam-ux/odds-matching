@@ -15,6 +15,13 @@ export interface SportUniverse {
   rawSportsAll: Map<string, string[]>
   /** "prettifiedSport|prettifiedLeague" → raw league slug. */
   rawLeague: Map<string, string>
+  /** Non-completed (upcoming + live) fixture count per PARENT sport group key
+   *  (sportGroupKey), computed over the whole table. The sidebar uses this so a
+   *  sport whose next game is outside the board's ±6h window isn't shown as a
+   *  misleading "0" while the sport board is full of upcoming games. */
+  activeBySport: Map<string, number>
+  /** Same, keyed by "groupKey|prettifiedLeague". */
+  activeByLeague: Map<string, number>
 }
 
 let cached: SportUniverse | null = null
@@ -30,13 +37,15 @@ async function load(): Promise<SportUniverse> {
   const rawSport = new Map<string, string>()
   const rawSportsAll = new Map<string, Set<string>>() // sport -> all underlying raw slugs
   const rawLeague = new Map<string, string>()
+  const activeBySport = new Map<string, number>()
+  const activeByLeague = new Map<string, number>()
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await sb
       .from('live_fixtures')
-      .select('sport,league')
+      .select('sport,league,status')
       .range(from, from + PAGE - 1)
     if (error) throw error
-    const rows = (data ?? []) as { sport: string | null; league: string | null }[]
+    const rows = (data ?? []) as { sport: string | null; league: string | null; status: string | null }[]
     for (const r of rows) {
       // Reclassify generic "rugby" rows so they merge into rugby_union /
       // rugby_league based on the competition. Matches what mapRow does for
@@ -73,6 +82,16 @@ async function load(): Promise<SportUniverse> {
         set.add(l)
         if (rl) rawLeague.set(`${s}|${l}`, rl)
       }
+      // "Active" = anything not completed (upcoming + live), counted per parent
+      // group and per league so the sidebar reflects the full slate, not just
+      // the board's ±6h live window.
+      if ((r.status ?? '') !== 'completed') {
+        activeBySport.set(parent, (activeBySport.get(parent) ?? 0) + 1)
+        if (l) {
+          const lk = `${parent}|${l}`
+          activeByLeague.set(lk, (activeByLeague.get(lk) ?? 0) + 1)
+        }
+      }
     }
     if (rows.length < PAGE) break
   }
@@ -81,7 +100,7 @@ async function load(): Promise<SportUniverse> {
   for (const [s, lset] of seen) leaguesBySport.set(s, [...lset].sort())
   const rawSportsAllOut = new Map<string, string[]>()
   for (const [s, raws] of rawSportsAll) rawSportsAllOut.set(s, [...raws])
-  return { sports, leaguesBySport, rawSport, rawSportsAll: rawSportsAllOut, rawLeague }
+  return { sports, leaguesBySport, rawSport, rawSportsAll: rawSportsAllOut, rawLeague, activeBySport, activeByLeague }
 }
 
 const EMPTY: SportUniverse = {
@@ -90,6 +109,8 @@ const EMPTY: SportUniverse = {
   rawSport: new Map(),
   rawSportsAll: new Map(),
   rawLeague: new Map(),
+  activeBySport: new Map(),
+  activeByLeague: new Map(),
 }
 
 export function useSportUniverse(): SportUniverse {

@@ -55,12 +55,15 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
       return m.get(key)!
     }
     for (const s of universe.sports) seed(universe.rawSport.get(s) ?? s)
+    // Live count comes from the fresh ±6h board feed (updates as games flip);
+    // the total comes from the whole-table universe so a sport whose next game
+    // is beyond ±6h isn't shown as a misleading "0".
     for (const f of fixtures) {
       if (!f.rawSport) continue
       const e = seed(f.rawSport)
-      e.total++
       if (f.status === 'live') e.live++
     }
+    for (const [key, e] of m) e.total = Math.max(universe.activeBySport.get(key) ?? 0, e.live)
     return [...m.entries()]
       .map(([key, v]) => ({ key, ...v }))
       .sort(
@@ -127,8 +130,11 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
     const names = new Set<string>([...(allLeaguesByGroup.get(groupKey) ?? []), ...(counts?.keys() ?? [])])
     return [...names]
       .map((league) => {
-        const c = counts?.get(league)
-        return { league, total: c?.total ?? 0, live: c?.live ?? 0 }
+        // Live from the fresh feed; total from the whole-table universe so a
+        // league with games beyond the ±6h window still shows its real count.
+        const live = counts?.get(league)?.live ?? 0
+        const total = Math.max(universe.activeByLeague.get(`${groupKey}|${league}`) ?? 0, live)
+        return { league, total, live }
       })
       .sort((a, b) => b.live - a.live || b.total - a.total || a.league.localeCompare(b.league))
   }
