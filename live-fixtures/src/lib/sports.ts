@@ -96,6 +96,7 @@ const LEAGUE_SPORT_OVERRIDES: Record<string, string> = {
   // OPTIC mis-tags these in the source feed.
   'australia_-_ice_hockey_league': 'icehockey', // fed as soccer
   'iceland_-_1_deild': 'soccer', // fed as unknown (Icelandic 2nd-div football)
+  'spain_-_la_liga': 'soccer', // fed under its own `laliga` sport bucket
 }
 
 /**

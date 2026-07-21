@@ -102,7 +102,7 @@ export default function Layout() {
   }
 
   return (
-    <div className="flex min-h-full flex-col text-gray-200">
+    <div className="flex h-screen flex-col overflow-hidden text-gray-200">
       <AlertToasts toasts={toasts} onDismiss={dismiss} onDismissAll={dismissAll} />
       <Header
         counts={counts}
@@ -117,7 +117,7 @@ export default function Layout() {
       />
       <div className="flex min-h-0 flex-1">
         <Sidebar fixtures={fixtures} day={day} notificationCount={notifications.length} collapsed={!navOpen} />
-        <main className="min-w-0 flex-1">
+        <main className="min-w-0 flex-1 overflow-y-auto">
           <Outlet context={ctx} />
         </main>
       </div>

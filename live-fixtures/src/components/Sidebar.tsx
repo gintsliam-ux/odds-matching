@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { fetchCompetitionMappings } from '../lib/mappingData'
 import { Activity, Bell, ChevronDown, ChevronRight, Clock, GitMerge, LayoutGrid, ListChecks, Pencil, Plus, Radio, Star } from 'lucide-react'
 import type { Fixture } from '../lib/types'
 import { displaySport, sportGroupKey } from '../lib/sports'
@@ -87,38 +86,32 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
     return map
   }, [favourites, fixtures])
 
-  // Which (sport|league) pairs have a real mapping (SwiftBet or mybet) — used to
-  // filter the expandable per-sport league list to "mapped and active" only.
-  const [mappedLeagues, setMappedLeagues] = useState<Set<string>>(new Set())
-  useEffect(() => {
-    let alive = true
-    Promise.all([fetchCompetitionMappings(), fetchCompetitionMappings('mybet')])
-      .then(([sw, mb]) => {
-        if (!alive) return
-        // Key by league name only, not sport|league: auto-mapped rows store the
-        // feed's raw sport ("rugby") while the sidebar shows the reclassified one
-        // ("rugby league"), so a sport-qualified key would never match for the
-        // split rugby buckets. League slugs are region-prefixed and effectively
-        // unique, so the league alone is a safe join key.
-        const s = new Set<string>()
-        for (const c of [...sw, ...mb]) if (c.swift_competition) s.add(c.optic_league)
-        setMappedLeagues(s)
-      })
-      .catch(() => {/* leagues just won't show until this loads */})
-    return () => { alive = false }
-  }, [])
+  // Every KNOWN league per PARENT sport group, from the full universe (not just
+  // the live window) so the tree is complete even when a league's games are
+  // briefly out of window. Buckets roll up: MLB/NPB/KBO under Baseball,
+  // AFL/SANFL/VFL/WAFL under Australian Rules, all Super League/NRL under Rugby
+  // League, etc. `sportGroupKey` canonicalises the prettified sport key.
+  const allLeaguesByGroup = useMemo(() => {
+    const m = new Map<string, Set<string>>()
+    for (const [prettifiedSport, leagues] of universe.leaguesBySport) {
+      const g = sportGroupKey(prettifiedSport)
+      let set = m.get(g)
+      if (!set) m.set(g, (set = new Set()))
+      for (const l of leagues) set.add(l)
+    }
+    return m
+  }, [universe])
 
-  // Active leagues per PARENT sport group (from current fixtures). Keyed by the
-  // group; each league keeps its own fixture sport so the "mapped" lookup (which
-  // is per optic sport|league) still matches.
-  const leaguesBySport = useMemo(() => {
-    const m = new Map<string, Map<string, { total: number; live: number; sport: string }>>()
+  // Live counts per (group, league) from the current window — overlaid on the
+  // known-league list so active leagues show a tally + live dot, inactive dim.
+  const leagueCounts = useMemo(() => {
+    const m = new Map<string, Map<string, { total: number; live: number }>>()
     for (const f of fixtures) {
       if (!f.rawSport) continue
       const groupKey = sportGroupKey(f.rawSport)
       let byLeague = m.get(groupKey)
       if (!byLeague) m.set(groupKey, (byLeague = new Map()))
-      const e = byLeague.get(f.league) ?? { total: 0, live: 0, sport: f.sport }
+      const e = byLeague.get(f.league) ?? { total: 0, live: 0 }
       e.total++
       if (f.status === 'live') e.live++
       byLeague.set(f.league, e)
@@ -126,13 +119,16 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
     return m
   }, [fixtures])
 
-  /** Mapped + active leagues under a sport group, live-first. */
-  const mappedActiveLeagues = (groupKey: string) => {
-    const byLeague = leaguesBySport.get(groupKey)
-    if (!byLeague) return []
-    return [...byLeague.entries()]
-      .filter(([league]) => mappedLeagues.has(league))
-      .map(([league, v]) => ({ league, total: v.total, live: v.live }))
+  /** Every league under a sport group, active-first. Shows the complete
+   *  sport→league tree (all known leagues, not just mapped/active ones). */
+  const leaguesForGroup = (groupKey: string) => {
+    const counts = leagueCounts.get(groupKey)
+    const names = new Set<string>([...(allLeaguesByGroup.get(groupKey) ?? []), ...(counts?.keys() ?? [])])
+    return [...names]
+      .map((league) => {
+        const c = counts?.get(league)
+        return { league, total: c?.total ?? 0, live: c?.live ?? 0 }
+      })
       .sort((a, b) => b.live - a.live || b.total - a.total || a.league.localeCompare(b.league))
   }
 
@@ -142,6 +138,9 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
       n.has(k) ? n.delete(k) : n.add(k)
       return n
     })
+  // Clicking the sport name navigates to its board AND opens its league list
+  // (two actions in one click); the chevron still toggles open/closed.
+  const openExpand = (k: string) => setExpanded((prev) => new Set(prev).add(k))
 
   // Collapsed icon rail — just the navigable icons, tooltips on hover.
   if (collapsed) {
@@ -157,9 +156,11 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
           <span className="text-[14px] font-semibold tracking-tight text-white">Live Events Terminal</span>
         </div>
 
-        {/* Events, Favourites, Sports — no independent scroll; grouped sports
-            keep this short enough to fit. flex-1 pushes Tools to the bottom. */}
-        <div className="flex-1 py-3">
+        {/* Events, Favourites, Sports. flex-1 pushes Tools to the bottom; a
+            contained scroll here (min-h-0) keeps Tools pinned and reachable when
+            many sports are expanded — the nav as a whole never moves with the
+            page body. */}
+        <div className="min-h-0 flex-1 overflow-y-auto py-3 [scrollbar-width:thin]">
           <Group title="Events">
             <Item to="/" end label="All" count={counts.all} icon={<LayoutGrid className="h-3.5 w-3.5" />} />
             <Item to="/live" label="Live" count={counts.live} accent="live" icon={<Radio className="h-3.5 w-3.5" />} />
@@ -208,9 +209,10 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
                 badgeRaw={s.badgeRaw}
                 total={s.total}
                 live={s.live}
-                leagues={mappedActiveLeagues(s.key)}
+                leagues={leaguesForGroup(s.key)}
                 expanded={expanded.has(s.key)}
                 onToggle={() => toggleExpand(s.key)}
+                onOpen={() => openExpand(s.key)}
               />
             ))}
           </Group>
@@ -328,6 +330,7 @@ function SportRow({
   leagues,
   expanded,
   onToggle,
+  onOpen,
 }: {
   sportKey: string
   label: string
@@ -337,6 +340,7 @@ function SportRow({
   leagues: Array<{ league: string; total: number; live: number }>
   expanded: boolean
   onToggle: () => void
+  onOpen: () => void
 }) {
   const dim = total === 0
   const canExpand = leagues.length > 0
@@ -345,6 +349,7 @@ function SportRow({
       <div className="group flex items-center">
         <NavLink
           to={`/sport/${encodeURIComponent(sportKey)}`}
+          onClick={() => canExpand && onOpen()}
           className={({ isActive }) =>
             [
               'flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pl-2.5 pr-1 text-[12.5px] font-medium transition-colors',
@@ -373,17 +378,20 @@ function SportRow({
       </div>
       {expanded && canExpand && (
         <div className="mb-1 ml-[26px] mt-0.5 space-y-0.5 border-l border-[color:var(--line-soft)] pl-2">
-          {leagues.map((l) => (
-            <NavLink
-              key={l.league}
-              to={`/sport/${encodeURIComponent(sportKey)}?league=${encodeURIComponent(l.league)}`}
-              className="flex items-center gap-2 rounded px-2 py-1 text-[11.5px] text-gray-400 hover:bg-white/[0.04] hover:text-gray-200"
-            >
-              <span className="flex-1 truncate">{l.league}</span>
-              {l.live ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--live)] pulse-dot" /> : null}
-              <span className="tabular-nums text-[color:var(--muted-2)]">{l.total}</span>
-            </NavLink>
-          ))}
+          {leagues.map((l) => {
+            const dimLeague = l.total === 0
+            return (
+              <NavLink
+                key={l.league}
+                to={`/sport/${encodeURIComponent(sportKey)}?league=${encodeURIComponent(l.league)}`}
+                className={`flex items-center gap-2 rounded px-2 py-1 text-[11.5px] hover:bg-white/[0.04] hover:text-gray-200 ${dimLeague ? 'text-gray-600' : 'text-gray-400'}`}
+              >
+                <span className="flex-1 truncate">{l.league}</span>
+                {l.live ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--live)] pulse-dot" /> : null}
+                {l.total > 0 && <span className="tabular-nums text-[color:var(--muted-2)]">{l.total}</span>}
+              </NavLink>
+            )
+          })}
         </div>
       )}
     </div>
