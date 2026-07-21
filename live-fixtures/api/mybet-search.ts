@@ -57,7 +57,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (body.kind === 'competitions') {
       const rows = await coll
         .aggregate([
-          { $match: { league: { $ne: null, $regex: re } } },
+          // Only count head-to-head events, so pure outright/futures leagues
+          // don't surface as competition candidates.
+          { $match: { league: { $ne: null, $regex: re }, 'match.teamA': { $ne: null }, 'match.teamB': { $ne: null } } },
           { $group: { _id: '$leagueId', name: { $first: '$league' }, sport: { $first: '$sport' }, n: { $sum: 1 } } },
           { $sort: { n: -1 } },
           { $limit: limit },

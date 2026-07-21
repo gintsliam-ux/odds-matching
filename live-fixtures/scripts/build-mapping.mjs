@@ -792,6 +792,24 @@ function writeSwiftSnapshots(gutsy) {
   const compMap = new Map() // competition_id → {id, sport, name, n}
   const events = []
   for (const e of gutsy) {
+    // Resolve the two competitors first: teams[] positions, else parse the event
+    // name ("Fighter A vs Fighter B" for MMA/UFC where teams[] is empty or a
+    // single {name:'Competitors'} placeholder).
+    let home = (e.teams ?? []).find((t) => t.team_position === 'Home')?.name ?? null
+    let away = (e.teams ?? []).find((t) => t.team_position === 'Away')?.name ?? null
+    if (!home && !away && e.name) {
+      const m = String(e.name).split(/\s+vs\.?\s+/i)
+      if (m.length === 2) {
+        home = m[0].trim()
+        away = m[1].trim()
+      }
+    }
+    // Outrights/futures ("2026 Brownlow Medal Winner", "NFL 2027 Season
+    // Outrights") have no two competitors — never a valid target for an OPTIC
+    // head-to-head fixture. Skip them so the picker and competition counts only
+    // reflect matchable events; competitions that are purely futures drop out.
+    if (!home || !away) continue
+
     const cid = e.competition?.id ?? e.competition?.base_competition_id
     const cname = e.competition?.name
     const sname = e.sport?.name
@@ -801,18 +819,6 @@ function writeSwiftSnapshots(gutsy) {
       compMap.set(cid, cur)
     }
     if (e._id) {
-      let home = (e.teams ?? []).find((t) => t.team_position === 'Home')?.name ?? null
-      let away = (e.teams ?? []).find((t) => t.team_position === 'Away')?.name ?? null
-      // Some sports (MMA/UFC especially) either leave teams[] empty OR put a
-      // single placeholder entry ({name:'Competitors'}) and store the matchup
-      // only in the event name as "Fighter A vs Fighter B".
-      if (!home && !away && e.name) {
-        const m = String(e.name).split(/\s+vs\.?\s+/i)
-        if (m.length === 2) {
-          home = m[0].trim()
-          away = m[1].trim()
-        }
-      }
       events.push({
         id: e._id,
         cid: cid ?? null,

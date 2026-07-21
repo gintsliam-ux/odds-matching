@@ -96,32 +96,46 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     if (body.competitionId) eventFilter['competition.id'] = body.competitionId
 
+    // Over-fetch: outrights/futures are filtered out below, so pull extra to
+    // still fill `limit` with head-to-head matches.
     const docs = await coll
       .find(eventFilter, {
         projection: { _id: 1, name: 1, sport: 1, competition: 1, teams: 1, start_date: 1, status: 1 },
       })
       .sort({ start_date: -1 })
-      .limit(limit)
+      .limit(limit * 3)
       .toArray()
 
-    const events = docs.map((d) => {
-      const teams = (d.teams as Array<{ name?: string; team_position?: string }> | undefined) ?? []
-      const home = teams.find((t) => t.team_position === 'Home')?.name ?? null
-      const away = teams.find((t) => t.team_position === 'Away')?.name ?? null
-      const competition = d.competition as { id?: string; name?: string } | undefined
-      const sport = d.sport as { name?: string } | undefined
-      return {
-        id: String(d._id),
-        cid: competition?.id ?? null,
-        sport: sport?.name ?? null,
-        competition: competition?.name ?? null,
-        name: (d.name as string | null) ?? null,
-        home,
-        away,
-        start: (d.start_date as string | null) ?? null,
-        status: (d.status as string | null) ?? null,
-      }
-    })
+    const events = docs
+      .map((d) => {
+        const teams = (d.teams as Array<{ name?: string; team_position?: string }> | undefined) ?? []
+        let home = teams.find((t) => t.team_position === 'Home')?.name ?? null
+        let away = teams.find((t) => t.team_position === 'Away')?.name ?? null
+        // MMA/UFC store the matchup only in the name when teams[] is empty.
+        if (!home && !away && d.name) {
+          const parts = String(d.name).split(/\s+vs\.?\s+/i)
+          if (parts.length === 2) {
+            home = parts[0].trim()
+            away = parts[1].trim()
+          }
+        }
+        const competition = d.competition as { id?: string; name?: string } | undefined
+        const sport = d.sport as { name?: string } | undefined
+        return {
+          id: String(d._id),
+          cid: competition?.id ?? null,
+          sport: sport?.name ?? null,
+          competition: competition?.name ?? null,
+          name: (d.name as string | null) ?? null,
+          home,
+          away,
+          start: (d.start_date as string | null) ?? null,
+          status: (d.status as string | null) ?? null,
+        }
+      })
+      // Drop outrights/futures — no two competitors, never a head-to-head target.
+      .filter((e) => e.home && e.away)
+      .slice(0, limit)
     res.status(200).json({ events })
   } catch (e) {
     res.status(500).json({ error: String((e as { message?: unknown })?.message ?? e) })
