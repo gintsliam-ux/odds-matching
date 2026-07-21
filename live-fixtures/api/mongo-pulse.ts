@@ -57,12 +57,18 @@ export async function readMongoPulse(): Promise<MongoPulse> {
   const [agg] = await coll
     .aggregate<{
       byStatus: Array<{ _id: string | null; n: number }>
+      liveActive: Array<{ n: number }>
       newest: Array<{ scraped_at: string | Date | null }>
       bySport: Array<{ _id: string | null; total: number; live: number }>
     }>([
       {
         $facet: {
           byStatus: [{ $group: { _id: '$status', n: { $sum: 1 } } }],
+          // Genuinely-live = status inprogress AND not yet finished. The scraper
+          // marks finished:true on ended games but is slow to flip status off
+          // "inprogress", so counting status alone over-reports live by thousands
+          // of stale games. `finished` is the authoritative "is it over" flag.
+          liveActive: [{ $match: { status: 'inprogress', finished: { $ne: true } } }, { $count: 'n' }],
           newest: [{ $sort: { scraped_at: -1 } }, { $limit: 1 }, { $project: { scraped_at: 1 } }],
           bySport: [
             {
@@ -122,7 +128,7 @@ export async function readMongoPulse(): Promise<MongoPulse> {
     serverNow,
     newestScrapedAt,
     ageSec,
-    live: byStatus.get('inprogress') ?? 0,
+    live: agg?.liveActive?.[0]?.n ?? 0,
     prematch: byStatus.get('prematch') ?? 0,
     postmatch: byStatus.get('postmatch') ?? 0,
     total,
