@@ -98,11 +98,14 @@ export async function readMongoPulse(): Promise<MongoPulse> {
     const mcoll = client.db(MONGO_DB).collection(MYBET_COLL)
     const nowDate = new Date(serverNow)
     const [newestDoc, mtotal, mopen] = await Promise.all([
-      mcoll.find({}, { projection: { feedLastUpdated: 1, lastSeenAt: 1 } }).sort({ feedLastUpdated: -1 }).limit(1).toArray(),
+      // `lastSeenAt` is the scraper heartbeat (bumped every time it re-reads an
+      // event); `feedLastUpdated` only moves when the odds actually change, so it
+      // reads far staler during quiet periods and misrepresents feed health.
+      mcoll.find({}, { projection: { lastSeenAt: 1, feedLastUpdated: 1 } }).sort({ lastSeenAt: -1 }).limit(1).toArray(),
       mcoll.estimatedDocumentCount(),
       mcoll.countDocuments({ suspendAt: { $gt: nowDate } }),
     ])
-    const rawM = newestDoc[0]?.feedLastUpdated ?? newestDoc[0]?.lastSeenAt ?? null
+    const rawM = newestDoc[0]?.lastSeenAt ?? newestDoc[0]?.feedLastUpdated ?? null
     const newestAt = rawM ? new Date(rawM as string).toISOString() : null
     mybet = {
       newestAt,
