@@ -5,7 +5,7 @@ import { getSwiftCatalog, type SwiftEvent } from '../lib/swiftCatalog'
 import { fetchSwiftStatuses } from '../lib/swiftStatus'
 import { getMybetCatalog, type MybetEvent } from '../lib/mybetCatalog'
 import { fetchMybetStatuses } from '../lib/mybetStatus'
-import { fetchSwiftBets } from '../lib/swiftBets'
+import { fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
 import { fetchMybetBets } from '../lib/mybetBets'
 import type { Fixture } from '../lib/types'
 
@@ -15,6 +15,23 @@ export type NotificationKind =
   | 'swift_late_bet'
   | 'mybet_late_bet'
   | 'optic_overdue_prematch'
+
+/** One bet that landed after OPTIC went live, normalised across both books for
+ *  display on the notifications page. */
+export interface LateBet {
+  brand: 'swift' | 'mybet'
+  stake: number | null
+  odds: number | null
+  /** Real UTC placement time (both books store Melbourne wall-clock upstream —
+   *  this is already corrected). */
+  placedUtc: string | null
+  /** What was backed — "market · outcome" (SwiftBet) or the selections string
+   *  (mybet). */
+  selection: string | null
+  betType: string | null
+  legCount: number
+  isBonus: boolean
+}
 
 export interface Notification {
   id: string
@@ -40,10 +57,28 @@ export interface Notification {
   mybetEventId?: string | null
   mybetEventName?: string | null
   mybetSuspendAt?: string | null
-  /** *_late_bet alerts: how many bets landed after OPTIC went live, and their
-   *  total stake. */
+  /** *_late_bet alerts: how many bets landed after OPTIC went live, their
+   *  total stake, and each individual bet for display. */
   lateBetCount?: number
   lateBetStake?: number
+  lateBets?: LateBet[]
+}
+
+/** Per-fixture late-bet aggregate: count + total stake + the individual bets. */
+type LateAgg = {
+  swift?: { count: number; stake: number; bets: LateBet[] }
+  mybet?: { count: number; stake: number; bets: LateBet[] }
+}
+
+/** "market · outcome" for a SwiftBet leg; joins the picks for an SGM. */
+function swiftSelection(b: SwiftBetRow): string | null {
+  const ml = b.matched_leg
+  if (!ml) return b.bet_type ?? null
+  if (ml.selections && ml.selections.length > 1) {
+    const picks = ml.selections.map((s) => s.outcome).filter(Boolean)
+    if (picks.length) return picks.join(' + ')
+  }
+  return [ml.market, ml.outcome].filter(Boolean).join(' · ') || ml.outcome || null
 }
 
 const OVERDUE_MIN = 15
@@ -80,7 +115,7 @@ export function useNotifications(fixtures: Fixture[]): {
   const [mybetSnapshot, setMybetSnapshot] = useState<Map<string, MybetEvent>>(new Map())
   const [mybetLive, setMybetLive] = useState<Map<string, { open: boolean; suspendAt: string | null }>>(new Map())
   // Late bets: fixtures where a bet landed AFTER OPTIC went live, per brand.
-  const [lateBets, setLateBets] = useState<Map<string, { swift?: { count: number; stake: number }; mybet?: { count: number; stake: number } }>>(new Map())
+  const [lateBets, setLateBets] = useState<Map<string, LateAgg>>(new Map())
 
   // Mapping + SWIFT/mybet snapshots — refresh once a minute.
   useEffect(() => {
@@ -250,18 +285,35 @@ export function useNotifications(fixtures: Fixture[]): {
       if (lateBetsRef.current) return
       lateBetsRef.current = true
       try {
-        const next = new Map<string, { swift?: { count: number; stake: number }; mybet?: { count: number; stake: number } }>()
+        const next = new Map<string, LateAgg>()
         for (const f of liveMapped) {
           // OPTIC's live moment: its recorded actual_start, else scheduled.
           const liveAt = f.actualStart ?? f.scheduledStart ?? null
           const date = (f.scheduledStart ?? f.startTime ?? '').slice(0, 10)
-          const entry: { swift?: { count: number; stake: number }; mybet?: { count: number; stake: number } } = {}
+          const entry: LateAgg = {}
           const sid = eventMap.get(f.id)
           if (sid && date) {
             try {
               const bets = await fetchSwiftBets({ date, home: f.homeName, away: f.awayName, swiftEventId: sid, swiftActualStart: liveAt, scheduledStart: f.scheduledStart })
               const late = bets.filter((b) => b.placed_after_start)
-              if (late.length) entry.swift = { count: late.length, stake: late.reduce((s, b) => s + (b.bet_amount ?? 0), 0) }
+              if (late.length) {
+                entry.swift = {
+                  count: late.length,
+                  stake: late.reduce((s, b) => s + (b.bet_amount ?? 0), 0),
+                  bets: late
+                    .map((b): LateBet => ({
+                      brand: 'swift',
+                      stake: b.bet_amount,
+                      odds: b.matched_leg?.odds ?? b.odd,
+                      placedUtc: b.placed_at_utc,
+                      selection: swiftSelection(b),
+                      betType: b.type,
+                      legCount: b.leg_count,
+                      isBonus: b.is_bonus,
+                    }))
+                    .sort((a, z) => (Date.parse(z.placedUtc ?? '') || 0) - (Date.parse(a.placedUtc ?? '') || 0)),
+                }
+              }
             } catch {/* skip this fixture's swift bets */}
           }
           const mid = mybetMap.get(f.id)
@@ -270,7 +322,24 @@ export function useNotifications(fixtures: Fixture[]): {
               const suspendAt = mybetSnapshot.get(mid)?.suspendAt ?? mybetLive.get(mid)?.suspendAt ?? null
               const mbets = await fetchMybetBets({ eventId: mid, suspendAt, home: f.homeName, away: f.awayName, liveAt })
               const late = mbets.filter((b) => b.placed_after_live)
-              if (late.length) entry.mybet = { count: late.length, stake: late.reduce((s, b) => s + (b.amount_bet ?? 0), 0) }
+              if (late.length) {
+                entry.mybet = {
+                  count: late.length,
+                  stake: late.reduce((s, b) => s + (b.amount_bet ?? 0), 0),
+                  bets: late
+                    .map((b): LateBet => ({
+                      brand: 'mybet',
+                      stake: b.amount_bet,
+                      odds: b.price,
+                      placedUtc: b.transaction_date,
+                      selection: b.selections,
+                      betType: b.bet_type,
+                      legCount: b.leg_count,
+                      isBonus: b.is_bonus,
+                    }))
+                    .sort((a, z) => (Date.parse(z.placedUtc ?? '') || 0) - (Date.parse(a.placedUtc ?? '') || 0)),
+                }
+              }
             } catch {/* skip this fixture's mybet bets */}
           }
           if (entry.swift || entry.mybet) next.set(f.id, entry)
@@ -355,7 +424,7 @@ export function useNotifications(fixtures: Fixture[]): {
       // Late bets: a bet landed after OPTIC went live. One alert per brand.
       const late = lateBets.get(f.id)
       if (late?.swift) {
-        out.push({ id: `swiftlate-${f.id}`, kind: 'swift_late_bet', ...base, lateBetCount: late.swift.count, lateBetStake: late.swift.stake })
+        out.push({ id: `swiftlate-${f.id}`, kind: 'swift_late_bet', ...base, lateBetCount: late.swift.count, lateBetStake: late.swift.stake, lateBets: late.swift.bets })
       }
       if (late?.mybet) {
         out.push({
@@ -366,6 +435,7 @@ export function useNotifications(fixtures: Fixture[]): {
           mybetEventName: mybetSnapshot.get(mid ?? '')?.name ?? null,
           lateBetCount: late.mybet.count,
           lateBetStake: late.mybet.stake,
+          lateBets: late.mybet.bets,
         })
       }
 
