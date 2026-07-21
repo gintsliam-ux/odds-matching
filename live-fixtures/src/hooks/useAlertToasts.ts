@@ -64,7 +64,13 @@ export function useAlertToasts(notifications: Notification[]): {
   const audioCtxRef = useRef<AudioContext | null>(null)
 
   useEffect(() => {
-    const open = notifications.filter((n) => n.kind === 'swift_still_open')
+    const open = notifications.filter(
+      (n) =>
+        n.kind === 'swift_still_open' ||
+        n.kind === 'mybet_still_open' ||
+        n.kind === 'swift_late_bet' ||
+        n.kind === 'mybet_late_bet',
+    )
     const openIds = new Set(open.map((n) => n.id))
     setToasts((prev) => {
       const seen = new Set(prev.map((t) => t.id))

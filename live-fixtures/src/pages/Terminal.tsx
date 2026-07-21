@@ -184,15 +184,23 @@ export default function Terminal() {
     })
   }, [universe, sportCounts])
 
-  // Reset the league when the selected sport changes (a stale value would yield zero matches).
+  // A `?league=` param (e.g. from the sidebar's expandable sports) pre-selects
+  // the league filter. Applied on navigation; the dropdown takes over after.
+  const leagueParam = params.get('league')
+  useEffect(() => {
+    if (leagueParam) setLeague(leagueParam)
+  }, [leagueParam])
+
+  // Reset the league when the selected sport changes (a stale value would yield
+  // zero matches) — unless a league param came in with the same navigation.
   const sportKey = effectiveSport ?? '__all__'
   const lastSportKey = useRef(sportKey)
   useEffect(() => {
     if (lastSportKey.current !== sportKey) {
       lastSportKey.current = sportKey
-      setLeague('all')
+      setLeague(leagueParam ?? 'all')
     }
-  }, [sportKey])
+  }, [sportKey, leagueParam])
 
   // Counts per league in scope (for the LEAGUE dropdown badges).
   const leagueCounts = useMemo(() => {

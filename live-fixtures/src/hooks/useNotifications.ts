@@ -3,10 +3,17 @@ import { fetchOverdueUpcomingFixtures } from '../lib/dataSource'
 import { fetchEventMappings } from '../lib/mappingData'
 import { getSwiftCatalog, type SwiftEvent } from '../lib/swiftCatalog'
 import { fetchSwiftStatuses } from '../lib/swiftStatus'
+import { getMybetCatalog, type MybetEvent } from '../lib/mybetCatalog'
+import { fetchMybetStatuses } from '../lib/mybetStatus'
+import { fetchSwiftBets } from '../lib/swiftBets'
+import { fetchMybetBets } from '../lib/mybetBets'
 import type { Fixture } from '../lib/types'
 
 export type NotificationKind =
   | 'swift_still_open'
+  | 'mybet_still_open'
+  | 'swift_late_bet'
+  | 'mybet_late_bet'
   | 'optic_overdue_prematch'
 
 export interface Notification {
@@ -28,6 +35,15 @@ export interface Notification {
   /** Current SWIFT status when known. */
   swiftStatus: string | null
   swiftEventName: string | null
+  /** mybet: set on mybet_still_open alerts. `mybetSuspendAt` is the market
+   *  close time still sitting in the future while the game is underway. */
+  mybetEventId?: string | null
+  mybetEventName?: string | null
+  mybetSuspendAt?: string | null
+  /** *_late_bet alerts: how many bets landed after OPTIC went live, and their
+   *  total stake. */
+  lateBetCount?: number
+  lateBetStake?: number
 }
 
 const OVERDUE_MIN = 15
@@ -58,18 +74,34 @@ export function useNotifications(fixtures: Fixture[]): {
   const [liveStatus, setLiveStatus] = useState<Map<string, string | null>>(new Map())
   const [overdueExtras, setOverdueExtras] = useState<Fixture[]>([])
   const [loading, setLoading] = useState(true)
+  // mybet parallel state: optic→mybet id map, snapshot (suspendAt fallback),
+  // and a live open/suspend map polled for started fixtures.
+  const [mybetMap, setMybetMap] = useState<Map<string, string>>(new Map())
+  const [mybetSnapshot, setMybetSnapshot] = useState<Map<string, MybetEvent>>(new Map())
+  const [mybetLive, setMybetLive] = useState<Map<string, { open: boolean; suspendAt: string | null }>>(new Map())
+  // Late bets: fixtures where a bet landed AFTER OPTIC went live, per brand.
+  const [lateBets, setLateBets] = useState<Map<string, { swift?: { count: number; stake: number }; mybet?: { count: number; stake: number } }>>(new Map())
 
-  // Mapping + SWIFT snapshot — refresh once a minute.
+  // Mapping + SWIFT/mybet snapshots — refresh once a minute.
   useEffect(() => {
     let alive = true
     const load = () => {
-      Promise.all([fetchEventMappings(), getSwiftCatalog()])
-        .then(([events, cat]) => {
+      Promise.all([
+        fetchEventMappings(),
+        getSwiftCatalog(),
+        fetchEventMappings('mybet'),
+        getMybetCatalog().catch(() => null),
+      ])
+        .then(([events, cat, mybetEvents, mybetCat]) => {
           if (!alive) return
           const m = new Map<string, string>()
           for (const e of events) if (e.swift_event_id) m.set(e.optic_fixture_id, e.swift_event_id)
           setEventMap(m)
           setSwiftSnapshot(cat.eventById)
+          const mm = new Map<string, string>()
+          for (const e of mybetEvents) if (e.swift_event_id) mm.set(e.optic_fixture_id, e.swift_event_id)
+          setMybetMap(mm)
+          if (mybetCat) setMybetSnapshot(mybetCat.eventById)
         })
         .catch(() => {/* keep previous */})
         .finally(() => alive && setLoading(false))
@@ -155,6 +187,105 @@ export function useNotifications(fixtures: Fixture[]): {
   // as the SWIFT row flickering off and back on after page load.
   const pollIdsSet = useMemo(() => new Set(pollIds), [pollKey])
 
+  // mybet: same idea — poll live suspend/open for started fixtures so an
+  // extended market is caught, not just the (possibly stale) snapshot suspendAt.
+  const mybetPollIds = useMemo(() => {
+    const lateCutoff = Date.now()
+    const out: string[] = []
+    for (const f of allFixtures) {
+      const mid = mybetMap.get(f.id)
+      if (!mid) continue
+      const startMs = f.scheduledStart ? Date.parse(f.scheduledStart) : NaN
+      if (f.status === 'live' || (Number.isFinite(startMs) && startMs <= lateCutoff)) out.push(mid)
+    }
+    return out.sort()
+  }, [allFixtures, mybetMap])
+
+  const mybetPollKey = mybetPollIds.join(',')
+  const mybetPollingRef = useRef(false)
+  useEffect(() => {
+    if (mybetPollIds.length === 0) return
+    const tick = async () => {
+      if (mybetPollingRef.current) return
+      mybetPollingRef.current = true
+      try {
+        const rows = await fetchMybetStatuses(mybetPollIds)
+        setMybetLive((prev) => {
+          const next = new Map(prev)
+          for (const r of rows) next.set(r.id, { open: r.open, suspendAt: r.suspendAt })
+          return next
+        })
+      } catch {/* keep previous */}
+      finally { mybetPollingRef.current = false }
+    }
+    tick()
+    const id = setInterval(tick, POLL_MS)
+    return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mybetPollKey])
+
+  // Late-bet detection: for fixtures where OPTIC is LIVE and a book is mapped,
+  // fetch that game's bets and flag any placed after OPTIC went live. Slower
+  // cadence than the status poll (bets are a heavier Mongo read) and capped, to
+  // stay gentle on the shared DB.
+  const liveMapped = useMemo(() => {
+    const out: Fixture[] = []
+    for (const f of allFixtures) {
+      if (f.status !== 'live') continue
+      if (!eventMap.has(f.id) && !mybetMap.has(f.id)) continue
+      out.push(f)
+      if (out.length >= 20) break
+    }
+    return out
+  }, [allFixtures, eventMap, mybetMap])
+  const liveMappedKey = liveMapped.map((f) => f.id).sort().join(',')
+  const lateBetsRef = useRef(false)
+  useEffect(() => {
+    if (liveMapped.length === 0) {
+      setLateBets(new Map())
+      return
+    }
+    let alive = true
+    const tick = async () => {
+      if (lateBetsRef.current) return
+      lateBetsRef.current = true
+      try {
+        const next = new Map<string, { swift?: { count: number; stake: number }; mybet?: { count: number; stake: number } }>()
+        for (const f of liveMapped) {
+          // OPTIC's live moment: its recorded actual_start, else scheduled.
+          const liveAt = f.actualStart ?? f.scheduledStart ?? null
+          const date = (f.scheduledStart ?? f.startTime ?? '').slice(0, 10)
+          const entry: { swift?: { count: number; stake: number }; mybet?: { count: number; stake: number } } = {}
+          const sid = eventMap.get(f.id)
+          if (sid && date) {
+            try {
+              const bets = await fetchSwiftBets({ date, home: f.homeName, away: f.awayName, swiftEventId: sid, swiftActualStart: liveAt, scheduledStart: f.scheduledStart })
+              const late = bets.filter((b) => b.placed_after_start)
+              if (late.length) entry.swift = { count: late.length, stake: late.reduce((s, b) => s + (b.bet_amount ?? 0), 0) }
+            } catch {/* skip this fixture's swift bets */}
+          }
+          const mid = mybetMap.get(f.id)
+          if (mid) {
+            try {
+              const suspendAt = mybetSnapshot.get(mid)?.suspendAt ?? mybetLive.get(mid)?.suspendAt ?? null
+              const mbets = await fetchMybetBets({ eventId: mid, suspendAt, home: f.homeName, away: f.awayName, liveAt })
+              const late = mbets.filter((b) => b.placed_after_live)
+              if (late.length) entry.mybet = { count: late.length, stake: late.reduce((s, b) => s + (b.amount_bet ?? 0), 0) }
+            } catch {/* skip this fixture's mybet bets */}
+          }
+          if (entry.swift || entry.mybet) next.set(f.id, entry)
+        }
+        if (alive) setLateBets(next)
+      } finally {
+        lateBetsRef.current = false
+      }
+    }
+    tick()
+    const id = setInterval(tick, 45_000)
+    return () => { alive = false; clearInterval(id) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveMappedKey])
+
   const notifications = useMemo<Notification[]>(() => {
     const out: Notification[] = []
     const nowMs = Date.now()
@@ -185,18 +316,57 @@ export function useNotifications(fixtures: Fixture[]): {
         swiftEventName: swiftEvent?.name ?? null,
       }
 
-      if (sid && swiftStatus === 'prematch') {
-        const startMs = f.scheduledStart ? Date.parse(f.scheduledStart) : NaN
-        const actualMs = f.actualStart ? Date.parse(f.actualStart) : NaN
-        const opticStarted = f.status === 'live' || (Number.isFinite(startMs) && startMs <= nowMs)
-        // 2-min grace: OPTIC's actual_start (preferred) or scheduled start must
-        // be at least that far in the past before we alert — SwiftBet's flip
-        // lags by up to ~2 min and those are fine.
-        const startedMs = Number.isFinite(actualMs) ? actualMs : startMs
-        const pastGrace = Number.isFinite(startedMs) && startedMs <= nowMs - SWIFT_OPEN_GRACE_MS
-        if (opticStarted && pastGrace) {
-          out.push({ id: `swiftopen-${f.id}`, kind: 'swift_still_open', ...base })
+      // The trigger is OPTIC turning LIVE (the truth signal) — not merely the
+      // scheduled kickoff passing, which can lag OPTIC or fire on a delayed
+      // game that never actually started. A 2-min grace on the recorded start
+      // absorbs the normal ~2-min book lag so we don't alert on the transition.
+      const opticLive = f.status === 'live'
+      const startMs = f.scheduledStart ? Date.parse(f.scheduledStart) : NaN
+      const actualMs = f.actualStart ? Date.parse(f.actualStart) : NaN
+      const startedMs = Number.isFinite(actualMs) ? actualMs : startMs
+      const pastGrace = !Number.isFinite(startedMs) || startedMs <= nowMs - SWIFT_OPEN_GRACE_MS
+
+      // SwiftBet still open = OPTIC live while the mapped SWIFT event is still prematch.
+      if (sid && swiftStatus === 'prematch' && opticLive && pastGrace) {
+        out.push({ id: `swiftopen-${f.id}`, kind: 'swift_still_open', ...base })
+      }
+
+      // mybet still open = OPTIC live while the mybet market hasn't hit its close
+      // (suspend) time. Prefer the live poll's open flag; fall back to the
+      // snapshot suspendAt before the first tick lands.
+      const mid = mybetMap.get(f.id) ?? null
+      if (mid) {
+        const live = mybetLive.get(mid)
+        const snap = mybetSnapshot.get(mid)
+        const suspendAt = live?.suspendAt ?? snap?.suspendAt ?? null
+        const mybetOpen = live ? live.open : suspendAt ? Date.parse(suspendAt) > nowMs : false
+        if (mybetOpen && opticLive && pastGrace) {
+          out.push({
+            id: `mybetopen-${f.id}`,
+            kind: 'mybet_still_open',
+            ...base,
+            mybetEventId: mid,
+            mybetEventName: snap?.name ?? null,
+            mybetSuspendAt: suspendAt,
+          })
         }
+      }
+
+      // Late bets: a bet landed after OPTIC went live. One alert per brand.
+      const late = lateBets.get(f.id)
+      if (late?.swift) {
+        out.push({ id: `swiftlate-${f.id}`, kind: 'swift_late_bet', ...base, lateBetCount: late.swift.count, lateBetStake: late.swift.stake })
+      }
+      if (late?.mybet) {
+        out.push({
+          id: `mybetlate-${f.id}`,
+          kind: 'mybet_late_bet',
+          ...base,
+          mybetEventId: mid,
+          mybetEventName: mybetSnapshot.get(mid ?? '')?.name ?? null,
+          lateBetCount: late.mybet.count,
+          lateBetStake: late.mybet.stake,
+        })
       }
 
       if (f.status === 'upcoming') {
@@ -207,7 +377,7 @@ export function useNotifications(fixtures: Fixture[]): {
       }
     }
     return out
-  }, [allFixtures, eventMap, swiftSnapshot, liveStatus, pollIdsSet])
+  }, [allFixtures, eventMap, swiftSnapshot, liveStatus, pollIdsSet, mybetMap, mybetSnapshot, mybetLive, lateBets])
 
   return { notifications, loading }
 }

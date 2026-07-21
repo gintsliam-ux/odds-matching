@@ -6,6 +6,11 @@
 
 import type { SwiftEvent } from './swiftCatalog'
 
+/** Public swiftbet.com.au page for a sports event id. */
+export function swiftEventUrl(id: string): string {
+  return `https://swiftbet.com.au/sports/event/${id}`
+}
+
 /**
  * POST a batch of swift event ids; the server returns whatever it could find
  * in gutsy.events. Missing ids are simply absent from the result.

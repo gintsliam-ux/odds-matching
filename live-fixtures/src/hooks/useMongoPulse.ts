@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 
+export interface MybetPulse {
+  newestAt: string | null
+  ageSec: number | null
+  total: number
+  open: number
+}
+
 export interface MongoPulse {
   ok: boolean
   serverNow: string
@@ -10,6 +17,7 @@ export interface MongoPulse {
   postmatch: number
   total: number
   sports: Array<{ name: string; total: number; live: number }>
+  mybet?: MybetPulse | null
 }
 
 export type MongoFeedState = 'connecting' | 'fresh' | 'stale' | 'down'

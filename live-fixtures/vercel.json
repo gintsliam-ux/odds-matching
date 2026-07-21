@@ -3,6 +3,7 @@
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
   "crons": [
-    { "path": "/api/cron/build-mapping", "schedule": "0 4 * * *" }
+    { "path": "/api/cron/build-mapping", "schedule": "0 4 * * *" },
+    { "path": "/api/cron/resolve-logos", "schedule": "0 5 * * *" }
   ]
 }

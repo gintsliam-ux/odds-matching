@@ -1,10 +1,19 @@
-// Client-side reader for the OPTIC ↔ SWIFT mappings produced by
+// Client-side reader for the OPTIC ↔ bookmaker mappings produced by
 // `npm run build-mapping`. Tables are populated server-side; UI is read-only.
+//
+// The `provider` column ('swift' | 'mybet') lets one OPTIC fixture map to more
+// than one book. Every function defaults to 'swift' so existing call sites are
+// unchanged; the mybet UI passes 'mybet'. The interface fields keep their
+// `swift_*` names for continuity but hold whichever book `provider` selects
+// (e.g. for provider='mybet', `swift_event_id` holds the mybet event id).
 
 import { getSupabase } from './supabase'
 import { prettyLeague, prettySport } from './sports'
 
+export type Provider = 'swift' | 'mybet'
+
 export interface CompetitionMapping {
+  provider: Provider
   optic_sport: string
   optic_league: string
   /** Tennis only: the season_type (tournament name). '' for other sports. */
@@ -20,11 +29,13 @@ export interface CompetitionMapping {
 }
 
 export interface EventMapping {
+  provider: Provider
   optic_fixture_id: string
   swift_event_id: string | null
   confidence: number
   source: 'auto' | 'manual'
-  /** First-observed SWIFT inprogress moment — null until captured. */
+  /** First-observed SWIFT inprogress moment — null until captured. SwiftBet
+   *  only; mybet closes on the event's own `suspendAt` so this stays null. */
   swift_actual_start: string | null
 }
 
@@ -43,7 +54,7 @@ type CompRow = {
   verified_at: string | null
 }
 
-export async function fetchCompetitionMappings(): Promise<CompetitionMapping[]> {
+export async function fetchCompetitionMappings(provider: Provider = 'swift'): Promise<CompetitionMapping[]> {
   const out: CompetitionMapping[] = []
   const PAGE = 1000
   for (let from = 0; ; from += PAGE) {
@@ -52,6 +63,7 @@ export async function fetchCompetitionMappings(): Promise<CompetitionMapping[]> 
       .select(
         'optic_sport,optic_league,optic_tournament,gutsy_sport,gutsy_competition,gutsy_competition_id,confidence,source,verified,verified_at',
       )
+      .eq('provider', provider)
       .range(from, from + PAGE - 1)
     if (error) throw error
     const rows = (data ?? []) as CompRow[]
@@ -66,6 +78,7 @@ export async function fetchCompetitionMappings(): Promise<CompetitionMapping[]> 
       // Translate '' (the unmapped sentinel) → null so consumer checks stay simple.
       const cid = r.gutsy_competition_id || null
       out.push({
+        provider,
         optic_sport: prettySport(r.optic_sport),
         optic_league: prettyLeague(r.optic_league),
         optic_tournament: r.optic_tournament ?? '',
@@ -101,11 +114,14 @@ export async function setCompetitionMappingsManual(args: {
   opticLeagueRaw: string
   opticTournamentRaw: string
   picks: SwiftPick[]
+  provider?: Provider
 }): Promise<void> {
+  const provider = args.provider ?? 'swift'
   const sb = getSupabase()
   const { data: existing, error: readErr } = await sb
     .from('competition_mapping')
     .select('gutsy_competition_id')
+    .eq('provider', provider)
     .eq('optic_sport', args.opticSportRaw)
     .eq('optic_league', args.opticLeagueRaw)
     .eq('optic_tournament', args.opticTournamentRaw)
@@ -122,6 +138,7 @@ export async function setCompetitionMappingsManual(args: {
     const { error } = await sb
       .from('competition_mapping')
       .delete()
+      .eq('provider', provider)
       .eq('optic_sport', args.opticSportRaw)
       .eq('optic_league', args.opticLeagueRaw)
       .eq('optic_tournament', args.opticTournamentRaw)
@@ -132,6 +149,7 @@ export async function setCompetitionMappingsManual(args: {
   if (toInsert.length > 0) {
     const { error } = await sb.from('competition_mapping').upsert(
       toInsert.map((p) => ({
+        provider,
         optic_sport: args.opticSportRaw,
         optic_league: args.opticLeagueRaw,
         optic_tournament: args.opticTournamentRaw,
@@ -141,7 +159,7 @@ export async function setCompetitionMappingsManual(args: {
         confidence: 1,
         source: 'manual',
       })),
-      { onConflict: 'optic_sport,optic_league,optic_tournament,gutsy_competition_id' },
+      { onConflict: 'provider,optic_sport,optic_league,optic_tournament,gutsy_competition_id' },
     )
     if (error) throw error
   }
@@ -153,15 +171,19 @@ export async function markUnmapped(args: {
   opticSportRaw: string
   opticLeagueRaw: string
   opticTournamentRaw: string
+  provider?: Provider
 }): Promise<void> {
+  const provider = args.provider ?? 'swift'
   const sb = getSupabase()
   await sb
     .from('competition_mapping')
     .delete()
+    .eq('provider', provider)
     .eq('optic_sport', args.opticSportRaw)
     .eq('optic_league', args.opticLeagueRaw)
     .eq('optic_tournament', args.opticTournamentRaw)
   const { error } = await sb.from('competition_mapping').insert({
+    provider,
     optic_sport: args.opticSportRaw,
     optic_league: args.opticLeagueRaw,
     optic_tournament: args.opticTournamentRaw,
@@ -185,6 +207,7 @@ export async function setCompetitionVerified(args: {
   /** Required when there are multiple mappings — targets a single row. */
   swiftCompetitionId: string
   verified: boolean
+  provider?: Provider
 }): Promise<void> {
   const { error } = await getSupabase()
     .from('competition_mapping')
@@ -192,6 +215,7 @@ export async function setCompetitionVerified(args: {
       verified: args.verified,
       verified_at: args.verified ? new Date().toISOString() : null,
     })
+    .eq('provider', args.provider ?? 'swift')
     .eq('optic_sport', args.opticSportRaw)
     .eq('optic_league', args.opticLeagueRaw)
     .eq('optic_tournament', args.opticTournamentRaw)
@@ -203,34 +227,38 @@ export async function setCompetitionVerified(args: {
 export async function setEventMappingManual(args: {
   opticFixtureId: string
   swiftEventId: string | null
+  provider?: Provider
 }): Promise<void> {
   const { error } = await getSupabase()
     .from('event_mapping')
     .upsert(
       {
+        provider: args.provider ?? 'swift',
         optic_fixture_id: args.opticFixtureId,
         gutsy_event_id: args.swiftEventId,
         confidence: args.swiftEventId ? 1 : 0,
         source: 'manual',
       },
-      { onConflict: 'optic_fixture_id' },
+      { onConflict: 'provider,optic_fixture_id' },
     )
   if (error) throw error
 }
 
-export async function fetchEventMappings(): Promise<EventMapping[]> {
+export async function fetchEventMappings(provider: Provider = 'swift'): Promise<EventMapping[]> {
   const out: EventMapping[] = []
   const PAGE = 1000
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await getSupabase()
       .from('event_mapping')
       .select('optic_fixture_id,gutsy_event_id,confidence,source,swift_actual_start')
+      .eq('provider', provider)
       .range(from, from + PAGE - 1)
     if (error) throw error
     const rows =
       (data as { optic_fixture_id: string; gutsy_event_id: string | null; confidence: number; source: 'auto' | 'manual'; swift_actual_start: string | null }[]) ?? []
     for (const r of rows) {
       out.push({
+        provider,
         optic_fixture_id: r.optic_fixture_id,
         swift_event_id: r.gutsy_event_id,
         confidence: r.confidence ?? 0,

@@ -29,7 +29,7 @@ const HDR = { apikey: SUP_KEY, Authorization: `Bearer ${SUP_KEY}` }
 // canonical name is matched (case-insensitive) against gutsy `sport.name`.
 // OPTIC leagues we never map — ITF / UTR tennis tiers don't appear in gutsy
 // and would just clutter the mapping table with permanently-unmapped rows.
-const EXCLUDE_LEAGUES = new Set(['itf_men', 'itf_women', 'utr_men', 'utr_women'])
+export const EXCLUDE_LEAGUES = new Set(['itf_men', 'itf_women', 'utr_men', 'utr_women'])
 
 const SPORT_MAP = {
   soccer: 'football',
@@ -84,7 +84,7 @@ const SPORT_MAP = {
   table_tennis: 'table tennis',
 }
 
-function canonSport(s) {
+export function canonSport(s) {
   if (!s) return ''
   const k = s.toLowerCase().replace(/[^a-z]/g, '')
   return SPORT_MAP[k] ?? s.toLowerCase().replace(/_/g, ' ').trim()
@@ -92,7 +92,7 @@ function canonSport(s) {
 
 // "france_-_ligue_1" → "france ligue 1"; keeps the country/region prefix so
 // SWIFT competitions named "France - Ligue 1" score higher token overlap.
-function prettyOpticLeague(raw) {
+export function prettyOpticLeague(raw) {
   if (!raw) return ''
   return raw.replace(/_-_/g, ' ').replace(/_/g, ' ').trim().toLowerCase()
 }
@@ -126,7 +126,7 @@ const LEAGUE_ALIASES = {
   ues: 'europa conference league',
 }
 
-function aliasExpand(s) {
+export function aliasExpand(s) {
   if (!s) return ''
   const k = s.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
   return LEAGUE_ALIASES[k] ?? s
@@ -142,7 +142,7 @@ const STOP = new Set([
   'team','base',
 ])
 
-function tokens(s) {
+export function tokens(s) {
   return (s ?? '')
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
@@ -152,7 +152,7 @@ function tokens(s) {
     .filter((t) => t.length >= 2 && !STOP.has(t))
 }
 
-function jaccard(a, b) {
+export function jaccard(a, b) {
   if (a.size === 0 || b.size === 0) return 0
   let hit = 0
   for (const t of a) if (b.has(t)) hit++
@@ -164,7 +164,7 @@ function jaccard(a, b) {
 // "Boston Red Sox" vs "Red Sox" → 2/2 = 1.0. Lets long-form ↔ short-form pairs
 // score high without dragging Jaccard's denominator through unmatched tokens
 // on the bigger side.
-function fuzzyCoverage(a, b) {
+export function fuzzyCoverage(a, b) {
   if (a.size === 0 || b.size === 0) return 0
   const [small, big] = a.size <= b.size ? [a, b] : [b, a]
   let hits = 0
@@ -254,7 +254,7 @@ function extractTiers(s) {
   return out
 }
 
-function sim(aName, bName) {
+export function sim(aName, bName) {
   const a = new Set(tokens(aName))
   const b = new Set(tokens(bName))
   let s = Math.max(jaccard(a, b), fuzzyCoverage(a, b))
@@ -335,10 +335,12 @@ function scoreTennis(ot, gutsyComp) {
   const cityLower = ot.city.toLowerCase()
   if (cityLower.length >= 3 && gc.includes(cityLower)) s = Math.max(s, 0.7)
 
-  // doubles must match — penalize a mismatch heavily
+  // Doubles vs singles is a HARD gate, not a penalty: a doubles tournament must
+  // never bind to a singles competition (or vice versa), even when the city name
+  // matches. A −0.4 penalty still let same-city singles comps win on the city
+  // bonus (e.g. "Palermo, Doubles" → "34 Palermo Ladies Open").
   const gcDoubles = / doubles\b/.test(gc)
-  if (ot.isDoubles && !gcDoubles) s -= 0.4
-  if (!ot.isDoubles && gcDoubles) s -= 0.4
+  if (ot.isDoubles !== gcDoubles) return 0
 
   // qualifying vs main draw must match too — else a main-draw tournament
   // ("Berlin, Germany") wrongly binds to "…Qualification" (same city bonus).
@@ -399,7 +401,7 @@ async function main(opts = { writeSnapshot: true }) {
   // manual or verified — auto matcher leaves it untouched.
   const compStatus = new Map() // optic key → { hasSticky: bool, hasAuto: bool }
   for (const r of await getAllSupabase(
-    'competition_mapping?select=optic_sport,optic_league,optic_tournament,gutsy_competition_id,source,verified',
+    'competition_mapping?provider=eq.swift&select=optic_sport,optic_league,optic_tournament,gutsy_competition_id,source,verified',
   )) {
     const k = `${r.optic_sport}|${r.optic_league}|${r.optic_tournament}`
     const cur = compStatus.get(k) ?? { hasSticky: false, hasAuto: false, hasManual: false }
@@ -409,7 +411,7 @@ async function main(opts = { writeSnapshot: true }) {
     compStatus.set(k, cur)
   }
   const existingEvent = new Map(
-    (await getAllSupabase('event_mapping?select=optic_fixture_id,source')).map((r) => [r.optic_fixture_id, r.source]),
+    (await getAllSupabase('event_mapping?provider=eq.swift&select=optic_fixture_id,source')).map((r) => [r.optic_fixture_id, r.source]),
   )
 
   // -- Stage 1: competitions
@@ -500,7 +502,7 @@ async function main(opts = { writeSnapshot: true }) {
   const compAutoUpserts = compResults
     .filter((r) => !compStatus.get(`${r.optic_sport}|${r.optic_league}|${r.optic_tournament}`)?.hasSticky)
     // The new schema uses '' as the unmapped sentinel; treat null swift ids as ''.
-    .map((r) => ({ ...r, gutsy_competition_id: r.gutsy_competition_id ?? '' }))
+    .map((r) => ({ ...r, provider: 'swift', gutsy_competition_id: r.gutsy_competition_id ?? '' }))
   const compKept = compResults.length - compAutoUpserts.length
   console.log(
     `• Stage 1: paired ${compPaired}/${compResults.length} competitions  (high-conf ≥0.6: ${compHigh}, tennis ${tennisPaired}/${tennisRows.length}, sticky kept: ${compKept}).`,
@@ -513,7 +515,7 @@ async function main(opts = { writeSnapshot: true }) {
   // still had its June-4 ghost. This wipe covers them all.
   await deleteAllAutoUnverified()
   await upsertAll(
-    'competition_mapping?on_conflict=optic_sport,optic_league,optic_tournament,gutsy_competition_id',
+    'competition_mapping?on_conflict=provider,optic_sport,optic_league,optic_tournament,gutsy_competition_id',
     compAutoUpserts,
   )
 
@@ -565,7 +567,7 @@ async function main(opts = { writeSnapshot: true }) {
     }
   }
   for (const r of await getAllSupabase(
-    'competition_mapping?select=optic_sport,optic_league,optic_tournament,gutsy_competition_id',
+    'competition_mapping?provider=eq.swift&select=optic_sport,optic_league,optic_tournament,gutsy_competition_id',
   )) {
     if (!r.gutsy_competition_id) continue
     const k = `${r.optic_sport}|${r.optic_league}|${r.optic_tournament}`
@@ -651,7 +653,7 @@ async function main(opts = { writeSnapshot: true }) {
   console.log(
     `• Stage 2: ${opticPairedComp}/${eventResults.length} fixtures in mapped competitions, paired ${eventPaired} events (manual kept: ${eventManualKept}).`,
   )
-  await upsertAll('event_mapping?on_conflict=optic_fixture_id', eventAutoUpserts)
+  await upsertAll('event_mapping?on_conflict=provider,optic_fixture_id', eventAutoUpserts.map((r) => ({ ...r, provider: 'swift' })))
 
   // -- Stage 3: confirm competitions from where their events actually land.
   // High-confidence event matches are ground truth, so:
@@ -704,14 +706,14 @@ async function main(opts = { writeSnapshot: true }) {
 
     if (isTennis) {
       // Upsert the evidence-derived mapping (fixes wrong/missing), verified.
-      await upsertAll('competition_mapping?on_conflict=optic_sport,optic_league,optic_tournament,gutsy_competition_id', [{
-        optic_sport, optic_league, optic_tournament,
+      await upsertAll('competition_mapping?on_conflict=provider,optic_sport,optic_league,optic_tournament,gutsy_competition_id', [{
+        provider: 'swift', optic_sport, optic_league, optic_tournament,
         gutsy_sport: dom.sport, gutsy_competition: dom.name, gutsy_competition_id: domCid,
         confidence: 1, source: 'auto', verified: true, verified_at: stamp,
       }])
       // Remove any other AUTO rows for this tournament (stale/wrong guesses).
       const del = new URLSearchParams({
-        optic_sport: `eq.${optic_sport}`, optic_league: `eq.${optic_league}`,
+        provider: 'eq.swift', optic_sport: `eq.${optic_sport}`, optic_league: `eq.${optic_league}`,
         optic_tournament: `eq.${optic_tournament}`, source: 'eq.auto', gutsy_competition_id: `neq.${domCid}`,
       })
       await fetch(`${REST}/competition_mapping?${del}`, { method: 'DELETE', headers: { ...HDR, Prefer: 'return=minimal' } })
@@ -721,7 +723,7 @@ async function main(opts = { writeSnapshot: true }) {
       // (Stage 2 pools candidates from it), so ≥3 high-conf hits prove the
       // pairing is right — verify the tournament's auto mapping(s).
       const q = new URLSearchParams({
-        optic_sport: `eq.${optic_sport}`, optic_league: `eq.${optic_league}`,
+        provider: 'eq.swift', optic_sport: `eq.${optic_sport}`, optic_league: `eq.${optic_league}`,
         optic_tournament: `eq.${optic_tournament}`, source: 'eq.auto',
       })
       await fetch(`${REST}/competition_mapping?${q}`, {
@@ -760,7 +762,7 @@ async function getAllSupabase(pathAndQuery) {
  * alone. PostgREST returns 204 on success.
  */
 async function deleteAllAutoUnverified() {
-  const qs = 'source=eq.auto&verified=eq.false'
+  const qs = 'provider=eq.swift&source=eq.auto&verified=eq.false'
   const r = await fetch(`${REST}/competition_mapping?${qs}`, {
     method: 'DELETE',
     headers: { ...HDR, Prefer: 'return=minimal' },

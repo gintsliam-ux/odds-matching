@@ -1,19 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft, Check, ChevronDown, ChevronRight, Copy } from 'lucide-react'
+import { ArrowLeft, Check, ChevronDown, ChevronRight, Copy, ExternalLink } from 'lucide-react'
 import { useTerminal } from '../components/Layout'
 import { DetailSkeleton, PanelSkeleton } from '../components/Skeleton'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { fetchFixtureById } from '../lib/dataSource'
-import { fetchSwiftEvent } from '../lib/swiftStatus'
+import { fetchSwiftEvent, swiftEventUrl } from '../lib/swiftStatus'
 import { fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
+import { fetchMybetBets, type MybetBetRow } from '../lib/mybetBets'
+import { BRAND_PILL, BRAND_TONE, type Brand } from '../lib/brand'
 import { settleFromScore, type ScoreCtx } from '../lib/settleBet'
-import { leagueLabel, periodAbbrev, periodNoun, periodState, sportEmoji } from '../lib/sports'
+import { leagueLabel, periodAbbrev, periodNoun, periodState } from '../lib/sports'
 import { Avatar } from '../components/Avatar'
+import { LeagueBadge } from '../components/LeagueBadge'
 import type { Fixture } from '../lib/types'
-import { agoLabel, fmtDateTime, fmtLine, melbDateTime, overdueMinutes, startsInLabel } from '../lib/format'
+import { agoLabel, fmtDateTime, fmtLine, melbDateTime, overdueMinutes, placementOffset, startsInLabel } from '../lib/format'
 import { fetchEventMappings, fetchCompetitionMappings, type EventMapping, type CompetitionMapping } from '../lib/mappingData'
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
+import { getMybetCatalog, type MybetCompetition, type MybetEvent } from '../lib/mybetCatalog'
+import { fetchMybetEvent, mybetEventUrl, type MybetLiveEvent } from '../lib/mybetStatus'
 
 export default function FixtureDetailPage() {
   const { id } = useParams()
@@ -69,8 +74,15 @@ export default function FixtureDetailPage() {
         ? { loading: true }
         : prev,
     )
-    Promise.all([fetchEventMappings(), fetchCompetitionMappings(), getSwiftCatalog()])
-      .then(async ([events, comps, cat]) => {
+    Promise.all([
+      fetchEventMappings(),
+      fetchCompetitionMappings(),
+      getSwiftCatalog(),
+      fetchEventMappings('mybet'),
+      fetchCompetitionMappings('mybet'),
+      getMybetCatalog().catch(() => null),
+    ])
+      .then(async ([events, comps, cat, mybetEvents, mybetCompsAll, mybetCat]) => {
         if (!alive) return
         const evMap = events.find((e) => e.optic_fixture_id === id) ?? null
         // Snapshot lookup first — but always layer the live response on top
@@ -100,7 +112,44 @@ export default function FixtureDetailPage() {
         const swiftComps = compMaps
           .map((m) => (m.swift_competition_id ? cat.byCompId.get(m.swift_competition_id) ?? null : null))
           .filter((x): x is NonNullable<typeof x> => !!x)
-        setMappingInfo({ loading: false, evMap, swiftEvent, compMaps, swiftComps })
+
+        // --- mybet: same resolution path, second provider ---
+        const mybetEvMap = mybetEvents.find((e) => e.optic_fixture_id === id) ?? null
+        let mybetEvent: (MybetEvent & Partial<Omit<MybetLiveEvent, 'status'>>) | null =
+          mybetEvMap?.swift_event_id ? mybetCat?.eventById.get(mybetEvMap.swift_event_id) ?? null : null
+        if (mybetEvMap?.swift_event_id) {
+          try {
+            const live = await fetchMybetEvent(mybetEvMap.swift_event_id)
+            if (live) mybetEvent = { ...(mybetEvent ?? ({} as MybetEvent)), ...live }
+          } catch {
+            /* network blip → snapshot fallback */
+          }
+          if (!alive) return
+        }
+        const mybetCompMaps = sport
+          ? mybetCompsAll.filter(
+              (c) =>
+                c.optic_sport === sport &&
+                c.optic_league === league &&
+                c.optic_tournament === (sport.toLowerCase() === 'tennis' ? seasonType : '') &&
+                !!c.swift_competition_id,
+            )
+          : []
+        const mybetComps = mybetCompMaps
+          .map((m) => (m.swift_competition_id ? mybetCat?.byCompId.get(m.swift_competition_id) ?? null : null))
+          .filter((x): x is NonNullable<typeof x> => !!x)
+
+        setMappingInfo({
+          loading: false,
+          evMap,
+          swiftEvent,
+          compMaps,
+          swiftComps,
+          mybetEvMap,
+          mybetEvent,
+          mybetCompMaps,
+          mybetComps,
+        })
       })
       .catch(() => alive && setMappingInfo((prev) => ({ ...prev, loading: false })))
     return () => {
@@ -113,7 +162,7 @@ export default function FixtureDetailPage() {
   if (!f && loading) return <DetailSkeleton />
 
   return (
-    <div className="mx-auto max-w-7xl px-6 py-6">
+    <div className="mx-auto max-w-[1700px] px-5 py-5">
       <Link
         to="/"
         className="mb-5 inline-flex items-center gap-1.5 text-[12.5px] text-[color:var(--muted)] transition-colors hover:text-gray-200"
@@ -141,6 +190,12 @@ interface MappingInfo {
   swiftEvent?: SwiftEvent | null
   compMaps?: CompetitionMapping[]
   swiftComps?: SwiftCompetition[]
+  // mybet — same shape, second provider. `mybetEvent` merges the snapshot with
+  // the live /api/mybet-status response (which carries the open/closed flag).
+  mybetEvMap?: EventMapping | null
+  mybetEvent?: (MybetEvent & Partial<Omit<MybetLiveEvent, 'status'>>) | null
+  mybetCompMaps?: CompetitionMapping[]
+  mybetComps?: MybetCompetition[]
 }
 
 function Detail({
@@ -172,21 +227,28 @@ function Detail({
   const actualStart = trustedStarts.length
     ? trustedStarts.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a))
     : null
-  const betsState = useSwiftBets(f, actualStart)
-  const bets = betsState.bets ?? []
+  const swiftEventId = mappingInfo.swiftEvent?.id ?? mappingInfo.evMap?.swift_event_id ?? null
+  const betsState = useSwiftBets(f, actualStart, swiftEventId)
+  // mybet bets are fetched at this level (not inside the Bets tab) so the
+  // combined exposure glance can stay visible on every tab.
+  const mybetBetsState = useMybetBets({
+    eventId: mappingInfo.mybetEvent?.id ?? mappingInfo.mybetEvMap?.swift_event_id ?? null,
+    suspendAt: mappingInfo.mybetEvent?.suspendAt ?? null,
+    liveAt: actualStart ?? f.scheduledStart,
+    home: f.homeName,
+    away: f.awayName,
+  })
+  const swiftBets = betsState.bets ?? []
+  const mybetBets = mybetBetsState.bets ?? []
 
   return (
     <div
-      className={`rounded-lg border bg-[color:var(--panel)] ${
-        isLive ? 'border-transparent glow-live' : 'border-[color:var(--line-soft)]'
-      }`}
+      className={`rounded-lg bg-[color:var(--panel)] ${isLive ? 'glow-live' : ''}`}
     >
       {/* HERO — everything you need to read the event at a glance. */}
       <div className="flex items-center justify-between border-b border-white/[0.05] px-5 py-3.5">
         <div className="flex items-center gap-2.5">
-          <span className="cursor-help text-base leading-none" title={f.sport} aria-label={f.sport}>
-            {sportEmoji(f.sport)}
-          </span>
+          <LeagueBadge sport={f.sport} league={f.league} size={20} />
           <span className="text-[14px] font-semibold text-gray-100">
             {leagueLabel(f.sport, f.league, f.seasonType)}
           </span>
@@ -225,8 +287,10 @@ function Detail({
         </span>
       </div>
 
-      {/* LIABILITY OVERVIEW — users/bets/stake/live-P&L, always visible. */}
-      {bets.length > 0 && <LiabilityOverview bets={bets} fixture={f} />}
+      {/* COMBINED EXPOSURE — SwiftBet + mybet, always visible across tabs. */}
+      {(swiftBets.length > 0 || mybetBets.length > 0) && (
+        <CombinedExposure fixture={f} swiftBets={swiftBets} mybetBets={mybetBets} />
+      )}
 
       {/* TAB STRIP */}
       <div className="flex items-center gap-1 border-b border-white/[0.05] bg-black/[0.1] px-3 py-2">
@@ -244,12 +308,16 @@ function Detail({
       {tab === 'details' && <DetailsTab fixture={f} now={now} mappingInfo={mappingInfo} />}
       {tab === 'markets' && <MarketsTab fixture={f} />}
       {tab === 'bets' && (
-        <BetsTab
+        <BetsPanel
           fixture={f}
-          bets={betsState.bets}
-          loading={betsState.loading}
-          error={betsState.error}
+          swiftBets={betsState.bets}
+          swiftLoading={betsState.loading}
+          swiftError={betsState.error}
           swiftActualStart={actualStart}
+          mybetEventId={mappingInfo.mybetEvent?.id ?? mappingInfo.mybetEvMap?.swift_event_id ?? null}
+          mybetBets={mybetBetsState.bets}
+          mybetLoading={mybetBetsState.loading}
+          mybetError={mybetBetsState.error}
         />
       )}
     </div>
@@ -323,10 +391,11 @@ function DetailsTab({
         </Section>
       )}
 
-      {/* OPTIC + SWIFT side-by-side. Stacks vertically on narrow viewports. */}
-      <div className="grid grid-cols-1 gap-4 border-t border-white/10 px-5 py-4 md:grid-cols-2">
+      {/* OPTIC + SWIFT + mybet side-by-side. Stacks on narrow viewports. */}
+      <div className="grid grid-cols-1 gap-4 border-t border-white/10 px-5 py-4 md:grid-cols-2 lg:grid-cols-3">
         <OpticPanel fixture={f} now={now} />
         <SwiftPanel info={mappingInfo} />
+        <MybetPanel info={mappingInfo} />
       </div>
     </>
   )
@@ -390,8 +459,25 @@ function SwiftPanel({ info }: { info: MappingInfo }) {
     )
   }
 
+  const swiftId = swiftEvent?.id ?? evMap?.swift_event_id ?? null
+
   return (
-    <SourcePanel kind="SWIFT" subtitle="gutsy.events">
+    <SourcePanel
+      kind="SWIFT"
+      subtitle="gutsy.events"
+      action={
+        swiftId && (
+          <a
+            href={swiftEventUrl(swiftId)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 rounded border border-[color:var(--swift)]/30 px-1.5 py-0.5 text-[10px] font-medium text-[color:var(--swift)] hover:bg-[color:var(--swift)]/10"
+          >
+            Open Swift <ExternalLink className="h-3 w-3" />
+          </a>
+        )
+      }
+    >
       <Grid>
         {/* event-level */}
         <Field label="EVENT NAME" value={swiftEvent?.name ?? '—'} />
@@ -433,32 +519,127 @@ function SwiftPanel({ info }: { info: MappingInfo }) {
   )
 }
 
+function MybetPanel({ info }: { info: MappingInfo }) {
+  if (info.loading) {
+    return <PanelSkeleton fields={10} />
+  }
+
+  const { mybetEvMap, mybetEvent, mybetCompMaps = [], mybetComps = [] } = info
+  const primaryComp = mybetComps[0] ?? null
+  const mapped = !!mybetEvent || mybetCompMaps.length > 0
+
+  if (!mapped) {
+    return (
+      <SourcePanel kind="MYBET" subtitle="gutsy.mybet_events">
+        <div className="text-[12px] leading-relaxed text-gray-400">
+          <span className="font-bold text-gray-200">No mybet mapping yet.</span> Most mybet events
+          are player-prop markets with no teams; only head-to-head events map. Use the{' '}
+          <a href="/mapping" className="text-[color:var(--mybet)] underline">Mapping</a>{' '}
+          tab to pair one manually.
+        </div>
+      </SourcePanel>
+    )
+  }
+
+  const mybetId = mybetEvent?.id ?? mybetEvMap?.swift_event_id ?? null
+  // mybet closes on suspendAt; the live endpoint adds `open`. Render a clear
+  // OPEN / CLOSED state plus the closing time, since that's mybet's core signal.
+  const suspend = mybetEvent?.suspendAt ?? null
+  const openFlag =
+    typeof mybetEvent?.open === 'boolean'
+      ? mybetEvent.open
+      : suspend
+        ? Date.parse(suspend) > Date.now()
+        : null
+
+  return (
+    <SourcePanel
+      kind="MYBET"
+      subtitle="gutsy.mybet_events"
+      action={
+        mybetId && (
+          <a
+            href={mybetEventUrl(mybetId, mybetEvent?.sport ?? primaryComp?.sport)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 rounded border border-[color:var(--mybet)]/30 px-1.5 py-0.5 text-[10px] font-medium text-[color:var(--mybet)] hover:bg-[color:var(--mybet)]/10"
+          >
+            Open mybet <ExternalLink className="h-3 w-3" />
+          </a>
+        )
+      }
+    >
+      <Grid>
+        {/* event-level */}
+        <Field label="EVENT NAME" value={mybetEvent?.name ?? '—'} />
+        <Field
+          label="MARKET"
+          value={openFlag == null ? '—' : openFlag ? 'OPEN' : 'CLOSED'}
+        />
+        <Field label="HOME" value={mybetEvent?.home ?? '—'} />
+        <Field label="AWAY" value={mybetEvent?.away ?? '—'} />
+        <Field label="CLOSES / SUSPEND (UTC)" value={fmtDateTime(suspend)} />
+        <Field label="CLOSES (MEL)" value={melbDateTime(suspend)} />
+        <Field label="LAST SEEN (UTC)" value={fmtDateTime(mybetEvent?.lastSeenAt ?? null)} />
+        {/* competition-level */}
+        <Field label="SPORT" value={(mybetEvent?.sport ?? primaryComp?.sport ?? '—').toUpperCase()} />
+        <Field label="COMPETITION" value={mybetEvent?.competition ?? primaryComp?.name ?? '—'} />
+        <Field label="EVENT ID" value={mybetEvent?.id ?? mybetEvMap?.swift_event_id ?? '—'} mono copyable />
+        {/* mapping audit */}
+        <Field
+          label="EVENT MAPPING"
+          value={
+            mybetEvMap?.swift_event_id
+              ? `${Math.round((mybetEvMap.confidence ?? 0) * 100)}% · ${(mybetEvMap.source ?? 'auto').toUpperCase()}`
+              : 'UNMAPPED'
+          }
+        />
+        <Field
+          label={mybetCompMaps.length > 1 ? `COMPETITION MAPPINGS (${mybetCompMaps.length})` : 'COMPETITION MAPPING'}
+          value={
+            mybetCompMaps.length === 0
+              ? 'UNMAPPED'
+              : mybetCompMaps
+                  .map(
+                    (m) =>
+                      `${m.swift_competition} · ${Math.round((m.confidence ?? 0) * 100)}% · ${(m.source ?? 'auto').toUpperCase()}${m.verified ? ' · ✓' : ''}`,
+                  )
+                  .join(' • ')
+          }
+        />
+      </Grid>
+    </SourcePanel>
+  )
+}
+
 function SourcePanel({
   kind,
   subtitle,
+  action,
   children,
 }: {
-  kind: 'OPTIC' | 'SWIFT'
+  kind: 'OPTIC' | 'SWIFT' | 'MYBET'
   subtitle: string
+  action?: React.ReactNode
   children: React.ReactNode
 }) {
-  const tone =
-    kind === 'OPTIC'
-      ? 'border-[color:var(--total)]/25 bg-[color:var(--total)]/[0.025]'
-      : 'border-[color:var(--up)]/25 bg-[color:var(--up)]/[0.025]'
-  const pill =
-    kind === 'OPTIC'
-      ? 'border-[color:var(--total)]/30 text-[color:var(--total)] bg-[color:var(--total)]/10'
-      : 'border-[color:var(--up)]/30 text-[color:var(--up)] bg-[color:var(--up)]/10'
+  // One accent per source: OPTIC=blue, SWIFT=green, MYBET=amber/live. Literal
+  // class strings — Tailwind extracts these statically, so no interpolation.
+  const brand = kind.toLowerCase() as Brand
+  const tone = BRAND_TONE[brand]
+  const pill = BRAND_PILL[brand]
   return (
-    <div className={`rounded-lg border ${tone} px-4 py-3.5`}>
+    <div className={`rounded-lg ${tone} px-4 py-3.5`}>
       <div className="mb-3 flex items-center justify-between">
         <span
           className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${pill}`}
         >
           {kind}
         </span>
-        <span className="text-[11px] text-[color:var(--muted-2)]">{subtitle}</span>
+        <div className="flex items-center gap-2">
+          {action}
+          <span className="text-[11px] text-[color:var(--muted-2)]">{subtitle}</span>
+        </div>
       </div>
       {children}
     </div>
@@ -702,7 +883,7 @@ function MarketCard<K extends string>({
         : 'border-amber-400/30'
 
   return (
-    <div className={`overflow-hidden rounded-lg border bg-[color:var(--panel)] ${accent}`}>
+    <div className={`overflow-hidden rounded-lg bg-[color:var(--panel)] ${accent}`}>
       <div className="flex items-center justify-between border-b border-white/[0.05] px-4 py-3">
         <div className="flex items-center gap-2.5">
           <span className="text-[14px] font-semibold text-gray-100">{title}</span>
@@ -813,7 +994,7 @@ function MarketCard<K extends string>({
 /** Bets for a fixture, fetched once per (date, teams). Lifted out of BetsTab so
  *  the liability overview can read the same data above the tab strip. The score
  *  changing doesn't refetch — the deps are stable — so P/L just recomputes. */
-function useSwiftBets(f: Fixture, swiftActualStart: string | null) {
+function useSwiftBets(f: Fixture, swiftActualStart: string | null, swiftEventId: string | null) {
   const [bets, setBets] = useState<SwiftBetRow[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -824,15 +1005,324 @@ function useSwiftBets(f: Fixture, swiftActualStart: string | null) {
     let alive = true
     setLoading(true)
     setError(null)
-    fetchSwiftBets({ date, home: f.homeName, away: f.awayName, swiftActualStart, scheduledStart })
+    // `swiftEventId` arrives a beat after the fixture (the mapping loads
+    // async), so this refetches once it lands — picking up any bet the slug
+    // join missed.
+    fetchSwiftBets({ date, home: f.homeName, away: f.awayName, swiftEventId, swiftActualStart, scheduledStart })
       .then((rows) => alive && setBets(rows))
       .catch((e) => alive && setError(String(e?.message ?? e)))
       .finally(() => alive && setLoading(false))
     return () => {
       alive = false
     }
-  }, [date, f.homeName, f.awayName, swiftActualStart, scheduledStart])
+  }, [date, f.homeName, f.awayName, swiftEventId, swiftActualStart, scheduledStart])
   return { bets, loading, error, date }
+}
+
+/**
+ * Bets tab body: a per-brand sub-tab strip (SwiftBet · mybet) over two views
+ * that share the same layout — a Users/Bets/Stake/P&L stat header, then bet
+ * cards grouped (SwiftBet by market, mybet by bet type) each with an identical
+ * table. Keeping both on the same structure is the point of the split.
+ */
+function BetsPanel({
+  fixture: f,
+  swiftBets,
+  swiftLoading,
+  swiftError,
+  swiftActualStart,
+  mybetEventId,
+  mybetBets,
+  mybetLoading,
+  mybetError,
+}: {
+  fixture: Fixture
+  swiftBets: SwiftBetRow[] | null
+  swiftLoading: boolean
+  swiftError: string | null
+  swiftActualStart: string | null
+  mybetEventId: string | null
+  mybetBets: MybetBetRow[] | null
+  mybetLoading: boolean
+  mybetError: string | null
+}) {
+  const swiftCount = swiftBets?.length ?? 0
+  const mybetCount = mybetBets?.length ?? 0
+  const [sub, setSub] = useState<'swift' | 'mybet'>('swift')
+
+  return (
+    <div>
+      <div className="flex items-center gap-1 border-b border-white/[0.05] bg-black/[0.06] px-3 py-2">
+        <BrandSubTab active={sub === 'swift'} onClick={() => setSub('swift')} brand="swift" count={swiftCount} />
+        <BrandSubTab active={sub === 'mybet'} onClick={() => setSub('mybet')} brand="mybet" count={mybetCount} />
+      </div>
+      {sub === 'swift' ? (
+        <BetsTab fixture={f} bets={swiftBets} loading={swiftLoading} error={swiftError} swiftActualStart={swiftActualStart} />
+      ) : (
+        <MybetBetsView fixture={f} eventId={mybetEventId} bets={mybetBets} loading={mybetLoading} error={mybetError} />
+      )}
+    </div>
+  )
+}
+
+/**
+ * Combined SwiftBet + mybet exposure — the always-visible glance above the tab
+ * strip. Reuses the same stat tiles; each shows the total with a per-brand
+ * split so you can see both books at once from any tab.
+ */
+function CombinedExposure({ fixture: f, swiftBets, mybetBets }: { fixture: Fixture; swiftBets: SwiftBetRow[]; mybetBets: MybetBetRow[] }) {
+  const s = aggregateBets(swiftBets, scoreCtx(f))
+  const mUsers = new Set(mybetBets.map((b) => b.user_accountID)).size
+  const mStake = mybetBets.reduce((a, b) => a + (b.amount_bet ?? 0), 0)
+  const mPl = mybetBets.reduce((a, b) => a + (b.bet_result ?? 0), 0)
+  const mOpen = mybetBets.filter((b) => /accepted/i.test(b.bet_status ?? '')).length
+
+  const users = s.users + mUsers
+  const bets = s.count + mybetBets.length
+  const stake = s.stake + mStake
+  const pl = s.pl + mPl
+  const open = s.open + mOpen
+  const live = f.status === 'live'
+  const mode = f.status === 'completed' ? 'FINAL' : live ? 'LIVE' : 'PENDING'
+  const split = (a: number | string, b: number | string) => `SWIFT ${a} · mybet ${b}`
+
+  return (
+    <div className="grid grid-cols-2 gap-2 border-t border-white/[0.05] bg-black/[0.1] px-5 py-3 sm:grid-cols-4">
+      <StatCard label="Users" value={users} sub={split(s.users, mUsers)} />
+      <StatCard label="Bets" value={bets} sub={split(s.count, mybetBets.length)} />
+      <StatCard label="Stake" value={`$${stake.toFixed(2)}`} sub={split(`$${s.stake.toFixed(0)}`, `$${mStake.toFixed(0)}`)} />
+      <StatCard
+        label="P/L"
+        value={`${pl < 0 ? '-' : ''}$${Math.abs(pl).toFixed(2)}`}
+        tone={plTone(pl)}
+        badge={mode}
+        live={live}
+        sub={open > 0 ? `${open} open` : split(`$${s.pl.toFixed(0)}`, `$${mPl.toFixed(0)}`)}
+      />
+    </div>
+  )
+}
+
+function BrandSubTab({
+  active,
+  onClick,
+  brand,
+  count,
+}: {
+  active: boolean
+  onClick: () => void
+  brand: 'swift' | 'mybet'
+  count: number
+}) {
+  const pill =
+    brand === 'swift' ? BRAND_PILL.swift : BRAND_PILL.mybet
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-semibold transition-colors ${
+        active ? 'bg-white/[0.08] text-white' : 'text-gray-400 hover:bg-white/[0.04]'
+      }`}
+    >
+      <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-medium ${pill}`}>
+        {brand === 'swift' ? 'SWIFT' : 'MYBET'}
+      </span>
+      <span>Bets</span>
+      <span className="tabular-nums text-[color:var(--muted-2)]">{count}</span>
+    </button>
+  )
+}
+
+/** Fetch mybet bets for a game — lifted so the sub-tab count and the view share it. */
+function useMybetBets(args: { eventId: string | null; suspendAt: string | null; liveAt: string | null; home: string; away: string }) {
+  const { eventId, suspendAt, liveAt, home, away } = args
+  const [bets, setBets] = useState<MybetBetRow[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!eventId) {
+      setBets(null)
+      return
+    }
+    let alive = true
+    setLoading(true)
+    setError(null)
+    fetchMybetBets({ eventId, suspendAt, liveAt, home, away })
+      .then((rows) => alive && setBets(rows))
+      .catch((e) => alive && setError(String(e?.message ?? e)))
+      .finally(() => alive && setLoading(false))
+    return () => {
+      alive = false
+    }
+  }, [eventId, suspendAt, liveAt, home, away])
+  return { bets, loading, error }
+}
+
+/** mybet bets view — same layout as the SwiftBet view (stat header + grouped
+ *  cards), grouped by bet type instead of market. */
+function MybetBetsView({
+  fixture: _f,
+  eventId,
+  bets,
+  loading,
+  error,
+}: {
+  fixture: Fixture
+  eventId: string | null
+  bets: MybetBetRow[] | null
+  loading: boolean
+  error: string | null
+}) {
+  if (!eventId) {
+    return (
+      <div className="px-5 py-6">
+        <div className="rounded-lg border border-dashed border-[color:var(--line-soft)] p-6 text-center text-[12.5px] text-[color:var(--muted)]">
+          No mybet mapping for this fixture — nothing to show. Map it on the{' '}
+          <a href="/mapping" className="text-[color:var(--mybet)] underline">Mapping</a> tab.
+        </div>
+      </div>
+    )
+  }
+  if (loading && !bets) {
+    return (
+      <div className="px-5 py-6">
+        <PanelSkeleton fields={6} />
+      </div>
+    )
+  }
+  if (error) {
+    return (
+      <div className="px-5 py-6">
+        <div className="rounded-lg border border-[var(--live)]/40 bg-[var(--live)]/5 p-4 text-[12px] text-gray-300">
+          Could not load mybet bets: {error}
+        </div>
+      </div>
+    )
+  }
+  const list = bets ?? []
+  if (list.length === 0) {
+    return (
+      <div className="px-5 py-6">
+        <div className="rounded-lg border border-dashed border-[color:var(--line-soft)] p-6 text-center text-[12.5px] text-[color:var(--muted)]">
+          No MyBet bets matched for this game (event {eventId}).
+        </div>
+      </div>
+    )
+  }
+
+  // Group by bet type (multis in one "Multi" bucket). Late-bet cards float up.
+  const groups = new Map<string, MybetBetRow[]>()
+  for (const b of list) {
+    const k = b.is_multi ? 'Multi' : (b.bet_type ?? 'Other')
+    ;(groups.get(k) ?? groups.set(k, []).get(k)!).push(b)
+  }
+  const ordered = [...groups.entries()].sort((a, b) => {
+    const la = a[1].some((x) => x.placed_after_live)
+    const lb = b[1].some((x) => x.placed_after_live)
+    if (la !== lb) return la ? -1 : 1
+    return b[1].reduce((s, x) => s + (x.amount_bet ?? 0), 0) - a[1].reduce((s, x) => s + (x.amount_bet ?? 0), 0)
+  })
+
+  return (
+    <div className="space-y-3 px-5 py-5">
+      {ordered.map(([type, gbets]) => (
+        <MybetTypeCard key={type} title={type} bets={gbets} scheduledStart={_f.scheduledStart} actualStart={_f.actualStart} />
+      ))}
+    </div>
+  )
+}
+
+/** One bet-type bucket for mybet — mirror of SwiftBet's MarketBetsCard. */
+function MybetTypeCard({ title, bets, scheduledStart, actualStart }: { title: string; bets: MybetBetRow[]; scheduledStart: string | null; actualStart: string | null }) {
+  const stake = bets.reduce((s, b) => s + (b.amount_bet ?? 0), 0)
+  const pl = bets.reduce((s, b) => s + (b.bet_result ?? 0), 0)
+  const users = new Set(bets.map((b) => b.user_accountID)).size
+  const lateCount = bets.filter((b) => b.placed_after_live).length
+  return (
+    <div className={`overflow-hidden rounded-lg bg-[color:var(--panel)]/50 ${lateCount > 0 ? 'border-t-2 border-[color:var(--live)]/60' : ''}`}>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-[color:var(--line-soft)] bg-black/[0.2] px-4 py-2.5">
+        <span className="text-[13px] font-semibold text-gray-100">{title}</span>
+        {lateCount > 0 && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-[color:var(--live)]/10 px-2 py-0.5 text-[10px] font-semibold text-[color:var(--live)]">
+            ⚠ {lateCount} after live
+          </span>
+        )}
+        <span className="text-[11px] text-[color:var(--muted-2)]">
+          {bets.length} {bets.length === 1 ? 'bet' : 'bets'} · {users} {users === 1 ? 'user' : 'users'}
+        </span>
+        <span className="ml-auto text-[11px] text-[color:var(--muted)]">
+          Stake <span className="tabular-nums font-semibold text-gray-200">${stake.toFixed(2)}</span>
+        </span>
+        <span className="text-[11px] text-[color:var(--muted)]">
+          P/L <span className={`tabular-nums font-semibold ${plTone(pl)}`}>{pl < 0 ? '-' : ''}${Math.abs(pl).toFixed(2)}</span>
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[820px] text-[12px]">
+          <thead>
+            <tr className="border-b border-[color:var(--line-soft)] bg-black/[0.12] text-left text-[11px] uppercase tracking-wide text-[color:var(--muted-2)]">
+              <th className="px-3 py-2 font-medium">Placed</th>
+              <th className="px-3 py-2 font-medium">vs Start</th>
+              <th className="px-3 py-2 font-medium">User</th>
+              <th className="px-3 py-2 font-medium">Selection</th>
+              <th className="px-3 py-2 font-medium">Status</th>
+              <th className="px-3 py-2 text-right font-medium">Stake</th>
+              <th className="px-3 py-2 text-right font-medium">Odds</th>
+              <th className="px-3 py-2 text-right font-medium">P/L</th>
+            </tr>
+          </thead>
+          <tbody>
+            {bets.map((b) => (
+              <tr
+                key={b.id}
+                className={`border-t border-[color:var(--line-soft)] ${b.placed_after_live ? 'bg-[color:var(--live)]/[0.06] hover:bg-[color:var(--live)]/[0.10]' : 'hover:bg-white/[0.02]'}`}
+              >
+                <td className="whitespace-nowrap px-3 py-2 tabular-nums text-[color:var(--muted)]">
+                  {b.placed_after_live && (
+                    <span className="mr-1.5 rounded bg-[color:var(--live)] px-1 py-0.5 text-[9px] font-bold text-black">LATE</span>
+                  )}
+                  {b.transaction_date ? melbDateTime(b.transaction_date) : '—'}
+                </td>
+                <td className="whitespace-nowrap px-3 py-2 tabular-nums">
+                  <OffsetLabel placed={b.transaction_date} scheduled={scheduledStart} actual={actualStart} />
+                </td>
+                <td className="px-3 py-2 font-mono text-[11px] text-[color:var(--muted-2)]">{b.user_accountID ?? '—'}</td>
+                <td className="max-w-[380px] px-3 py-2 text-gray-200">
+                  <div className="flex items-center gap-1.5">
+                    {b.is_multi && (
+                      <span className="shrink-0 rounded bg-white/5 px-1 py-0.5 text-[9px] font-semibold text-gray-300">MULTI {b.leg_count}</span>
+                    )}
+                    {b.is_bonus && (
+                      <span className="shrink-0 rounded bg-[color:var(--up)]/10 px-1 py-0.5 text-[9px] font-semibold text-[color:var(--up)]">BONUS</span>
+                    )}
+                    <span className="truncate">{b.selections ?? '—'}</span>
+                  </div>
+                </td>
+                <td className="px-3 py-2 text-[11px] text-[color:var(--muted-2)]">{cleanStatus(b.bet_status)}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-gray-200">${(b.amount_bet ?? 0).toFixed(2)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-gray-300">{b.price ?? '—'}</td>
+                <td className={`px-3 py-2 text-right tabular-nums ${plTone(b.bet_result ?? 0)}`}>
+                  {b.bet_result == null ? '—' : b.bet_result > 0 ? `+${b.bet_result}` : b.bet_result}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+/** mybet bet_status often carries a "<br>Tkt …" HTML fragment — strip it. */
+function cleanStatus(s: string | null): string {
+  if (!s) return '—'
+  return s.replace(/<br>.*/i, '').replace(/\s+/g, ' ').trim() || '—'
+}
+
+/** "2h before" / "+5m after live" — bet placement offset vs the game start. */
+function OffsetLabel({ placed, scheduled, actual }: { placed: string | null; scheduled: string | null; actual: string | null }) {
+  const o = placementOffset(placed, scheduled, actual)
+  if (!o) return <span className="text-[color:var(--muted-2)]">—</span>
+  return <span className={o.afterLive ? 'font-semibold text-[color:var(--live)]' : 'text-[color:var(--muted)]'}>{o.label}</span>
 }
 
 function scoreCtx(f: Fixture): ScoreCtx {
@@ -865,7 +1355,7 @@ function StatCard({
   sub?: string
 }) {
   return (
-    <div className="rounded-md border border-[color:var(--line-soft)] bg-[color:var(--panel)] px-3 py-2">
+    <div className="rounded-md bg-[color:var(--panel-2)] px-3 py-2">
       <div className="flex items-center justify-between">
         <span className="text-[10px] uppercase tracking-wide text-[color:var(--muted-2)]">{label}</span>
         {badge && (
@@ -888,34 +1378,13 @@ function StatCard({
 /** Users / Bets / Stake / P/L summary shown directly under the scoreboard. P/L
  *  is computed from the current score (so it ticks while live) and flips its
  *  badge LIVE → FINAL when the game ends. */
-function LiabilityOverview({ bets, fixture: f }: { bets: SwiftBetRow[]; fixture: Fixture }) {
-  const agg = aggregateBets(bets, scoreCtx(f))
-  const live = f.status === 'live'
-  const mode = f.status === 'completed' ? 'FINAL' : live ? 'LIVE' : 'PENDING'
-  return (
-    <div className="grid grid-cols-2 gap-2 border-t border-white/[0.05] bg-black/[0.1] px-5 py-3 sm:grid-cols-4">
-      <StatCard label="Users" value={agg.users} />
-      <StatCard label="Bets" value={agg.count} />
-      <StatCard label="Stake" value={`$${agg.stake.toFixed(2)}`} />
-      <StatCard
-        label="P/L"
-        value={`${agg.pl < 0 ? '-' : ''}$${Math.abs(agg.pl).toFixed(2)}`}
-        tone={plTone(agg.pl)}
-        badge={mode}
-        live={live}
-        sub={agg.open > 0 ? `${agg.open} open` : undefined}
-      />
-    </div>
-  )
-}
-
 /** Market bucket for a bet — its market type, or "Same Game Multi" for SGMs. */
 function marketGroupKey(b: SwiftBetRow): string {
   if ((b.type ?? '').toUpperCase() === 'SGM') return 'Same Game Multi'
   return b.matched_leg?.mt ?? b.matched_leg?.market ?? b.market_category ?? 'Other'
 }
 
-const BET_COLS = ['Placed', 'User', 'Type', 'Market', 'Outcome', 'Result', 'Stake', 'Odds', 'P/L'] as const
+const BET_COLS = ['Placed', 'vs Start', 'User', 'Type', 'Market', 'Outcome', 'Result', 'Stake', 'Odds', 'P/L'] as const
 
 /** One market's bets, as a card with its own aggregate header + bet table. */
 function MarketBetsCard({ title, bets, fixture: f }: { title: string; bets: SwiftBetRow[]; fixture: Fixture }) {
@@ -923,8 +1392,8 @@ function MarketBetsCard({ title, bets, fixture: f }: { title: string; bets: Swif
   const lateCount = bets.filter((b) => b.placed_after_start).length
   return (
     <div
-      className={`overflow-hidden rounded-lg border ${
-        lateCount > 0 ? 'border-[color:var(--live)]/40' : 'border-[color:var(--line-soft)]'
+      className={`overflow-hidden rounded-lg bg-[color:var(--panel)]/50 ${
+        lateCount > 0 ? 'border-t-2 border-[color:var(--live)]/60' : ''
       }`}
     >
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-[color:var(--line-soft)] bg-black/[0.2] px-4 py-2.5">
@@ -1348,6 +1817,9 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
             </div>
           )}
         </td>
+        <td className="px-3 py-2 align-top text-[11px] tabular-nums">
+          <OffsetLabel placed={b.placed_at_utc} scheduled={f.scheduledStart} actual={f.actualStart} />
+        </td>
         <td className="px-3 py-2 align-top font-mono text-[10.5px] text-[color:var(--muted-2)]">
           {b.user_id?.slice(0, 8) ?? '—'}
         </td>
@@ -1423,6 +1895,7 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
           const r = selResults[i]
           return (
             <tr key={i} className="border-t border-[color:var(--line-soft)]/40 bg-black/[0.18]">
+              <td />
               <td />
               <td />
               <td className="px-3 py-1.5 align-top text-[10px] text-[color:var(--muted-2)]">

@@ -63,20 +63,24 @@ const NBA: Record<string, string> = {
 }
 
 // ESPN's AFL paths use the standard club codes (espncdn /i/teamlogos/afl/500/).
+// Note the three that don't follow the obvious abbreviation: Fremantle is
+// `fre` (not frem), North Melbourne `nmfc` (not nm), Port Adelaide `port`
+// (not padl). The feed also SHOUTS some nicknames ("GWS GIANTS", "Gold Coast
+// SUNS"), so lookups are case-insensitive — see `espnLogoUrl`.
 const AFL: Record<string, string> = {
   'Adelaide Crows': 'adel', 'Adelaide': 'adel',
   'Brisbane Lions': 'bl', 'Brisbane': 'bl',
   'Carlton Blues': 'carl', 'Carlton': 'carl',
   'Collingwood Magpies': 'coll', 'Collingwood': 'coll',
   'Essendon Bombers': 'ess', 'Essendon': 'ess',
-  'Fremantle Dockers': 'frem', 'Fremantle': 'frem',
+  'Fremantle Dockers': 'fre', 'Fremantle': 'fre',
   'Geelong Cats': 'geel', 'Geelong': 'geel',
   'Gold Coast Suns': 'gcfc', 'Gold Coast': 'gcfc',
   'Greater Western Sydney Giants': 'gws', 'GWS Giants': 'gws', 'GWS': 'gws',
   'Hawthorn Hawks': 'haw', 'Hawthorn': 'haw',
   'Melbourne Demons': 'melb', 'Melbourne': 'melb',
-  'North Melbourne Kangaroos': 'nm', 'North Melbourne': 'nm', 'Kangaroos': 'nm',
-  'Port Adelaide Power': 'padl', 'Port Adelaide': 'padl',
+  'North Melbourne Kangaroos': 'nmfc', 'North Melbourne': 'nmfc', 'Kangaroos': 'nmfc',
+  'Port Adelaide Power': 'port', 'Port Adelaide': 'port',
   'Richmond Tigers': 'rich', 'Richmond': 'rich',
   'St Kilda Saints': 'stk', 'St Kilda': 'stk',
   'Sydney Swans': 'syd', 'Sydney': 'syd',
@@ -93,11 +97,25 @@ const WNBA: Record<string, string> = {
   'Las Vegas Aces': 'lv', 'Los Angeles Sparks': 'la', 'Minnesota Lynx': 'min',
   'New York Liberty': 'ny', 'Phoenix Mercury': 'phx', 'Seattle Storm': 'sea',
   'Washington Mystics': 'wsh',
+  // 2026 expansion clubs.
+  'Portland Fire': 'por', 'Toronto Tempo': 'tor',
 }
 
 interface LeagueMap {
   espnSport: string
   teams: Record<string, string>
+}
+
+/** Case-insensitive index of a team map, built once per map. */
+const lowerCache = new WeakMap<Record<string, string>, Record<string, string>>()
+function lookupTeam(teams: Record<string, string>, name: string): string | undefined {
+  let lower = lowerCache.get(teams)
+  if (!lower) {
+    lower = {}
+    for (const [k, v] of Object.entries(teams)) lower[k.toLowerCase()] = v
+    lowerCache.set(teams, lower)
+  }
+  return lower[name.trim().toLowerCase()]
 }
 
 /** Resolve which ESPN league applies from the feed's sport/league slugs. */
@@ -106,7 +124,8 @@ function leagueMap(sport: string, league: string): LeagueMap | null {
   const l = league.toLowerCase()
   if (l === 'mlb' || s === 'mlb') return { espnSport: 'mlb', teams: MLB }
   if (l === 'nfl' || s === 'nfl' || s === 'americanfootball') return { espnSport: 'nfl', teams: NFL }
-  if (l === 'nhl' && (s === 'icehockey' || s === 'hockey')) return { espnSport: 'nhl', teams: NHL }
+  // The feed sends NHL rows as sport=nhl AND as sport=icehockey/hockey.
+  if (l === 'nhl' || s === 'nhl') return { espnSport: 'nhl', teams: NHL }
   if (l === 'nba') return { espnSport: 'nba', teams: NBA }
   if (l === 'wnba') return { espnSport: 'wnba', teams: WNBA }
   if (l === 'afl' || s === 'afl') return { espnSport: 'afl', teams: AFL }
@@ -117,6 +136,6 @@ function leagueMap(sport: string, league: string): LeagueMap | null {
 export function espnLogoUrl(sport: string, league: string, teamName: string): string | null {
   const m = leagueMap(sport, league)
   if (!m) return null
-  const abbr = m.teams[teamName.trim()]
+  const abbr = lookupTeam(m.teams, teamName)
   return abbr ? `https://a.espncdn.com/i/teamlogos/${m.espnSport}/500/${abbr}.png` : null
 }

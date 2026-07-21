@@ -1,5 +1,5 @@
 import type { Fixture, FixtureStatus, PeriodScore } from './types'
-import { prettyLeague, prettySport, reclassifyRugbySport } from './sports'
+import { prettyLeague, prettySport, reclassifySport } from './sports'
 import { espnLogoUrl } from './teamLogos'
 import { cachedLogo, ensureLogoCache } from './logoCache'
 import { countryFlagUrl } from './countryFlags'
@@ -170,12 +170,20 @@ export async function fetchFixtureById(id: string): Promise<Fixture | null> {
   return row ? mapRow(row, Date.now()) : null
 }
 
-/** Logo precedence: feed column → soccer national-team flag → ESPN majors →
+/** Logo precedence: feed column → national-team flag → ESPN majors →
  *  resolved cache → monogram (null). */
 function resolveLogo(sport: string, league: string, name: string, feedLogo: string | null): string | null {
-  // World Cup / international fixtures name teams by country → show its flag.
-  const flag = sport.toLowerCase() === 'soccer' ? countryFlagUrl(name) : null
-  return feedLogo ?? flag ?? espnLogoUrl(sport, league, name) ?? cachedLogo(sport, name) ?? null
+  // Some feed rows carry trailing whitespace ("UMF Grindavik ") which misses
+  // every exact-match lookup below.
+  const n = name.trim()
+  const s = sport.toLowerCase()
+  // Teams named by country get a flag: soccer internationals (World Cup,
+  // friendlies) and cricket's bilateral series. Cricket's *domestic* leagues
+  // (T20 Blast) name clubs, which never match the country table — but scoping
+  // to `international_*` keeps a club called "Georgia" from flying a flag.
+  const national = s === 'soccer' || (s === 'cricket' && league.toLowerCase().startsWith('international'))
+  const flag = national ? countryFlagUrl(n) : null
+  return feedLogo ?? flag ?? espnLogoUrl(sport, league, n) ?? cachedLogo(sport, n) ?? null
 }
 
 // --- column mapping -------------------------------------------------------
@@ -277,9 +285,12 @@ function mapRow(r: Row, nowMs: number): Fixture {
   const liveH2h = { home: r.live_h2h_home, draw: r.live_h2h_draw, away: r.live_h2h_away }
   const closingH2h = { home: r.closing_h2h_home, draw: r.closing_h2h_draw, away: r.closing_h2h_away }
 
-  // Generic `rugby` rows mix Union + League — reclassify by league name so
-  // they slot under the proper Rugby Union / Rugby League sidebar entry.
-  const rawSport = reclassifyRugbySport(r.sport ?? '', r.league ?? '')
+  // The feed's `sport` needs correcting from the league: generic `rugby` rows
+  // mix Union + League, and a few leagues arrive filed under the wrong sport
+  // outright. Note the resolveLogo calls below deliberately keep `r.sport` —
+  // entity_logos is keyed by the *raw* feed sport, so correcting it here would
+  // miss the cache.
+  const rawSport = reclassifySport(r.sport ?? '', r.league ?? '')
   return {
     id: r.optic_fixture_id ?? `${r.home_team}-${r.away_team}-${r.scheduled_start}`,
     sport: prettySport(rawSport),

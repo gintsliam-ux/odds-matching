@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Outlet, useLocation, useOutletContext, useSearchParams } from 'react-router-dom'
 import { Header } from './Header'
 import { Sidebar } from './Sidebar'
@@ -92,6 +92,15 @@ export default function Layout() {
 
   const ctx: TerminalContext = { fixtures, now, feed, error, day, notifications, notificationsLoading }
 
+  // Collapsible left nav — persisted so it stays how the user left it.
+  const [navOpen, setNavOpen] = useState(() => localStorage.getItem('navCollapsed') !== '1')
+  const toggleNav = () => {
+    setNavOpen((v) => {
+      localStorage.setItem('navCollapsed', v ? '1' : '0')
+      return !v
+    })
+  }
+
   return (
     <div className="flex min-h-full flex-col text-gray-200">
       <AlertToasts toasts={toasts} onDismiss={dismiss} onDismissAll={dismissAll} />
@@ -103,9 +112,11 @@ export default function Layout() {
         lastUpdated={lastUpdated}
         mongoState={mongoState}
         mongoPulse={mongoPulse}
+        navOpen={navOpen}
+        onToggleNav={toggleNav}
       />
       <div className="flex min-h-0 flex-1">
-        <Sidebar fixtures={fixtures} day={day} notificationCount={notifications.length} />
+        <Sidebar fixtures={fixtures} day={day} notificationCount={notifications.length} collapsed={!navOpen} />
         <main className="min-w-0 flex-1">
           <Outlet context={ctx} />
         </main>

@@ -82,11 +82,33 @@ const RUGBY_LEAGUE_LEAGUES = new Set([
   'england_-_super_league',
 ])
 
-export function reclassifyRugbySport(rawSport: string, rawLeague: string): string {
+/**
+ * Leagues the OPTIC feed sometimes files under the wrong sport. The league is
+ * unambiguous, so it wins over the row's `sport` — e.g. one Lega Basket Serie A
+ * fixture arrived as `soccer` while its three siblings came through as
+ * `basketball`, which put an Italian basketball game in the Soccer bucket.
+ *
+ * Only add a league here when its name pins the sport beyond doubt: this
+ * silently overrides the feed.
+ */
+const LEAGUE_SPORT_OVERRIDES: Record<string, string> = {
+  'italy_-_lega_basket_serie_a': 'basketball',
+  // OPTIC mis-tags these in the source feed.
+  'australia_-_ice_hockey_league': 'icehockey', // fed as soccer
+  'iceland_-_1_deild': 'soccer', // fed as unknown (Icelandic 2nd-div football)
+}
+
+/**
+ * The feed's `sport` is not always trustworthy. Correct it from the league:
+ * first the explicit overrides above, then split the generic `rugby` bucket
+ * into Union / League so the sidebar shows two entries rather than three.
+ */
+export function reclassifySport(rawSport: string, rawLeague: string): string {
+  const league = (rawLeague ?? '').toLowerCase()
+  const override = LEAGUE_SPORT_OVERRIDES[league]
+  if (override) return override
   if (canon(rawSport) !== 'rugby') return rawSport
-  return RUGBY_LEAGUE_LEAGUES.has((rawLeague ?? '').toLowerCase())
-    ? 'rugby_league'
-    : 'rugby_union'
+  return RUGBY_LEAGUE_LEAGUES.has(league) ? 'rugby_league' : 'rugby_union'
 }
 
 export function sportEmoji(sport: string): string {
@@ -189,6 +211,7 @@ const PARENT_SPORT: Record<string, string> = {
   nfl: 'American Football',
   amfootball: 'American Football',
   afl: 'Australian Rules',
+  aussierules: 'Australian Rules',
   nrl: 'Rugby League',
   ucl: 'Soccer',
   kbo: 'Baseball',
@@ -325,6 +348,53 @@ export function swiftSportOf(opticRawSport: string): string | null {
 }
 
 /**
+ * Canonical mybet sport name for an OPTIC sport slug. mybet uses its own casing
+ * and a couple of different names from SwiftBet (mybet keeps "Soccer" where
+ * SwiftBet uses "Football"; "Gridiron" for American Football), so it needs its
+ * own table. Names below are the exact strings in the mybet catalogue. Returns
+ * null for sports with no mybet coverage so the picker shows everything rather
+ * than an empty list.
+ */
+const OPTIC_TO_MYBET_SPORT: Record<string, string> = {
+  soccer: 'Soccer',
+  ucl: 'Soccer',
+  tennis: 'Tennis',
+  cricket: 'Cricket',
+  baseball: 'Baseball',
+  mlb: 'Baseball',
+  kbo: 'Baseball',
+  npb: 'Baseball',
+  basketball: 'Basketball',
+  nba: 'Basketball',
+  wnba: 'Basketball',
+  rugbyleague: 'Rugby League',
+  nrl: 'Rugby League',
+  rugby: 'Rugby Union',
+  rugbyunion: 'Rugby Union',
+  afl: 'Australian Rules',
+  aussierules: 'Australian Rules',
+  australianrules: 'Australian Rules',
+  mma: 'Mixed Martial Arts',
+  ufc: 'Mixed Martial Arts',
+  boxing: 'Boxing',
+  snooker: 'Snooker',
+  esports: 'Esports',
+  golf: 'Golf',
+  amfootball: 'Gridiron',
+  americanfootball: 'Gridiron',
+  nfl: 'Gridiron',
+  motorsport: 'Motor Racing',
+  cycling: 'Cycling',
+  icehockey: 'Ice Hockey',
+  hockey: 'Ice Hockey',
+  nhl: 'Ice Hockey',
+}
+
+export function mybetSportOf(opticRawSport: string): string | null {
+  return OPTIC_TO_MYBET_SPORT[canon(opticRawSport)] ?? null
+}
+
+/**
  * "france_-_ligue_1" → "France - Ligue 1",
  * "australia_-_a-league_women" → "Australia - A-League Women",
  * "international_-_t20_matches" → "International - T20 Matches".
@@ -338,6 +408,11 @@ const LEAGUE_ACRONYMS = new Set([
   'ufc', 'pfl', 'ipl', 'mls', 'mma', 'efl', 'fa', 'uefa', 'fifa', 'caf', 'afc', 'conmebol',
   'concacaf', 'icc', 'pdc', 'wsl', 'usa', 'uk', 'atp', 'wta', 'urc', 'mlr', 'kbo', 'npb',
   'epl', 'ucl', 'uel', 'odi', 't20', 'd2', 'k1', 'j1', 'nb', 'ii', 'iii',
+  // Domestic basketball leagues.
+  'bbl', 'lnb', 'acb', 'bsl', 'cba', 'nbl', 'nbb', 'bsn', 'vba', 'lbl', 'lbf', 'cebl', 'tbt',
+  'a1', 'wnbl', 'lkl', 'vtb',
+  // Baseball / cricket / other.
+  'lmb', 'cpbl', 'kbl', 'psl', 'bbl20', 'sa20', 'cpl', 'k2', 'j2', 'j3', 'usl',
 ])
 
 function titleCaseWord(w: string): string {

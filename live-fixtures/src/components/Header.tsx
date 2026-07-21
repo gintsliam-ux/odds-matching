@@ -1,4 +1,4 @@
-import { Activity } from 'lucide-react'
+import { Menu } from 'lucide-react'
 import type { FeedState } from '../hooks/useFixtures'
 import type { MongoFeedState, MongoPulse } from '../hooks/useMongoPulse'
 import { melbTime, utcClock } from '../lib/format'
@@ -18,6 +18,8 @@ interface Props {
   lastUpdated: Date | null
   mongoState: MongoFeedState
   mongoPulse: MongoPulse | null
+  navOpen: boolean
+  onToggleNav: () => void
 }
 
 /** "42s" / "3m" / "1h12m" — compact age for the freshness label. */
@@ -91,7 +93,7 @@ function Stat({ label, value, color }: { label: string; value: number; color: st
   )
 }
 
-export function Header({ counts, now, nextPollAt, feed, lastUpdated, mongoState, mongoPulse }: Props) {
+export function Header({ counts, now, nextPollAt, feed, lastUpdated, mongoState, mongoPulse, navOpen, onToggleNav }: Props) {
   const secs = Math.max(0, Math.round((nextPollAt - now.getTime()) / 1000))
 
   const board = boardHealth(feed, lastUpdated, now)
@@ -114,20 +116,33 @@ export function Header({ counts, now, nextPollAt, feed, lastUpdated, mongoState,
         (mAge != null ? `\nLast write ${shortAge(mAge)} ago` : '')
       : 'SwiftBet feed (Mongo) — unreachable'
 
+  // mybet freshness — same green/amber/red thresholds as the SwiftBet feed
+  // (fresh ≤6m, stale ≤30m). Absent when the pulse endpoint couldn't reach it.
+  const mb = mongoPulse?.mybet ?? null
+  const mbAge = mb?.ageSec ?? null
+  const mybetShown = !!mb
+  const mybetHealth: Health = mbAge == null ? 'down' : mbAge <= 360 ? 'ok' : mbAge <= 1800 ? 'stale' : 'stale'
+  const mybetDetail = mbAge != null ? shortAge(mbAge) : 'down'
+  const mybetTitle = mb
+    ? `mybet feed (Mongo)\n${mb.total} events · ${mb.open} open` +
+      (mbAge != null ? `\nLast write ${shortAge(mbAge)} ago` : '')
+    : 'mybet feed (Mongo) — unreachable'
+
   return (
     <header className="sticky top-0 z-20 border-b border-[color:var(--line-soft)] bg-[color:var(--bg)]/80 backdrop-blur-md">
-      <div className="flex h-14 items-center gap-8 px-5">
-        {/* brand */}
-        <div className="flex items-center gap-2.5">
-          <Activity className="h-4 w-4 text-[color:var(--total)]" strokeWidth={2.5} />
-          <span className="text-[14px] font-semibold tracking-tight text-white">
-            Live Events Terminal
-          </span>
-        </div>
+      <div className="flex h-14 items-center gap-5 px-4">
+        {/* nav toggle */}
+        <button
+          onClick={onToggleNav}
+          className="rounded-md p-2 text-[color:var(--muted)] transition-colors hover:bg-white/5 hover:text-gray-200"
+          title={navOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+          aria-label={navOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+        >
+          <Menu className="h-[18px] w-[18px]" />
+        </button>
 
         {/* counts */}
         <div className="hidden items-center gap-5 md:flex">
-          <Stat label="Total" value={counts.total} color="text-[color:var(--total)]" />
           <Stat label="Live" value={counts.live} color="text-[color:var(--live)]" />
           <Stat label="Upcoming" value={counts.upcoming} color="text-[color:var(--up)]" />
           <Stat label="Completed" value={counts.completed} color="text-[color:var(--muted)]" />
@@ -135,8 +150,11 @@ export function Header({ counts, now, nextPollAt, feed, lastUpdated, mongoState,
 
         {/* feed status — two health pulses: OpticOdds board + SwiftBet (Mongo) */}
         <div className="ml-auto flex items-center gap-4 text-[12px] text-[color:var(--muted)]">
-          <StatusPulse label="Live feed" health={board} detail={boardDetail} title={boardTitle} />
-          <StatusPulse label="Mongo" health={mongo} detail={mongoDetail} title={mongoTitle} />
+          <StatusPulse label="Optic Odds" health={board} detail={boardDetail} title={boardTitle} />
+          <StatusPulse label="Swiftbet" health={mongo} detail={mongoDetail} title={mongoTitle} />
+          {mybetShown && (
+            <StatusPulse label="Mybet" health={mybetHealth} detail={mybetDetail} title={mybetTitle} />
+          )}
           <span className="hidden sm:inline">
             Next poll <span className="font-semibold tabular-nums text-gray-300">{secs}s</span>
           </span>

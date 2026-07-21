@@ -1,29 +1,39 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, Search, Trash2, X } from 'lucide-react'
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
+import { getMybetCatalog } from '../lib/mybetCatalog'
 import {
   setCompetitionMappingsManual,
   setEventMappingManual,
   markUnmapped,
+  type Provider,
 } from '../lib/mappingData'
-import { swiftSportOf } from '../lib/sports'
+import { mybetSportOf, swiftSportOf } from '../lib/sports'
 import { ListSkeleton } from './Skeleton'
 import { searchSwiftCompetitions, searchSwiftEvents } from '../lib/swiftStatus'
+import { searchMybetCompetitions, searchMybetEvents } from '../lib/mybetStatus'
 
+// The editor is provider-agnostic: SwiftBet and mybet catalogues share the same
+// competition/event shape, so we type against the SwiftBet interfaces and the
+// mybet results assign structurally. `provider` on the target picks the
+// catalogue, the live-search endpoint, the sport filter, and the save table.
 export type EditorTarget =
   | {
       kind: 'competition'
+      /** 'swift' (default) or 'mybet' — which book this mapping targets. */
+      provider?: Provider
       // raw OpticOdds slugs (must match DB)
       opticSportRaw: string
       opticLeagueRaw: string
       opticTournamentRaw: string
       // current mapping (for display + pre-selection)
       label: string // e.g. "AFL · AFL"
-      /** All currently-mapped SWIFT competition ids — picker pre-checks these. */
+      /** All currently-mapped book competition ids — picker pre-checks these. */
       currentSwiftIds: string[]
     }
   | {
       kind: 'event'
+      provider?: Provider
       opticFixtureId: string
       /** Raw OPTIC sport slug — used to narrow the candidate list to that sport. */
       opticSportRaw: string
@@ -41,6 +51,8 @@ interface Props {
 }
 
 export function MappingEditor({ target, onClose, onSaved }: Props) {
+  const provider: Provider = target.provider ?? 'swift'
+  const bookLabel = provider === 'mybet' ? 'MYBET' : 'SWIFT'
   const [query, setQuery] = useState('')
   const [comps, setComps] = useState<SwiftCompetition[]>([])
   const [events, setEvents] = useState<SwiftEvent[]>([])
@@ -71,7 +83,8 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
 
   useEffect(() => {
     let alive = true
-    getSwiftCatalog()
+    const catalog = provider === 'mybet' ? getMybetCatalog() : getSwiftCatalog()
+    catalog
       .then((cat) => {
         if (!alive) return
         setComps(cat.competitions)
@@ -86,7 +99,7 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
     return () => {
       alive = false
     }
-  }, [target])
+  }, [target, provider])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -94,13 +107,11 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  // SWIFT sport name to restrict the candidate list to. Falls back to "no
-  // filter" if we don't recognize the OPTIC sport — better to show everything
-  // than to lock the user out.
-  const swiftSport =
-    target.kind === 'competition'
-      ? swiftSportOf(target.opticSportRaw)
-      : swiftSportOf(target.opticSportRaw)
+  // Book sport name to restrict the candidate list to. Each book uses its own
+  // sport casing/names (swiftSportOf vs mybetSportOf — e.g. mybet keeps "Soccer"
+  // where SwiftBet uses "Football"). Falls back to "no filter" for sports the
+  // book doesn't map, so an unknown sport shows everything rather than nothing.
+  const swiftSport = provider === 'mybet' ? mybetSportOf(target.opticSportRaw) : swiftSportOf(target.opticSportRaw)
   const sportMatches = (s: string | null) =>
     !swiftSport || (s ?? '').toLowerCase() === swiftSport.toLowerCase()
 
@@ -119,15 +130,21 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
       setLiveSearching(true)
       try {
         if (target.kind === 'competition') {
-          const comps = await searchSwiftCompetitions({ q, sport: swiftSport, signal: ctl.signal })
+          const comps =
+            provider === 'mybet'
+              ? await searchMybetCompetitions({ q, signal: ctl.signal })
+              : await searchSwiftCompetitions({ q, sport: swiftSport, signal: ctl.signal })
           if (!ctl.signal.aborted) setLiveComps(comps)
         } else {
-          const events = await searchSwiftEvents({
-            q,
-            sport: target.swiftCompetitionId ? null : swiftSport,
-            competitionId: target.swiftCompetitionId,
-            signal: ctl.signal,
-          })
+          const events =
+            provider === 'mybet'
+              ? await searchMybetEvents({ q, competitionId: target.swiftCompetitionId, signal: ctl.signal })
+              : await searchSwiftEvents({
+                  q,
+                  sport: target.swiftCompetitionId ? null : swiftSport,
+                  competitionId: target.swiftCompetitionId,
+                  signal: ctl.signal,
+                })
           if (!ctl.signal.aborted) setLiveEvents(events)
         }
       } catch {
@@ -141,7 +158,7 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
       clearTimeout(t)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, target, swiftSport])
+  }, [query, target, swiftSport, provider])
 
   const visibleComps = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -164,12 +181,23 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [comps, query, swiftSport, liveComps])
 
+  // Only offer UPCOMING candidates — a completed game is never a valid mapping
+  // target and just clutters the picker. "Upcoming" = start within a small
+  // grace of now onward (grace keeps a just-started/live game selectable). The
+  // currently-mapped event is always kept so re-opening the editor still shows
+  // the existing pick even if it has since kicked off.
+  const UPCOMING_GRACE_MS = 3 * 60 * 60 * 1000
+  const currentId = target.kind === 'event' ? target.currentSwiftId : null
+  const isUpcoming = (e: SwiftEvent) =>
+    e.id === currentId || !e.start || Date.parse(e.start) > Date.now() - UPCOMING_GRACE_MS
+
   const visibleEvents = useMemo(() => {
     const q = query.trim().toLowerCase()
     const local = events.filter((e) => {
       // When the event is scoped to a paired competition, events are already
       // pre-filtered by competition (which implies the right sport).
       if (target.kind === 'event' && !target.swiftCompetitionId && !sportMatches(e.sport)) return false
+      if (!isUpcoming(e)) return false
       if (q && !`${e.name ?? ''} ${e.home ?? ''} ${e.away ?? ''} ${e.competition ?? ''}`
         .toLowerCase()
         .includes(q))
@@ -180,6 +208,7 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
     const seen = new Set(local.map((e) => e.id))
     for (const e of liveEvents) {
       if (seen.has(e.id)) continue
+      if (!isUpcoming(e)) continue
       if (target.kind === 'event' && !target.swiftCompetitionId && !sportMatches(e.sport)) continue
       if (target.kind === 'event' && target.swiftCompetitionId && e.cid && e.cid !== target.swiftCompetitionId) continue
       seen.add(e.id)
@@ -204,12 +233,14 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
           opticLeagueRaw: target.opticLeagueRaw,
           opticTournamentRaw: target.opticTournamentRaw,
           picks,
+          provider,
         })
       } else {
         const id = [...picked][0] ?? null
         await setEventMappingManual({
           opticFixtureId: target.opticFixtureId,
           swiftEventId: id,
+          provider,
         })
       }
       onSaved()
@@ -231,9 +262,10 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
           opticSportRaw: target.opticSportRaw,
           opticLeagueRaw: target.opticLeagueRaw,
           opticTournamentRaw: target.opticTournamentRaw,
+          provider,
         })
       } else {
-        await setEventMappingManual({ opticFixtureId: target.opticFixtureId, swiftEventId: null })
+        await setEventMappingManual({ opticFixtureId: target.opticFixtureId, swiftEventId: null, provider })
       }
       onSaved()
       onClose()
@@ -259,6 +291,15 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
           <div className="flex items-center gap-2 text-[12px] font-bold tracking-widest text-gray-100">
             EDIT MAPPING
             <span className="text-gray-600">·</span>
+            <span
+              className={
+                provider === 'mybet'
+                  ? 'rounded border border-[var(--live)]/40 bg-[var(--live)]/10 px-1.5 py-0.5 text-[10px] text-[var(--live)]'
+                  : 'rounded border border-[var(--up)]/40 bg-[var(--up)]/10 px-1.5 py-0.5 text-[10px] text-[var(--up)]'
+              }
+            >
+              {bookLabel}
+            </span>
             <span className="text-gray-400">{isComp ? 'COMPETITION' : 'EVENT'}</span>
           </div>
           <button
@@ -298,7 +339,7 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder={isComp ? 'SEARCH SWIFT COMPETITION…' : 'SEARCH SWIFT EVENT…'}
+              placeholder={isComp ? `SEARCH ${bookLabel} COMPETITION…` : `SEARCH ${bookLabel} EVENT…`}
               autoFocus
               className="w-full rounded-md border border-[var(--line)] bg-black/30 py-2 pl-9 pr-3 text-[12px] tracking-wider text-gray-200 placeholder:text-gray-600 focus:border-gray-600 focus:outline-none"
             />

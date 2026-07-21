@@ -126,7 +126,7 @@ async function captureActualStarts(
   const allIds = events.map((e) => e.id)
   const inList = allIds.map((id) => `"${id}"`).join(',')
   const sel = await fetch(
-    `${SUPABASE_URL}/rest/v1/event_mapping?select=gutsy_event_id,swift_actual_start&gutsy_event_id=in.(${inList})`,
+    `${SUPABASE_URL}/rest/v1/event_mapping?select=gutsy_event_id,swift_actual_start&provider=eq.swift&gutsy_event_id=in.(${inList})`,
     { headers },
   )
   if (!sel.ok) return
@@ -175,7 +175,7 @@ async function captureActualStarts(
   await Promise.all([
     ...toWrite.map(({ id, stamp }) =>
       fetch(
-        `${SUPABASE_URL}/rest/v1/event_mapping?gutsy_event_id=eq.${id}&swift_actual_start=is.null`,
+        `${SUPABASE_URL}/rest/v1/event_mapping?provider=eq.swift&gutsy_event_id=eq.${id}&swift_actual_start=is.null`,
         {
           method: 'PATCH',
           headers: { ...headers, Prefer: 'return=minimal' },
@@ -184,7 +184,7 @@ async function captureActualStarts(
       ),
     ),
     ...toClear.map((id) =>
-      fetch(`${SUPABASE_URL}/rest/v1/event_mapping?gutsy_event_id=eq.${id}`, {
+      fetch(`${SUPABASE_URL}/rest/v1/event_mapping?provider=eq.swift&gutsy_event_id=eq.${id}`, {
         method: 'PATCH',
         headers: { ...headers, Prefer: 'return=minimal' },
         body: JSON.stringify({ swift_actual_start: null }),

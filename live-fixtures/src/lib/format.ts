@@ -134,3 +134,41 @@ export function agoLabel(iso: string | null, now: Date): string {
 function pad(n: number): string {
   return n < 10 ? `0${n}` : String(n)
 }
+
+/** Bet-placement offset vs a game's start. Before the actual start we measure
+ *  against the SCHEDULED start (how early the bet went on); once OPTIC gives us
+ *  an ACTUAL start, bets placed after it are flagged as "after live" (the
+ *  worrying ones). Returns a short label + whether it's after live. */
+export function placementOffset(
+  placedIso: string | null,
+  scheduledIso: string | null,
+  actualIso: string | null,
+): { label: string; afterLive: boolean } | null {
+  if (!placedIso) return null
+  const placed = Date.parse(placedIso)
+  if (!Number.isFinite(placed)) return null
+  const actual = actualIso ? Date.parse(actualIso) : NaN
+  if (Number.isFinite(actual) && placed > actual) {
+    return { label: `+${dur(placed - actual)} after live`, afterLive: true }
+  }
+  const sched = scheduledIso ? Date.parse(scheduledIso) : NaN
+  if (Number.isFinite(sched)) {
+    const d = sched - placed
+    if (d >= 0) return { label: `${dur(d)} before`, afterLive: false }
+    return { label: `+${dur(-d)} after sched`, afterLive: false }
+  }
+  return null
+}
+
+/** "2d 4h" / "3h 12m" / "5m" / "45s" — compact duration for a millisecond span. */
+function dur(ms: number): string {
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return h % 1 === 0 && m % 60 === 0 ? `${h}h` : `${h}h ${m % 60}m`
+  const d = Math.floor(h / 24)
+  const rh = h % 24
+  return rh === 0 ? `${d}d` : `${d}d ${rh}h`
+}

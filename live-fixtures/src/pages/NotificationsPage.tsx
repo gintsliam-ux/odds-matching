@@ -5,11 +5,17 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { useTerminal } from '../components/Layout'
 import type { Notification } from '../hooks/useNotifications'
 import { useCoverageGaps } from '../hooks/useCoverageGaps'
-import { sportEmoji, sportLabel } from '../lib/sports'
+import { sportLabel } from '../lib/sports'
+import { LeagueBadge } from '../components/LeagueBadge'
 import { melbDateTimeShort, utcDateTimeShort } from '../lib/format'
+import { swiftEventUrl } from '../lib/swiftStatus'
+import { mybetEventUrl } from '../lib/mybetStatus'
 
 const KIND_LABEL: Record<Notification['kind'], string> = {
+  swift_late_bet: 'Bets placed on SwiftBet after OPTIC went live',
+  mybet_late_bet: 'Bets placed on mybet after OPTIC went live',
   swift_still_open: 'SwiftBet still taking bets on started event',
+  mybet_still_open: 'mybet market still open on started event',
   optic_overdue_prematch: 'OPTIC still upcoming after scheduled kickoff',
 }
 
@@ -31,21 +37,28 @@ export default function NotificationsPage() {
 
   const grouped = useMemo(() => {
     const m = new Map<Notification['kind'], Notification[]>()
-    // Force order: swift_still_open first (highest priority).
-    for (const kind of ['swift_still_open', 'optic_overdue_prematch'] as const) m.set(kind, [])
+    // Force order: bets-after-live first (money already at risk), then still-open.
+    for (const kind of ['swift_late_bet', 'mybet_late_bet', 'swift_still_open', 'mybet_still_open', 'optic_overdue_prematch'] as const) m.set(kind, [])
     for (const n of notifications) m.get(n.kind)!.push(n)
     return [...m.entries()].filter(([, list]) => list.length > 0)
   }, [notifications])
 
-  const stillOpen = notifications.filter((n) => n.kind === 'swift_still_open').length
+  const stillOpen = notifications.filter(
+    (n) =>
+      n.kind === 'swift_still_open' ||
+      n.kind === 'mybet_still_open' ||
+      n.kind === 'swift_late_bet' ||
+      n.kind === 'mybet_late_bet',
+  ).length
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
+    <div className="mx-auto max-w-[1400px] px-5 py-6">
       <header className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-white">Notifications</h1>
           <p className="mt-1 text-sm text-[color:var(--muted-2)]">
-            Events still open on SwiftBet after the game has started. Polled every 10s.
+            Events where OPTIC has turned live but a book still has the market open
+            (SwiftBet prematch, or mybet before its close time). Polled every 10s.
           </p>
         </div>
         {stillOpen > 0 && (
@@ -57,7 +70,7 @@ export default function NotificationsPage() {
       </header>
 
       {loading && notifications.length === 0 ? (
-        <div className="rounded-lg border border-[color:var(--line-soft)] bg-[color:var(--panel)] p-8 text-sm text-[color:var(--muted-2)]">
+        <div className="rounded-lg bg-[color:var(--panel)] p-8 text-sm text-[color:var(--muted-2)]">
           Loading…
         </div>
       ) : notifications.length === 0 ? (
@@ -65,7 +78,7 @@ export default function NotificationsPage() {
           <BellOff className="h-8 w-8 text-[color:var(--muted-2)]" />
           <div className="text-sm text-white">All clear</div>
           <div className="text-xs text-[color:var(--muted-2)]">
-            No SwiftBet markets are open on started games.
+            No SwiftBet or mybet markets are open on OPTIC-live games.
           </div>
         </div>
       ) : (
@@ -74,13 +87,13 @@ export default function NotificationsPage() {
             <h2 className="mb-3 text-xs font-medium uppercase tracking-wide text-[color:var(--muted-2)]">
               {KIND_LABEL[kind]} · {list.length}
             </h2>
-            <div className="overflow-hidden rounded-lg border border-[color:var(--line-soft)] bg-[color:var(--panel)]">
+            <div className="overflow-hidden rounded-lg bg-[color:var(--panel)]">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-[color:var(--line-soft)] text-left text-[11px] uppercase tracking-wide text-[color:var(--muted-2)]">
                     <th className="px-4 py-2.5 font-medium">Sport</th>
                     <th className="px-4 py-2.5 font-medium">Match-up</th>
-                    <th className="px-4 py-2.5 font-medium">SWIFT event</th>
+                    <th className="px-4 py-2.5 font-medium">Book event</th>
                     <th className="px-4 py-2.5 font-medium">Started</th>
                     <th className="px-4 py-2.5"></th>
                   </tr>
@@ -129,7 +142,7 @@ export default function NotificationsPage() {
             key={t.tournamentKey}
             className="flex items-center gap-3 border-b border-[color:var(--line-soft)] px-4 py-2 last:border-b-0"
           >
-            <span className="text-base leading-none">{sportEmoji(t.sport)}</span>
+            <LeagueBadge sport={t.sport} league={t.league} size={18} />
             <div className="flex-1">
               <div className="text-sm text-gray-100">{t.league}</div>
               <div className="text-[11px] text-[color:var(--muted-2)]">{sportLabel(t.sport)}</div>
@@ -152,12 +165,14 @@ function NotificationRow({ n }: { n: Notification }) {
   const utc = startedRef ? utcDateTimeShort(startedRef) : '—'
   const melb = startedRef ? melbDateTimeShort(startedRef) : '—'
   const ago = lateLabel(startedRef)
-  const isPrimary = n.kind === 'swift_still_open'
+  const isLateBet = n.kind === 'swift_late_bet' || n.kind === 'mybet_late_bet'
+  const isMybet = n.kind === 'mybet_still_open' || n.kind === 'mybet_late_bet'
+  const isPrimary = n.kind !== 'optic_overdue_prematch'
   return (
     <tr className={`border-t border-[color:var(--line-soft)] ${isPrimary ? 'bg-[color:var(--live)]/[0.04] hover:bg-[color:var(--live)]/[0.08]' : 'hover:bg-white/[0.02]'}`}>
       <td className="px-4 py-3">
         <div className="flex items-center gap-2 text-xs text-gray-300">
-          <span className="text-base leading-none">{sportEmoji(n.sport)}</span>
+          <LeagueBadge sport={n.sport} league={n.league} size={18} />
           <div>
             <div className="font-medium text-gray-100">{sportLabel(n.sport)}</div>
             <div className="text-[11px] text-[color:var(--muted-2)]">{n.league}</div>
@@ -169,9 +184,47 @@ function NotificationRow({ n }: { n: Notification }) {
         <div className="text-[color:var(--muted-2)]">vs {n.away}</div>
       </td>
       <td className="px-4 py-3 text-xs">
-        {n.swiftEventId ? (
+        {isLateBet ? (
+          <div>
+            <div className="inline-flex items-center gap-1 rounded bg-[color:var(--live)]/15 px-1.5 py-0.5 text-[11px] font-semibold text-[color:var(--live)]">
+              {n.lateBetCount} {n.lateBetCount === 1 ? 'bet' : 'bets'} after live
+            </div>
+            {n.lateBetStake ? (
+              <div className="mt-1 tabular-nums text-[11px] text-gray-300">${n.lateBetStake.toFixed(2)} staked</div>
+            ) : null}
+            <div className="mt-1 inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-medium text-gray-300">
+              {isMybet ? 'mybet' : 'SWIFT'}
+            </div>
+          </div>
+        ) : isMybet ? (
+          n.mybetEventId ? (
+            <>
+              <a
+                href={mybetEventUrl(n.mybetEventId, n.sport)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-gray-200 hover:text-[color:var(--mybet)]"
+              >
+                {n.mybetEventName ?? '—'} <ExternalLink className="h-3 w-3" />
+              </a>
+              <div className="font-mono text-[10px] text-[color:var(--muted-2)]">{n.mybetEventId}</div>
+              <div className="mt-1 inline-flex items-center gap-1 rounded bg-[color:var(--live)]/15 px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--live)]">
+                mybet: OPEN
+              </div>
+            </>
+          ) : (
+            <div className="text-[color:var(--muted-2)]">unmapped</div>
+          )
+        ) : n.swiftEventId ? (
           <>
-            <div className="text-gray-200">{n.swiftEventName ?? '—'}</div>
+            <a
+              href={swiftEventUrl(n.swiftEventId)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-gray-200 hover:text-[color:var(--swift)]"
+            >
+              {n.swiftEventName ?? '—'} <ExternalLink className="h-3 w-3" />
+            </a>
             <div className="font-mono text-[10px] text-[color:var(--muted-2)]">{n.swiftEventId}</div>
             <div className={`mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
               n.swiftStatus === 'prematch'
@@ -227,7 +280,7 @@ function CoverageSection({
     <section className="mb-6">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 rounded-lg border border-[color:var(--line-soft)] bg-[color:var(--panel)] px-4 py-3 text-left transition-colors hover:bg-white/[0.02]"
+        className="flex w-full items-center gap-2 rounded-lg bg-[color:var(--panel)] px-4 py-3 text-left transition-colors hover:bg-[color:var(--panel-2)]"
       >
         {open ? (
           <ChevronDown className="h-3.5 w-3.5 text-[color:var(--muted-2)]" />
@@ -240,7 +293,7 @@ function CoverageSection({
         <span className="tabular-nums text-[12px] text-gray-300">{loading ? '…' : count}</span>
       </button>
       {open && (
-        <div className="mt-2 overflow-hidden rounded-lg border border-[color:var(--line-soft)] bg-[color:var(--panel)]">
+        <div className="mt-2 overflow-hidden rounded-lg bg-[color:var(--panel)]">
           {count === 0 ? (
             <div className="px-4 py-4 text-[12px] text-[color:var(--muted-2)]">{emptyHint}</div>
           ) : (

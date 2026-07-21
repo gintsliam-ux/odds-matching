@@ -12,14 +12,21 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 
-// scripts/build-mapping.mjs lives outside /api so it's not auto-bundled. We
-// import it lazily to give it a chance to read MONGO_URI / VITE_SUPABASE_*
-// from the function env at first call.
+// scripts/*.mjs live outside /api so they're not auto-bundled. We import them
+// lazily to give them a chance to read MONGO_URI / VITE_SUPABASE_* from the
+// function env at first call.
 async function runMapping() {
   // Vercel bundles any reachable import; pulled lazily so the cold start of
   // unrelated functions doesn't drag the mongodb driver in.
   const mod = (await import('../../scripts/build-mapping.mjs')) as { runMapping: () => Promise<void> }
   await mod.runMapping()
+}
+
+// Hobby caps us at 2 cron slots (both taken: this + resolve-logos), so the
+// mybet matcher rides along in this handler rather than getting its own cron.
+async function runMybetMapping() {
+  const mod = (await import('../../scripts/build-mybet-mapping.mjs')) as { runMybetMapping: () => Promise<void> }
+  await mod.runMybetMapping()
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -39,7 +46,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const t0 = Date.now()
   try {
     await runMapping()
-    res.status(200).json({ ok: true, ms: Date.now() - t0 })
+    // mybet runs after SwiftBet — independent tables (provider column), so a
+    // mybet failure shouldn't fail the whole cron once SwiftBet has succeeded.
+    let mybetError: string | null = null
+    try {
+      await runMybetMapping()
+    } catch (e) {
+      mybetError = String((e as { message?: unknown })?.message ?? e)
+    }
+    res.status(200).json({ ok: true, ms: Date.now() - t0, mybetError })
   } catch (e) {
     res.status(500).json({ ok: false, ms: Date.now() - t0, error: String((e as { message?: unknown })?.message ?? e) })
   }

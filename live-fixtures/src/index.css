@@ -17,6 +17,13 @@
   --total: #4ade80;     /* mapped/best/positive (green) */
   --up: #fbbf24;        /* upcoming / warning (amber) */
   --live: #f43f5e;      /* live / negative (rose) */
+
+  /* Brand identities — one colour per data source, used for every badge, pill,
+     panel and chip that represents that book. Distinct from the semantic
+     accents above so P/L / live colours never collide with a brand colour. */
+  --optic: #f59e0b;     /* OpticOdds — orange, the reference source */
+  --swift: #3b82f6;     /* SwiftBet — blue */
+  --mybet: #22c55e;     /* mybet — green */
 }
 
 html, body, #root {

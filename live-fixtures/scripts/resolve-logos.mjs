@@ -1,10 +1,15 @@
-// Offline logo resolver. Reads distinct team/player names from `live_fixtures`,
-// resolves a logo/headshot URL for each (Wikipedia, then TheSportsDB for player
-// sports), and upserts them into `entity_logos`. Majors (MLB/NFL/NHL/NBA/WNBA)
-// are skipped — the app resolves those from ESPN's CDN directly.
+// Logo resolver. Reads distinct team/player names from `live_fixtures`,
+// resolves a logo/headshot URL for each (Wikipedia search → REST summary), and
+// upserts them into `entity_logos`. Majors (MLB/NFL/NHL/NBA/WNBA) are skipped —
+// the app resolves those from ESPN's CDN directly.
 //
-// Usage:  node scripts/resolve-logos.mjs            (only unresolved names)
-//         node scripts/resolve-logos.mjs --force    (re-resolve everything)
+// Usage:  node scripts/resolve-logos.mjs              (only unresolved names)
+//         node scripts/resolve-logos.mjs --force      (re-resolve everything)
+//         node scripts/resolve-logos.mjs --retry-null (re-try cached misses)
+//
+// Also imported by api/cron/resolve-logos.ts, which calls `runResolver()` with a
+// deadline so the daily run fits inside the function's maxDuration. Nothing may
+// run at module scope: importing this must not touch the filesystem or exit.
 //
 // Reads VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY from env or ../.env.
 
@@ -12,27 +17,23 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-const env = parseEnv(join(HERE, '..', '.env'))
-const URL = process.env.VITE_SUPABASE_URL || env.VITE_SUPABASE_URL
-const KEY = process.env.VITE_SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY
-const FORCE = process.argv.includes('--force')
-// Re-resolve only rows whose previous attempt produced no logo. Useful when
-// the resolver itself has been improved (e.g. added the REST summary fallback)
-// without paying the cost of redoing every working row.
-const RETRY_NULL = process.argv.includes('--retry-null')
-
-if (!URL || !KEY) {
-  console.error('Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY (env or .env).')
-  process.exit(1)
-}
-
-const REST = `${URL}/rest/v1`
-const H = { apikey: KEY, Authorization: `Bearer ${KEY}` }
-
 // Wikimedia asks for a descriptive User-Agent with contact info; non-compliant
 // UAs get throttled/blocked under load.
 const WIKI_UA = 'live-fixtures-logo-resolver/1.0 (logo cache for sports board; contact: gintsliam@gmail.com)'
+
+/** Supabase REST base + auth headers. Resolved per-run: on Vercel there is no
+ *  .env file, so this must not be evaluated at import time. */
+function credentials() {
+  const HERE = dirname(fileURLToPath(import.meta.url))
+  const env = parseEnv(join(HERE, '..', '.env'))
+  const url = process.env.VITE_SUPABASE_URL || env.VITE_SUPABASE_URL
+  const key = process.env.VITE_SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY
+  if (!url || !key) throw new Error('Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY (env or .env).')
+  return { REST: `${url}/rest/v1`, H: { apikey: key, Authorization: `Bearer ${key}` } }
+}
+
+let REST = ''
+let H = {}
 
 // Leagues handled in-app via ESPN — no need to resolve here.
 const MAJOR_LEAGUES = new Set(['mlb', 'nfl', 'nhl', 'nba', 'wnba'])
@@ -68,15 +69,41 @@ const SPORT_HINT = {
 // geographic/civic page (e.g. "Alabama" → flag of the state).
 const REJECT = /Flag_of|Coat_of_arms|Map_of|Locator|Seal_of|_map[._]|Orthographic/i
 
-main().catch((e) => {
-  console.error(e)
-  process.exit(1)
-})
+// CLI entry — only when invoked directly, never on import.
+if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+  runResolver({
+    force: process.argv.includes('--force'),
+    // Re-resolve only rows whose previous attempt produced no logo. Useful when
+    // the resolver itself has been improved (e.g. added the REST summary
+    // fallback) without paying the cost of redoing every working row.
+    retryNull: process.argv.includes('--retry-null'),
+    log: console.log,
+  }).catch((e) => {
+    console.error(e)
+    process.exit(1)
+  })
+}
 
-async function main() {
-  console.log('Loading fixtures…')
+/**
+ * Resolve missing logos into `entity_logos`.
+ *
+ * @param {object}   [opts]
+ * @param {boolean}  [opts.force]      re-resolve every name, cached or not
+ * @param {boolean}  [opts.retryNull]  also re-try names cached as "no logo"
+ * @param {number}   [opts.deadlineMs] wall-clock budget; stops cleanly when hit
+ *                                     and reports what's left for the next run
+ * @param {Function} [opts.log]        progress sink (defaults to silent)
+ * @returns {Promise<{scanned:number, resolved:number, missed:number, failed:number, remaining:number, timedOut:boolean, ms:number}>}
+ */
+export async function runResolver(opts = {}) {
+  const { force = false, retryNull = false, deadlineMs = Infinity, log = () => {} } = opts
+  const started = Date.now()
+  const expired = () => Date.now() - started >= deadlineMs
+  ;({ REST, H } = credentials())
+
+  log('Loading fixtures…')
   const rows = await getAll('live_fixtures?select=sport,league,home_team,away_team')
-  console.log(`${rows.length} fixture rows.`)
+  log(`${rows.length} fixture rows.`)
 
   // distinct (sport, name), skipping majors
   const wanted = new Map() // key -> {sport, name}
@@ -89,19 +116,19 @@ async function main() {
       wanted.set(`${sport}|${name}`, { sport, name })
     }
   }
-  console.log(`${wanted.size} distinct non-major names.`)
+  log(`${wanted.size} distinct non-major names.`)
 
-  if (!FORCE) {
+  if (!force) {
     const existing = await getAll('entity_logos?select=sport,name,logo_url').catch((e) => {
-      console.error('Could not read entity_logos — did you run scripts/entity_logos.sql?')
+      log('Could not read entity_logos — did you run scripts/entity_logos.sql?')
       throw e
     })
-    // In --retry-null mode, only skip rows that ALREADY have a logo (the null
-    // ones get re-resolved). Default mode skips every existing row.
-    const skip = existing.filter((e) => !RETRY_NULL || e.logo_url)
+    // In retryNull mode, only skip rows that ALREADY have a logo (the null ones
+    // get re-resolved). Default mode skips every existing row.
+    const skip = existing.filter((e) => !retryNull || e.logo_url)
     for (const e of skip) wanted.delete(`${e.sport.toLowerCase()}|${e.name}`)
-    console.log(
-      `${wanted.size} need resolving (${skip.length} already cached${RETRY_NULL ? `, ${existing.length - skip.length} nulls being retried` : ''}).`,
+    log(
+      `${wanted.size} need resolving (${skip.length} already cached${retryNull ? `, ${existing.length - skip.length} nulls being retried` : ''}).`,
     )
   }
 
@@ -109,22 +136,45 @@ async function main() {
   let done = 0
   let hits = 0
   let failed = 0
+  let timedOut = false
   const batch = []
   // concurrency 2 + politeness delay keeps us within Wikimedia's limits
-  await pool(items, 2, async ({ sport, name }) => {
-    const res = await resolve(sport, name)
-    done++
-    if (res === undefined) {
-      failed++ // request failed — don't cache, retry on a later run
-    } else {
-      if (res) hits++
-      batch.push({ sport, name, logo_url: res, source: res ? 'wikipedia' : null })
-      if (batch.length >= 50) await flush(batch)
-    }
-    if (done % 50 === 0) console.log(`  ${done}/${items.length} (${hits} logos, ${failed} failed)`)
-  })
+  await pool(
+    items,
+    2,
+    async ({ sport, name }) => {
+      const res = await resolve(sport, name)
+      done++
+      if (res === undefined) {
+        failed++ // request failed — don't cache, retry on a later run
+      } else {
+        if (res) hits++
+        batch.push({ sport, name, logo_url: res, source: res ? 'wikipedia' : null })
+        if (batch.length >= 50) await flush(batch)
+      }
+      if (done % 50 === 0) log(`  ${done}/${items.length} (${hits} logos, ${failed} failed)`)
+    },
+    // Whatever is left when the budget runs out stays uncached, so the next
+    // run picks it up exactly where this one stopped.
+    () => (expired() ? ((timedOut = true), true) : false),
+  )
   await flush(batch)
-  console.log(`Done. Resolved ${hits} logos, ${failed} request failures (will retry next run).`)
+
+  const remaining = items.length - done
+  log(
+    timedOut
+      ? `Deadline hit. Resolved ${hits} logos, ${remaining} names left for the next run.`
+      : `Done. Resolved ${hits} logos, ${failed} request failures (will retry next run).`,
+  )
+  return {
+    scanned: done,
+    resolved: hits,
+    missed: done - hits - failed,
+    failed,
+    remaining,
+    timedOut,
+    ms: Date.now() - started,
+  }
 }
 
 /** string = logo URL, null = resolved but no image, undefined = request failed. */
@@ -252,12 +302,16 @@ async function getAll(pathAndQuery) {
   return rows
 }
 
-// bounded-concurrency map with a small politeness delay
-async function pool(items, n, fn) {
+// Bounded-concurrency map with a small politeness delay. `stop` is polled before
+// each item so a caller with a deadline exits the loop outright — skipping the
+// remaining `fn` calls but still paying the 200ms sleep on each would take
+// minutes to drain a long backlog.
+async function pool(items, n, fn, stop = () => false) {
   let i = 0
   await Promise.all(
     Array.from({ length: n }, async () => {
       while (i < items.length) {
+        if (stop()) break
         const item = items[i++]
         await fn(item)
         await sleep(200)

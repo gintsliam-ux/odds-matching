@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getSupabase } from '../lib/supabase'
-import { prettyLeague, prettySport, reclassifyRugbySport, sportGroupKey } from '../lib/sports'
+import { prettyLeague, prettySport, reclassifySport, sportGroupKey } from '../lib/sports'
 
 export interface SportUniverse {
   sports: string[] // distinct prettified sports across the whole table
@@ -41,7 +41,7 @@ async function load(): Promise<SportUniverse> {
       // Reclassify generic "rugby" rows so they merge into rugby_union /
       // rugby_league based on the competition. Matches what mapRow does for
       // the Fixture objects, so the sidebar key lines up with f.sport.
-      const rs = reclassifyRugbySport(r.sport ?? '', r.league ?? '')
+      const rs = reclassifySport(r.sport ?? '', r.league ?? '')
       const rl = r.league ?? ''
       // Drop rows whose raw sport field is empty — they'd surface as a broken
       // "Unknown" sidebar entry whose by-sport DB fetch returns nothing

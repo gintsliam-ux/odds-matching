@@ -1,5 +1,6 @@
-// Client for /api/swift-bets — fetches SwiftBet bets matched to a single game
-// via the derived.event_key/legs_event_keys slug join.
+// Client for /api/swift-bets — fetches SwiftBet bets matched to a single game,
+// by the leg's SwiftBet event_id when the bet carries one, else by the
+// derived.event_key/legs_event_keys slug join.
 
 export interface SwiftBetRow {
   id: string
@@ -17,6 +18,9 @@ export interface SwiftBetRow {
   event_key: string | null
   legs_event_keys: string[]
   matched_leg_index: number
+  /** How the bet was joined to this game: the leg's own SwiftBet `event_id`
+   *  (exact) or the derived event_key slug (name/date based). */
+  matched_by: 'event_id' | 'slug'
   // Leg-specific market / outcome / price for the leg that IS this game (for a
   // single, the whole bet). `selections` holds every pick in that leg — one for
   // a single/normal multi leg, several for a Same Game Multi (where `odds` is
@@ -42,6 +46,8 @@ export interface SwiftBetRow {
   em_percent: number | null
   scratched: boolean
   placed_after_start: boolean
+  /** Real UTC placement time (bet_time is Melbourne wall-clock). */
+  placed_at_utc: string | null
 }
 
 /**
@@ -58,6 +64,9 @@ export async function fetchSwiftBets(args: {
   date: string
   home: string
   away: string
+  /** The mapped `gutsy.events._id`. Newer bets carry it on each leg, letting the
+   *  server join exactly instead of by team-name slug. */
+  swiftEventId?: string | null
   swiftActualStart?: string | null
   /** The fixture's scheduled start. Same-teams doubleheaders/series share a
    *  date+teams slug, so the server keeps only bets whose leg event_time is
@@ -71,6 +80,7 @@ export async function fetchSwiftBets(args: {
       date: args.date,
       home: args.home,
       away: args.away,
+      swiftEventId: args.swiftEventId ?? undefined,
       swiftActualStart: args.swiftActualStart ?? undefined,
       scheduledStart: args.scheduledStart ?? undefined,
     }),

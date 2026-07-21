@@ -8,6 +8,7 @@ import { useSportUniverse } from '../hooks/useSportUniverse'
 import { useTournamentFixtures } from '../hooks/useTournamentFixtures'
 import { MappingEditor, type EditorTarget } from '../components/MappingEditor'
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
+import { getMybetCatalog, type MybetEvent } from '../lib/mybetCatalog'
 import { fetchSwiftStatuses } from '../lib/swiftStatus'
 import { displaySport, sportEmoji, sportGroupKey, sportLabel } from '../lib/sports'
 import { kickoffLabel, melbDateTimeShort, utcDateTimeShort } from '../lib/format'
@@ -21,6 +22,7 @@ import {
   type EventMapping,
 } from '../lib/mappingData'
 import { bestSwiftEventMatch, bestSwiftMatch } from '../lib/autoMatch'
+import { BRAND_PILL, BRAND_CHIP, type Brand } from '../lib/brand'
 
 // Mapping tab: OPTIC (Supabase `live_fixtures`) ↔ SWIFT (Mongo `gutsy.events`).
 //
@@ -62,6 +64,9 @@ export default function MappingPage() {
   // "Test Matches" → many test series). Keep them as a list per key.
   const [compMap, setCompMap] = useState<Map<string, CompetitionMapping[]>>(new Map())
   const [eventMap, setEventMap] = useState<Map<string, EventMapping>>(new Map())
+  // Parallel mybet maps (provider='mybet'), rendered as a third column.
+  const [mybetCompMap, setMybetCompMap] = useState<Map<string, CompetitionMapping[]>>(new Map())
+  const [mybetEventMap, setMybetEventMap] = useState<Map<string, EventMapping>>(new Map())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [editor, setEditor] = useState<EditorTarget | null>(null)
@@ -69,6 +74,7 @@ export default function MappingPage() {
   const [autoRunning, setAutoRunning] = useState(false)
   const [autoStatus, setAutoStatus] = useState<string | null>(null)
   const [swiftEventById, setSwiftEventById] = useState<Map<string, SwiftEvent>>(new Map())
+  const [mybetEventById, setMybetEventById] = useState<Map<string, MybetEvent>>(new Map())
   // SwiftBet competitions are kept so the sport tab strip can include sports
   // that exist only on the SwiftBet side (no OPTIC tournaments yet).
   const [swiftComps, setSwiftComps] = useState<SwiftCompetition[]>([])
@@ -82,6 +88,9 @@ export default function MappingPage() {
         setSwiftComps(cat.competitions)
       })
       .catch(() => {/* catalogue may not exist yet — drill will show ids as fallback */})
+    getMybetCatalog()
+      .then((cat) => alive && setMybetEventById(cat.eventById))
+      .catch(() => {/* mybet catalogue optional */})
     return () => {
       alive = false
     }
@@ -125,20 +134,33 @@ export default function MappingPage() {
   useEffect(() => {
     let alive = true
     setLoading(true)
-    Promise.all([fetchCompetitionMappings(), fetchEventMappings()])
-      .then(([comps, events]) => {
+    Promise.all([
+      fetchCompetitionMappings(),
+      fetchEventMappings(),
+      fetchCompetitionMappings('mybet'),
+      fetchEventMappings('mybet'),
+    ])
+      .then(([comps, events, mybetComps, mybetEvents]) => {
         if (!alive) return
-        const cm = new Map<string, CompetitionMapping[]>()
-        for (const c of comps) {
-          const k = `${c.optic_sport}|${c.optic_league}|${c.optic_tournament}`
-          let list = cm.get(k)
-          if (!list) cm.set(k, (list = []))
-          list.push(c)
+        const groupComps = (list: CompetitionMapping[]) => {
+          const cm = new Map<string, CompetitionMapping[]>()
+          for (const c of list) {
+            const k = `${c.optic_sport}|${c.optic_league}|${c.optic_tournament}`
+            let arr = cm.get(k)
+            if (!arr) cm.set(k, (arr = []))
+            arr.push(c)
+          }
+          return cm
         }
-        const em = new Map<string, EventMapping>()
-        for (const e of events) em.set(e.optic_fixture_id, e)
-        setCompMap(cm)
-        setEventMap(em)
+        const indexEvents = (list: EventMapping[]) => {
+          const em = new Map<string, EventMapping>()
+          for (const e of list) em.set(e.optic_fixture_id, e)
+          return em
+        }
+        setCompMap(groupComps(comps))
+        setEventMap(indexEvents(events))
+        setMybetCompMap(groupComps(mybetComps))
+        setMybetEventMap(indexEvents(mybetEvents))
         setError(null)
       })
       .catch((e) => alive && setError(String(e)))
@@ -190,6 +212,7 @@ export default function MappingPage() {
     rawTournament: string
     count: number
     mappings: CompetitionMapping[]
+    mybetMappings: CompetitionMapping[]
     /** User explicitly marked this tournament as unmapped — auto-map skips it. */
     stickyUnmapped: boolean
   }
@@ -231,6 +254,7 @@ export default function MappingPage() {
           rawTournament: '',
           count: counts.get(k) ?? 0,
           mappings: realMappings(compMap.get(k)),
+          mybetMappings: realMappings(mybetCompMap.get(k)),
           stickyUnmapped: isStickyUnmapped(compMap.get(k)),
         })
       }
@@ -251,6 +275,7 @@ export default function MappingPage() {
         rawTournament: tournament,
         count: counts.get(k) ?? 0,
         mappings: realMappings(compMap.get(k)),
+          mybetMappings: realMappings(mybetCompMap.get(k)),
           stickyUnmapped: isStickyUnmapped(compMap.get(k)),
       })
     }
@@ -272,6 +297,7 @@ export default function MappingPage() {
           rawTournament: c.optic_tournament,
           count: 0,
           mappings: realMappings(compMap.get(k)),
+          mybetMappings: realMappings(mybetCompMap.get(k)),
           stickyUnmapped: isStickyUnmapped(compMap.get(k)),
         })
       }
@@ -290,6 +316,7 @@ export default function MappingPage() {
         rawTournament: '',
         count: counts.get(k) ?? 0,
         mappings: realMappings(compMap.get(k)),
+          mybetMappings: realMappings(mybetCompMap.get(k)),
           stickyUnmapped: isStickyUnmapped(compMap.get(k)),
       })
     }
@@ -301,7 +328,7 @@ export default function MappingPage() {
         if (am !== bm) return bm - am
         return b.count - a.count || a.sport.localeCompare(b.sport) || a.league.localeCompare(b.league)
       })
-  }, [universe, fixtures, compMap])
+  }, [universe, fixtures, compMap, mybetCompMap])
 
   // Sport tab list (display-grouped: `mlb` and `baseball` share "Baseball").
   // Includes SwiftBet sports too — clicking a SwiftBet-only sport tab shows
@@ -357,14 +384,19 @@ export default function MappingPage() {
     const q = search.trim().toLowerCase()
     return tournaments.filter((t) => {
       if (sportFilter !== 'all' && sportGroupKey(t.sport) !== sportFilter) return false
-      const mapped = t.mappings.length > 0
-      // "verified" at the row level = ALL mappings verified (strict). Toggle to
-      // "any" by changing `.every` to `.some` if you want a looser filter.
-      const verified = mapped && t.mappings.every((m) => m.verified)
+      // Filters consider EITHER brand. "mapped" = SwiftBet or mybet has a
+      // mapping; "verified" = everything mapped across both is verified;
+      // "unverified" = mapped but something still needs confirming.
+      const allMaps = [...t.mappings, ...t.mybetMappings]
+      const mapped = allMaps.length > 0
+      const verified = mapped && allMaps.every((m) => m.verified)
+      // Fully-done rows are hidden from the default view so the list surfaces
+      // only rows that still need work; the explicit filters still reveal them.
+      if (mappedFilter === 'all' && verified) return false
       if (mappedFilter === 'mapped' && !mapped) return false
       if (mappedFilter === 'unmapped' && mapped) return false
       if (mappedFilter === 'verified' && !verified) return false
-      if (mappedFilter === 'unverified' && verified) return false
+      if (mappedFilter === 'unverified' && (!mapped || verified)) return false
       if (
         q &&
         !`${t.sport} ${t.league} ${t.tournament} ${t.mappings.map((m) => m.swift_competition ?? '').join(' ')}`
@@ -398,29 +430,36 @@ export default function MappingPage() {
   async function runAutoMap() {
     if (autoRunning) return
     setAutoRunning(true)
-    setAutoStatus('Loading SWIFT catalogue…')
+    setAutoStatus('Loading catalogues…')
     try {
-      const cat = await getSwiftCatalog()
-      // Skip tournaments the user has explicitly marked as "no SWIFT mapping"
-      // — the sticky `''`-sentinel row is treated the same as an accepted
-      // mapping for auto-map purposes.
-      const unmapped = visibleTournaments.filter(
-        (t) => t.mappings.length === 0 && !t.stickyUnmapped,
-      )
-      if (unmapped.length === 0) {
+      const [swiftCat, mybetCat] = await Promise.all([
+        getSwiftCatalog(),
+        getMybetCatalog().catch(() => null),
+      ])
+      // Name-match unmapped tournaments against each brand's catalogue and write
+      // a manual mapping. Tennis is skipped on the mybet side — its bucket names
+      // ("wta"/"atp") name-match every WTA/ATP competition, so mybet tennis is
+      // only trustworthy from event evidence (the nightly matcher), not names.
+      const jobs: Array<{ t: TournamentRow; catalog: SwiftCompetition[]; provider: 'swift' | 'mybet' }> = []
+      for (const t of visibleTournaments) {
+        if (t.mappings.length === 0 && !t.stickyUnmapped) jobs.push({ t, catalog: swiftCat.competitions, provider: 'swift' })
+        if (mybetCat && t.mybetMappings.length === 0 && t.sport.toLowerCase() !== 'tennis')
+          jobs.push({ t, catalog: mybetCat.competitions, provider: 'mybet' })
+      }
+      if (jobs.length === 0) {
         setAutoStatus('Nothing to auto-map in this view.')
         setAutoRunning(false)
         return
       }
       let paired = 0
-      for (let i = 0; i < unmapped.length; i++) {
-        const t = unmapped[i]
-        setAutoStatus(`Auto-mapping ${i + 1}/${unmapped.length}…`)
+      for (let i = 0; i < jobs.length; i++) {
+        const { t, catalog, provider } = jobs[i]
+        setAutoStatus(`Auto-mapping ${i + 1}/${jobs.length}…`)
         const hit = bestSwiftMatch({
           opticSportRaw: t.rawSport,
           opticLeagueRaw: t.rawLeague,
           opticTournamentRaw: t.rawTournament,
-          catalog: cat.competitions,
+          catalog,
         })
         if (!hit) continue
         try {
@@ -429,13 +468,14 @@ export default function MappingPage() {
             opticLeagueRaw: t.rawLeague,
             opticTournamentRaw: t.rawTournament,
             picks: [{ id: hit.competition.id, name: hit.competition.name, sport: hit.competition.sport }],
+            provider,
           })
           paired++
         } catch {
           /* per-row failure shouldn't kill the whole run */
         }
       }
-      setAutoStatus(`Done — paired ${paired}/${unmapped.length}.`)
+      setAutoStatus(`Done — paired ${paired}/${jobs.length} across both books.`)
       setReloadKey((k) => k + 1)
       setTimeout(() => setAutoStatus(null), 4000)
     } catch (e) {
@@ -446,7 +486,7 @@ export default function MappingPage() {
   }
 
   return (
-    <div className="px-6 py-6">
+    <div className="px-5 py-4">
       {/* row 1: title */}
       <div className="mb-5 flex items-center gap-3">
         <h1 className="flex items-center gap-2.5 text-[20px] font-semibold tracking-tight text-gray-100">
@@ -457,6 +497,7 @@ export default function MappingPage() {
           <SourcePill kind="OPTIC" />
           <ArrowLeftRight className="h-3 w-3 text-[color:var(--muted-2)]" />
           <SourcePill kind="SWIFT" />
+          <SourcePill kind="MYBET" />
         </span>
         <span className="ml-auto text-[12px] text-[color:var(--muted)]">
           Paired <span className="font-semibold tabular-nums text-gray-100">{totals.tPaired}</span>
@@ -466,7 +507,14 @@ export default function MappingPage() {
           onClick={runAutoMap}
           disabled={
             autoRunning ||
-            visibleTournaments.every((t) => t.mappings.length > 0 || t.stickyUnmapped)
+            // Enabled while EITHER book has auto-mappable rows: an unmapped,
+            // non-sticky SwiftBet row, or an unmapped non-tennis mybet row
+            // (mybet tennis is event-evidence-only, never name-matched).
+            !visibleTournaments.some(
+              (t) =>
+                (t.mappings.length === 0 && !t.stickyUnmapped) ||
+                (t.mybetMappings.length === 0 && t.sport.toLowerCase() !== 'tennis'),
+            )
           }
           className="flex items-center gap-1.5 rounded-md border border-[color:var(--total)]/40 bg-[color:var(--total)]/10 px-3 py-1.5 text-[12px] font-medium text-[color:var(--total)] transition-colors hover:bg-[color:var(--total)]/15 disabled:cursor-not-allowed disabled:opacity-40"
           title="Auto-map every unmapped tournament in the current view"
@@ -477,14 +525,14 @@ export default function MappingPage() {
       </div>
 
       {autoStatus && (
-        <div className="mb-3 flex items-center gap-2 rounded-md border border-[color:var(--line-soft)] bg-[color:var(--panel)] px-3 py-2 text-[12px] text-gray-300">
+        <div className="mb-3 flex items-center gap-2 rounded-md bg-[color:var(--panel)] px-3 py-2 text-[12px] text-gray-300">
           {autoRunning && <Loader2 className="h-3 w-3 animate-spin text-[color:var(--total)]" />}
           {autoStatus}
         </div>
       )}
 
-      {/* row 2: sport tabs */}
-      <div className="-mx-1 mb-5 flex flex-wrap items-center gap-1.5">
+      {/* row 2: sport tabs — wrap across (up to) two lines */}
+      <div className="-mx-1 mb-4 flex flex-wrap items-center gap-1.5 px-1">
         <SportTab
           active={sportFilter === 'all'}
           onClick={() => updateParams({ sport: null, tournament: null })}
@@ -507,7 +555,7 @@ export default function MappingPage() {
 
       {/* row 3: filter chips + search */}
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-1 rounded-md border border-[color:var(--line-soft)] bg-[color:var(--panel)] p-1">
+        <div className="flex items-center gap-1 rounded-md bg-[color:var(--panel-2)] p-1">
           <FilterChip
             active={mappedFilter === 'all'}
             onClick={() => setParam('mapped', null)}
@@ -585,6 +633,8 @@ export default function MappingPage() {
           row={selectedTournament}
           eventMap={eventMap}
           swiftEventById={swiftEventById}
+          mybetEventMap={mybetEventMap}
+          mybetEventById={mybetEventById}
           onBack={() => setParam('tournament', null)}
           onEditEvent={(t) => setEditor(t)}
           onReloadMappings={() => setReloadKey((k) => k + 1)}
@@ -612,6 +662,21 @@ export default function MappingPage() {
                 .filter((x): x is string => !!x),
             })
           }
+          onEditMybet={(t) =>
+            setEditor({
+              kind: 'competition',
+              provider: 'mybet',
+              opticSportRaw: t.rawSport,
+              opticLeagueRaw: t.rawLeague,
+              opticTournamentRaw: t.rawTournament,
+              label: `${sportLabel(t.sport)} · ${t.league}${
+                t.tournament ? ' · ' + t.tournament : ''
+              }`,
+              currentSwiftIds: t.mybetMappings
+                .map((m) => m.swift_competition_id)
+                .filter((x): x is string => !!x),
+            })
+          }
           onToggleVerify={async (t, m) => {
             if (!m.swift_competition_id) return
             try {
@@ -621,6 +686,7 @@ export default function MappingPage() {
                 opticTournamentRaw: t.rawTournament,
                 swiftCompetitionId: m.swift_competition_id,
                 verified: !m.verified,
+                provider: m.provider,
               })
               setReloadKey((k) => k + 1)
             } catch (e) {
@@ -652,24 +718,28 @@ interface TournamentRowShape {
   rawTournament: string
   count: number
   mappings: CompetitionMapping[]
+  mybetMappings: CompetitionMapping[]
 }
 
 function TournamentTable({
   rows,
   onOpen,
   onEdit,
+  onEditMybet,
   onToggleVerify,
 }: {
   rows: TournamentRowShape[]
   onOpen: (t: { sport: string; league: string; tournament: string }) => void
   onEdit: (t: TournamentRowShape) => void
+  onEditMybet: (t: TournamentRowShape) => void
   onToggleVerify: (t: TournamentRowShape, m: CompetitionMapping) => void
 }) {
   return (
-    <Table headers={['SPORT · LEAGUE', 'OPTIC · TOURNAMENT', 'FIXTURES', 'SWIFT · MAPPED TO', 'CONF', '']}>
+    <Table headers={['SPORT · LEAGUE', 'OPTIC · TOURNAMENT', 'FIXTURES', 'SWIFT · MAPPED TO', 'MYBET · MAPPED TO', 'CONF', '']}>
       {rows.map((t) => {
         const mapped = t.mappings.length > 0
         const allVerified = mapped && t.mappings.every((m) => m.verified)
+        const mybetMapped = t.mybetMappings.length > 0
         return (
           <Row key={`${t.sport}|${t.league}|${t.tournament}`} onClick={() => onOpen(t)}>
             <Cell width="w-56">
@@ -688,22 +758,66 @@ function TournamentTable({
               <span className="tabular-nums text-gray-400">{t.count}</span>
             </Cell>
             <Cell>
-              {mapped ? (
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {t.mappings.map((m) => (
-                    <SwiftChip
-                      key={m.swift_competition_id ?? ''}
-                      mapping={m}
-                      onToggleVerify={(e) => {
-                        e.stopPropagation()
-                        onToggleVerify(t, m)
-                      }}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <UnmappedSlot />
-              )}
+              <div className="flex items-center gap-1.5">
+                {mapped ? (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {t.mappings.map((m) => (
+                      <SwiftChip
+                        key={m.swift_competition_id ?? ''}
+                        mapping={m}
+                        onToggleVerify={(e) => {
+                          e.stopPropagation()
+                          onToggleVerify(t, m)
+                        }}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <UnmappedSlot />
+                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onEdit(t)
+                  }}
+                  className="rounded p-1 text-gray-500 transition-colors hover:bg-white/10 hover:text-[var(--up)]"
+                  title="Edit SWIFT mapping"
+                  aria-label="Edit SWIFT mapping"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </Cell>
+            <Cell>
+              <div className="flex items-center gap-1.5">
+                {mybetMapped ? (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {t.mybetMappings.map((m) => (
+                      <MybetChip
+                        key={m.swift_competition_id ?? ''}
+                        mapping={m}
+                        onToggleVerify={(e) => {
+                          e.stopPropagation()
+                          onToggleVerify(t, m)
+                        }}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <UnmappedSlot />
+                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onEditMybet(t)
+                  }}
+                  className="rounded p-1 text-gray-500 transition-colors hover:bg-white/10 hover:text-[var(--live)]"
+                  title="Edit mybet mapping"
+                  aria-label="Edit mybet mapping"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </Cell>
             <Cell width="w-20" align="right">
               {mapped ? (
@@ -722,21 +836,8 @@ function TournamentTable({
                 <span className="text-[10px] tracking-widest text-gray-700">—</span>
               )}
             </Cell>
-            <Cell width="w-16" align="right">
-              <span className="inline-flex items-center gap-0.5">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onEdit(t)
-                  }}
-                  className="rounded p-1 text-gray-500 transition-colors hover:bg-white/10 hover:text-gray-200"
-                  title="Edit mappings"
-                  aria-label="Edit mappings"
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                </button>
-                <ChevronRight className="h-3.5 w-3.5 text-gray-600" />
-              </span>
+            <Cell width="w-10" align="right">
+              <ChevronRight className="inline h-3.5 w-3.5 text-gray-600" />
             </Cell>
           </Row>
         )
@@ -754,7 +855,7 @@ function SwiftChip({
   onToggleVerify: (e: React.MouseEvent) => void
 }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded border border-[var(--up)]/30 bg-[var(--up)]/[0.06] px-2 py-0.5 text-[11px]">
+    <span className={`inline-flex items-center gap-1.5 rounded border ${BRAND_CHIP.swift} px-2 py-0.5 text-[11px]`}>
       <SourcePill kind="SWIFT" />
       <span className="text-gray-100">{mapping.swift_competition}</span>
       <span className="text-[9px] tabular-nums text-gray-500">{Math.round(mapping.confidence * 100)}%</span>
@@ -785,12 +886,47 @@ function ManualBadge() {
   )
 }
 
+/** One mybet mapping rendered as a pill (live accent) with a verify-toggle. */
+function MybetChip({
+  mapping,
+  onToggleVerify,
+}: {
+  mapping: CompetitionMapping
+  onToggleVerify: (e: React.MouseEvent) => void
+}) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded border ${BRAND_CHIP.mybet} px-2 py-0.5 text-[11px]`}>
+      <SourcePill kind="MYBET" />
+      <span className="text-gray-100">{mapping.swift_competition}</span>
+      <span className="text-[9px] tabular-nums text-gray-500">{Math.round(mapping.confidence * 100)}%</span>
+      {mapping.source === 'manual' && (
+        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${BRAND_PILL.mybet}`}>Manual</span>
+      )}
+      <button
+        onClick={onToggleVerify}
+        className={[
+          'rounded p-0.5 transition-colors',
+          mapping.verified
+            ? 'text-[var(--total)] hover:bg-[var(--total)]/10'
+            : 'text-gray-500 hover:bg-white/10 hover:text-gray-200',
+        ].join(' ')}
+        title={mapping.verified ? 'Click to unverify' : 'Confirm this mapping is correct'}
+        aria-label="Toggle verified"
+      >
+        <Check className="h-3 w-3" strokeWidth={mapping.verified ? 3 : 2} />
+      </button>
+    </span>
+  )
+}
+
 type EventStatus = 'all' | 'live' | 'upcoming' | 'completed'
 
 function DrillView({
   row,
   eventMap,
   swiftEventById,
+  mybetEventMap,
+  mybetEventById,
   onBack,
   onEditEvent,
   onReloadMappings,
@@ -806,6 +942,8 @@ function DrillView({
   }
   eventMap: Map<string, EventMapping>
   swiftEventById: Map<string, SwiftEvent>
+  mybetEventMap: Map<string, EventMapping>
+  mybetEventById: Map<string, MybetEvent>
   onBack: () => void
   onEditEvent: (t: EditorTarget) => void
   onReloadMappings: () => void
@@ -996,9 +1134,10 @@ function DrillView({
           NO EVENTS
         </div>
       ) : (
-        <Table headers={['START', 'STATUS', 'OPTIC · EVENT', 'SWIFT · MAPPED TO', 'CONFIDENCE', '']}>
+        <Table headers={['START', 'STATUS', 'OPTIC · EVENT', 'SWIFT · MAPPED TO', 'MYBET · MAPPED TO', 'CONFIDENCE', '']}>
           {visible.map((f) => {
             const m = eventMap.get(f.id)
+            const mb = mybetEventMap.get(f.id)
             return (
               <Row key={f.id} onClick={() => navigate(`/fixture/${encodeURIComponent(f.id)}`)}>
                 <Cell width="w-44">
@@ -1040,6 +1179,49 @@ function DrillView({
                   ) : (
                     <UnmappedSlot />
                   )}
+                </Cell>
+                <Cell width="w-80">
+                  <div className="flex items-center gap-1.5">
+                    <div className="min-w-0 flex-1">
+                      {mb?.swift_event_id ? (
+                        <span className="flex flex-col gap-0.5">
+                          <span className="flex items-center gap-2">
+                            <SourcePill kind="MYBET" />
+                            <span className="truncate text-gray-100">
+                              {mybetEventById.get(mb.swift_event_id)?.name ?? mb.swift_event_id}
+                            </span>
+                            {mb.source === 'manual' && <ManualBadge />}
+                          </span>
+                          <span className="ml-8 truncate text-[10px] tracking-widest text-gray-600">
+                            {mb.swift_event_id}
+                            {mb.confidence ? ` · ${Math.round(mb.confidence * 100)}%` : ''}
+                          </span>
+                        </span>
+                      ) : (
+                        <UnmappedSlot />
+                      )}
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onEditEvent({
+                          kind: 'event',
+                          provider: 'mybet',
+                          opticFixtureId: f.id,
+                          opticSportRaw: row.rawSport,
+                          label: `${f.homeName} v ${f.awayName} — ${kickoffLabel(f.startTime)} UTC`,
+                          swiftCompetitionId: null,
+                          swiftCompetitionName: null,
+                          currentSwiftId: mb?.swift_event_id ?? null,
+                        })
+                      }}
+                      className="rounded p-1 text-gray-500 transition-colors hover:bg-white/10 hover:text-[var(--live)]"
+                      title="Edit mybet mapping"
+                      aria-label="Edit mybet mapping"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </Cell>
                 <Cell width="w-20" align="right">
                   <ConfidenceBadge value={m?.confidence ?? 0} mapped={!!m?.swift_event_id} />
@@ -1198,7 +1380,7 @@ function SportTab({
       type="button"
       onClick={onClick}
       className={[
-        'flex items-center gap-2 rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors',
+        'flex shrink-0 items-center gap-2 whitespace-nowrap rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors',
         active
           ? 'bg-[color:var(--total)] text-black'
           : isSwiftOnly
@@ -1223,11 +1405,8 @@ function SportTab({
   )
 }
 
-function SourcePill({ kind, inline }: { kind: 'OPTIC' | 'SWIFT'; inline?: boolean }) {
-  const cls =
-    kind === 'OPTIC'
-      ? 'border-[color:var(--total)]/30 text-[color:var(--total)] bg-[color:var(--total)]/10'
-      : 'border-[color:var(--up)]/30 text-[color:var(--up)] bg-[color:var(--up)]/10'
+function SourcePill({ kind, inline }: { kind: 'OPTIC' | 'SWIFT' | 'MYBET'; inline?: boolean }) {
+  const cls = BRAND_PILL[kind.toLowerCase() as Brand]
   return (
     <span
       className={`${inline ? '' : 'inline-flex'} items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${cls}`}
@@ -1237,7 +1416,7 @@ function SourcePill({ kind, inline }: { kind: 'OPTIC' | 'SWIFT'; inline?: boolea
   )
 }
 
-function SourceLabel({ kind }: { kind: 'OPTIC' | 'SWIFT' }) {
+function SourceLabel({ kind }: { kind: 'OPTIC' | 'SWIFT' | 'MYBET' }) {
   return (
     <span className="mr-2 align-baseline">
       <SourcePill kind={kind} />
@@ -1261,7 +1440,7 @@ function ConfidenceBadge({ value, mapped }: { value: number; mapped: boolean }) 
 
 function Table({ headers, children }: { headers: string[]; children: React.ReactNode }) {
   return (
-    <div className="mt-2 overflow-x-auto rounded-lg border border-[color:var(--line-soft)]">
+    <div className="mt-2 overflow-x-auto rounded-lg bg-[color:var(--panel)]/40">
       <table className="w-full">
         <thead className="bg-black/[0.15]">
           <tr>

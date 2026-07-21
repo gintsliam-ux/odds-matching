@@ -1,8 +1,9 @@
 import { memo } from 'react'
 import type { Fixture } from '../lib/types'
-import { leagueLabel, periodState, sportEmoji } from '../lib/sports'
+import { leagueLabel, periodState } from '../lib/sports'
 import { fmtOdds, melbTime, overdueMinutes, startsInLabel } from '../lib/format'
 import { Avatar } from './Avatar'
+import { LeagueBadge } from './LeagueBadge'
 
 interface Props {
   fixture: Fixture
@@ -14,27 +15,19 @@ export const FixtureCard = memo(function FixtureCard({ fixture: f, now, onSelect
   const isLive = f.status === 'live'
   const isDone = f.status === 'completed'
 
-  const border = isLive
-    ? 'border-transparent glow-live'
-    : isDone
-      ? 'border-[color:var(--line-soft)] opacity-90'
-      : 'border-[color:var(--line-soft)]'
+  // Flat cards: no outline — separation comes from the panel background. Live
+  // still glows; completed dims.
+  const border = isLive ? 'glow-live' : isDone ? 'opacity-80' : ''
 
   return (
     <article
       onClick={() => onSelect?.(f)}
-      className={`cursor-pointer rounded-lg border bg-[color:var(--panel)] transition-all hover:border-[color:var(--line)] hover:bg-[color:var(--panel-2)] ${border}`}
+      className={`cursor-pointer rounded-lg bg-[color:var(--panel)] transition-all hover:bg-[color:var(--panel-2)] ${border}`}
     >
       {/* header */}
       <div className="flex items-center justify-between border-b border-white/[0.04] px-4 py-2.5">
         <div className="flex items-center gap-2 truncate">
-          <span
-            className="cursor-help text-sm leading-none"
-            title={f.sport}
-            aria-label={f.sport}
-          >
-            {sportEmoji(f.sport)}
-          </span>
+          <LeagueBadge sport={f.sport} league={f.league} size={16} />
           <span className="truncate text-[12.5px] font-semibold text-gray-100">
             {leagueLabel(f.sport, f.league, f.seasonType)}
           </span>

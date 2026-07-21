@@ -1,18 +1,32 @@
 // POST /api/swift-bets — return SwiftBet bets that include this game as a leg.
 //
-// Bets in gutsy.bets link to a game via `derived.event_key` / `derived.legs_event_keys`
-// — slug strings like `mlb/2026-06-16/new-york-yankees-vs-chicago-white-sox` that the
-// enrichment pipeline computes. The newer `legs` JSON no longer carries the SwiftBet
-// event UUID, so slug matching is the practical join.
+// Two joins, tried together:
+//
+//  1. event_id (exact). Each entry in the `legs` JSON now carries `event_id`, the
+//     SwiftBet event UUID — the same value as `gutsy.events._id`, i.e. the
+//     `swift_event_id` the mapping already holds. When the caller passes it we
+//     match on that directly: no name normalization, and no doubleheader
+//     ambiguity. Only bets scraped since ~2026-07-01 have the field, though
+//     (~1.2% of 2026 non-racing bets), so it cannot stand alone yet.
+//
+//  2. event_key slug (fallback). `derived.event_key` / `derived.legs_event_keys`
+//     hold strings like `mlb/2026-06-16/new-york-yankees-vs-chicago-white-sox`
+//     computed by the enrichment pipeline. This covers the whole history and
+//     remains the join for every bet without an `event_id`.
+//
+// `legs` is a JSON *string*, not a BSON array, so the event_id branch is a
+// substring regex rather than an $elemMatch — the indexed `bet_date` window in
+// front of it keeps the scan bounded.
 //
 // Body:
 //   { date: "YYYY-MM-DD",            // event date (gutsy.events.start_date prefix)
 //     home: "New York Yankees",       // home team name
 //     away: "Chicago White Sox",      // away team name
+//     swiftEventId?: string,          // gutsy.events._id — enables the exact join
 //     swiftActualStart?: string }     // ISO timestamp; bets with bet_time > this are flagged
 //
 // Response:
-//   { bets: BetRow[], matchPattern: string }
+//   { bets: BetRow[], matchPattern: string }   // each bet carries matched_by: 'event_id' | 'slug'
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { MongoClient } from 'mongodb'
@@ -65,15 +79,26 @@ export interface MatchedLeg extends LegSelection {
  * order as `legs_event_keys`). For a single this is just leg 0. An SGM is one
  * leg with many selections — we return all of them so the UI can expand.
  */
-function extractLeg(legsRaw: unknown, index: number): MatchedLeg | null {
-  if (index < 0) return null
+/** `legs` is stored as a JSON string; parse it once per bet. */
+function parseLegs(legsRaw: unknown): unknown[] | null {
   let legs: unknown
   try {
     legs = typeof legsRaw === 'string' ? JSON.parse(legsRaw) : legsRaw
   } catch {
     return null
   }
-  if (!Array.isArray(legs)) return null
+  return Array.isArray(legs) ? legs : null
+}
+
+/** Index of the leg whose `event_id` is this SWIFT event, or -1. Exact — no
+ *  team-name or date fuzziness, and it separates same-teams doubleheaders. */
+function legIndexByEventId(legs: unknown[] | null, swiftEventId: string | null): number {
+  if (!legs || !swiftEventId) return -1
+  return legs.findIndex((l) => (l as { event_id?: unknown } | undefined)?.event_id === swiftEventId)
+}
+
+function extractLeg(legs: unknown[] | null, index: number): MatchedLeg | null {
+  if (index < 0 || !legs) return null
   const leg = legs[index] as
     | { dividend?: unknown; selections?: Array<{ fixed_odds?: unknown; status?: unknown; selection_data?: Array<{ market_name?: unknown; market_type?: unknown; name?: unknown }> }> }
     | undefined
@@ -136,15 +161,8 @@ function melbWallToUtc(raw: string | Date): Date | null {
 
 /** The matched leg's own event_time (epoch ms) — used to pin a bet to the
  *  correct game when the same teams play more than once in the window. */
-function legEventTimeMs(legsRaw: unknown, index: number): number | null {
-  if (index < 0) return null
-  let legs: unknown
-  try {
-    legs = typeof legsRaw === 'string' ? JSON.parse(legsRaw) : legsRaw
-  } catch {
-    return null
-  }
-  if (!Array.isArray(legs)) return null
+function legEventTimeMs(legs: unknown[] | null, index: number): number | null {
+  if (index < 0 || !legs) return null
   const et = (legs[index] as { event_time?: unknown } | undefined)?.event_time
   const t = typeof et === 'string' ? Date.parse(et) : NaN
   return Number.isFinite(t) ? t : null
@@ -166,6 +184,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       date?: string
       home?: string
       away?: string
+      swiftEventId?: string
       swiftActualStart?: string
       scheduledStart?: string
     }
@@ -173,6 +192,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       res.status(400).json({ error: 'date, home and away are required' })
       return
     }
+    // Guard the regex: only a well-formed UUID goes into the `legs` substring
+    // match, so a hostile/garbled id can't inject pattern syntax.
+    const swiftEventId =
+      typeof body.swiftEventId === 'string' && /^[0-9a-f-]{36}$/i.test(body.swiftEventId)
+        ? body.swiftEventId
+        : null
     const homeSlug = slug(body.home)
     const awaySlug = slug(body.away)
     // Slug format: `<sport[-competition]>/<YYYY-MM-DD>/<home>-vs-<away>`. Match either
@@ -190,12 +215,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const eventDate = new Date(`${body.date}T00:00:00Z`)
     const loDate = new Date(eventDate.getTime() - 7 * 86_400_000).toISOString().slice(0, 10)
     const hiDate = new Date(eventDate.getTime() + 1 * 86_400_000).toISOString().slice(0, 10)
+    // Either join is enough. The slug branch uses the `derived_legs_event_keys`
+    // index; the event_id branch scans `legs` inside the bet_date window.
+    const joins: Record<string, unknown>[] = [
+      { 'derived.legs_event_keys': { $elemMatch: { $regex: matchPattern } } },
+    ]
+    if (swiftEventId) joins.push({ legs: { $regex: esc(swiftEventId) } })
+
     const cursor = bets
       .find(
         {
           bet_date: { $gte: loDate, $lte: hiDate },
           'derived.is_racing': false,
-          'derived.legs_event_keys': { $elemMatch: { $regex: matchPattern } },
+          ...(joins.length > 1 ? { $or: joins } : joins[0]),
         },
         {
           projection: {
@@ -234,14 +266,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const schedMs = body.scheduledStart ? Date.parse(body.scheduledStart) : null
     const result = docs.flatMap((d) => {
       // Pinpoint which leg in a multi corresponds to this game so the UI can
-      // call it out — match on the regex against each leg key.
-      const legs: string[] = d.derived?.legs_event_keys ?? []
-      const matchedLegIndex = legs.findIndex((k) => matchPattern.test(k))
+      // call it out. Prefer the leg's own event_id — exact. Otherwise fall back
+      // to regex-matching the slug against each leg key.
+      const legKeys: string[] = d.derived?.legs_event_keys ?? []
+      const parsedLegs = parseLegs(d.legs)
+      const byEventId = legIndexByEventId(parsedLegs, swiftEventId)
+      const matchedByEventId = byEventId >= 0
+      const matchedLegIndex = matchedByEventId
+        ? byEventId
+        : legKeys.findIndex((k) => matchPattern.test(k))
+      // The $or means a doc can come back on the slug branch alone; if it
+      // matched neither leg precisely there's nothing to show for this game.
+      if (matchedLegIndex < 0) return []
       // Disambiguate same-teams doubleheaders/series: drop the bet if its leg's
       // event_time isn't near THIS fixture's scheduled start. (Skip when we have
       // no scheduled start or no leg event_time — keep the bet rather than guess.)
-      if (Number.isFinite(schedMs)) {
-        const evtMs = legEventTimeMs(d.legs, matchedLegIndex)
+      // An event_id match is already unambiguous, so it bypasses this entirely.
+      if (!matchedByEventId && Number.isFinite(schedMs)) {
+        const evtMs = legEventTimeMs(parsedLegs, matchedLegIndex)
         if (evtMs != null && Math.abs(evtMs - (schedMs as number)) > SAME_GAME_TOLERANCE_MS) return []
       }
       // bet_time is Melbourne wall-clock with a misleading Z; convert to a
@@ -263,14 +305,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         type: d.derived?.type ?? null,
         market_category: d.derived?.market_category ?? null,
         event_key: d.derived?.event_key ?? null,
-        legs_event_keys: legs,
+        legs_event_keys: legKeys,
         matched_leg_index: matchedLegIndex,
-        matched_leg: extractLeg(d.legs, matchedLegIndex),
-        leg_count: legs.length,
+        matched_by: matchedByEventId ? 'event_id' : 'slug',
+        matched_leg: extractLeg(parsedLegs, matchedLegIndex),
+        // Prefer the real leg array — an event_id-matched bet may have no
+        // derived.legs_event_keys at all (enrichment hasn't run on it yet).
+        leg_count: parsedLegs?.length ?? legKeys.length,
         leg_breakdown: d.derived?.legs_breakdown ?? null,
         em_percent: d.enrichment?.emPercent ?? null,
         scratched: d.enrichment?.scratched ?? false,
         placed_after_start: placedAfterStart,
+        // Real UTC placement moment (bet_time is Melbourne wall-clock) so the UI
+        // can show the offset vs scheduled/actual start.
+        placed_at_utc: betUtc ? betUtc.toISOString() : null,
       }]
     })
     res.setHeader('Cache-Control', 'no-store')

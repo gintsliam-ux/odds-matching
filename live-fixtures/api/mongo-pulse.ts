@@ -17,6 +17,7 @@ import { MongoClient } from 'mongodb'
 const MONGO_URI = process.env.MONGO_URI
 const MONGO_DB = process.env.MONGO_DB ?? 'gutsy'
 const MONGO_COLL = process.env.MONGO_COLL ?? 'events'
+const MYBET_COLL = process.env.MONGO_MYBET_COLL ?? 'mybet_events'
 
 // Fluid Compute reuses instances, so the client survives between invocations.
 let clientPromise: Promise<MongoClient> | null = null
@@ -24,6 +25,14 @@ function getClient(): Promise<MongoClient> {
   if (!MONGO_URI) throw new Error('MONGO_URI not set')
   if (clientPromise) return clientPromise
   return (clientPromise = new MongoClient(MONGO_URI, { maxPoolSize: 4 }).connect())
+}
+
+export interface MybetPulse {
+  newestAt: string | null
+  ageSec: number | null
+  total: number
+  /** events whose market is still scheduled open (suspendAt in the future). */
+  open: number
 }
 
 export interface MongoPulse {
@@ -36,6 +45,8 @@ export interface MongoPulse {
   postmatch: number
   total: number
   sports: Array<{ name: string; total: number; live: number }>
+  /** Freshness of the parallel mybet feed (gutsy.mybet_events). */
+  mybet: MybetPulse | null
 }
 
 /** One aggregation pass: status histogram, newest scrape stamp, per-sport
@@ -80,6 +91,29 @@ export async function readMongoPulse(): Promise<MongoPulse> {
     .filter((s) => s._id)
     .map((s) => ({ name: s._id as string, total: s.total, live: s.live }))
 
+  // mybet freshness — newest feed write + open-market count. Best-effort: a
+  // failure here must not sink the SwiftBet pulse, so it's caught.
+  let mybet: MybetPulse | null = null
+  try {
+    const mcoll = client.db(MONGO_DB).collection(MYBET_COLL)
+    const nowDate = new Date(serverNow)
+    const [newestDoc, mtotal, mopen] = await Promise.all([
+      mcoll.find({}, { projection: { feedLastUpdated: 1, lastSeenAt: 1 } }).sort({ feedLastUpdated: -1 }).limit(1).toArray(),
+      mcoll.estimatedDocumentCount(),
+      mcoll.countDocuments({ suspendAt: { $gt: nowDate } }),
+    ])
+    const rawM = newestDoc[0]?.feedLastUpdated ?? newestDoc[0]?.lastSeenAt ?? null
+    const newestAt = rawM ? new Date(rawM as string).toISOString() : null
+    mybet = {
+      newestAt,
+      ageSec: newestAt ? Math.max(0, Math.round((Date.parse(serverNow) - Date.parse(newestAt)) / 1000)) : null,
+      total: mtotal,
+      open: mopen,
+    }
+  } catch {
+    mybet = null
+  }
+
   return {
     ok: true,
     serverNow,
@@ -90,6 +124,7 @@ export async function readMongoPulse(): Promise<MongoPulse> {
     postmatch: byStatus.get('postmatch') ?? 0,
     total,
     sports,
+    mybet,
   }
 }
 
