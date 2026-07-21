@@ -20,7 +20,8 @@ interface Props {
 
 export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) {
   const favourites = useFavourites()
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  // Single open sport (accordion) — expanding one collapses any other.
+  const [expanded, setExpanded] = useState<string | null>(null)
   const universe = useSportUniverse()
   const [editing, setEditing] = useState<Favourite | 'new' | null>(null)
 
@@ -132,15 +133,10 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
       .sort((a, b) => b.live - a.live || b.total - a.total || a.league.localeCompare(b.league))
   }
 
-  const toggleExpand = (k: string) =>
-    setExpanded((prev) => {
-      const n = new Set(prev)
-      n.has(k) ? n.delete(k) : n.add(k)
-      return n
-    })
+  const toggleExpand = (k: string) => setExpanded((prev) => (prev === k ? null : k))
   // Clicking the sport name navigates to its board AND opens its league list
   // (two actions in one click); the chevron still toggles open/closed.
-  const openExpand = (k: string) => setExpanded((prev) => new Set(prev).add(k))
+  const openExpand = (k: string) => setExpanded(k)
 
   // Collapsed icon rail — just the navigable icons, tooltips on hover.
   if (collapsed) {
@@ -210,7 +206,7 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
                 total={s.total}
                 live={s.live}
                 leagues={leaguesForGroup(s.key)}
-                expanded={expanded.has(s.key)}
+                expanded={expanded === s.key}
                 onToggle={() => toggleExpand(s.key)}
                 onOpen={() => openExpand(s.key)}
               />
