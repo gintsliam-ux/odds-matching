@@ -386,13 +386,12 @@ export default function MappingPage() {
       if (sportFilter !== 'all' && sportGroupKey(t.sport) !== sportFilter) return false
       // Filters consider EITHER brand. "mapped" = SwiftBet or mybet has a
       // mapping; "verified" = everything mapped across both is verified;
-      // "unverified" = mapped but something still needs confirming.
+      // "unverified" = mapped but something still needs confirming. "All" shows
+      // every row (mapped + unmapped) so the tab counts stay consistent —
+      // All == Mapped + Unmapped, and Mapped == Verified + Unverified.
       const allMaps = [...t.mappings, ...t.mybetMappings]
       const mapped = allMaps.length > 0
       const verified = mapped && allMaps.every((m) => m.verified)
-      // Fully-done rows are hidden from the default view so the list surfaces
-      // only rows that still need work; the explicit filters still reveal them.
-      if (mappedFilter === 'all' && verified) return false
       if (mappedFilter === 'mapped' && !mapped) return false
       if (mappedFilter === 'unmapped' && mapped) return false
       if (mappedFilter === 'verified' && !verified) return false
