@@ -83,11 +83,17 @@ async function main(opts = { writeSnapshot: true }) {
 
   // Preserve manual/verified rows exactly like the SwiftBet matcher.
   const compStatus = new Map() // optic key → { hasSticky }
+  // Competitions held by a verified/manual mapping — off-limits to AUTO matches
+  // (1:1: a competition attaches to only one tournament).
+  const stickyCompIds = new Set()
   for (const r of await getAllSupabase(
-    'competition_mapping?provider=eq.mybet&select=optic_sport,optic_league,optic_tournament,source,verified',
+    'competition_mapping?provider=eq.mybet&select=optic_sport,optic_league,optic_tournament,gutsy_competition_id,source,verified',
   )) {
     const k = `${r.optic_sport}|${r.optic_league}|${r.optic_tournament}`
-    if (r.source === 'manual' || r.verified) compStatus.set(k, true)
+    if (r.source === 'manual' || r.verified) {
+      compStatus.set(k, true)
+      if (r.gutsy_competition_id) stickyCompIds.add(String(r.gutsy_competition_id))
+    }
   }
   const existingEvent = new Map(
     (await getAllSupabase('event_mapping?provider=eq.mybet&select=optic_fixture_id,source')).map((r) => [
@@ -150,6 +156,25 @@ async function main(opts = { writeSnapshot: true }) {
       source: 'auto',
       provider: PROVIDER,
     })
+  }
+  // 1:1 for AUTO matches — a competition attaches to only ONE tournament.
+  {
+    const claimed = new Set()
+    const winners = new Set()
+    for (const r of [...compResults].sort((a, b) => b.confidence - a.confidence)) {
+      const id = r.gutsy_competition_id
+      if (!id || stickyCompIds.has(String(id))) continue
+      if (claimed.has(String(id))) continue
+      claimed.add(String(id))
+      winners.add(r)
+    }
+    for (const r of compResults) {
+      if (r.gutsy_competition_id && !winners.has(r)) {
+        r.gutsy_sport = null
+        r.gutsy_competition = null
+        r.gutsy_competition_id = ''
+      }
+    }
   }
   const compUpserts = compResults.filter(
     (r) => !compStatus.get(`${r.optic_sport}|${r.optic_league}|${r.optic_tournament}`),

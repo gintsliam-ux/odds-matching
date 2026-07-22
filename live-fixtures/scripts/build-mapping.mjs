@@ -400,6 +400,10 @@ async function main(opts = { writeSnapshot: true }) {
   // have many rows. We preserve the WHOLE tournament if ANY of its rows is
   // manual or verified — auto matcher leaves it untouched.
   const compStatus = new Map() // optic key → { hasSticky: bool, hasAuto: bool }
+  // Competitions already held by a verified/manual mapping — off-limits to AUTO
+  // matches so a competition attaches to only one OPTIC tournament (e.g. "Série
+  // B", verified on Brazil, won't fuzzy-attach to Ecuador - Serie B).
+  const stickyCompIds = new Set()
   for (const r of await getAllSupabase(
     'competition_mapping?provider=eq.swift&select=optic_sport,optic_league,optic_tournament,gutsy_competition_id,source,verified',
   )) {
@@ -408,6 +412,7 @@ async function main(opts = { writeSnapshot: true }) {
     if (r.source === 'manual' || r.verified) cur.hasSticky = true
     if (r.source === 'manual') cur.hasManual = true
     if (r.source !== 'manual' && !r.verified) cur.hasAuto = true
+    if ((r.source === 'manual' || r.verified) && r.gutsy_competition_id) stickyCompIds.add(r.gutsy_competition_id)
     compStatus.set(k, cur)
   }
   const existingEvent = new Map(
@@ -491,6 +496,28 @@ async function main(opts = { writeSnapshot: true }) {
       confidence: +bestScore.toFixed(3),
       source: 'auto',
     })
+  }
+
+  // 1:1 for AUTO matches — a competition attaches to only ONE tournament. Drop
+  // it from an auto result if it's already held by a verified/manual mapping, or
+  // if another auto tournament matched it more confidently (ties → first). This
+  // kills fuzzy "already-mapped-elsewhere" matches (Ecuador→Série B, etc.).
+  {
+    const claimed = new Set()
+    const winners = new Set()
+    for (const r of [...compResults].sort((a, b) => b.confidence - a.confidence)) {
+      if (!r.gutsy_competition_id || stickyCompIds.has(r.gutsy_competition_id)) continue
+      if (claimed.has(r.gutsy_competition_id)) continue
+      claimed.add(r.gutsy_competition_id)
+      winners.add(r)
+    }
+    for (const r of compResults) {
+      if (r.gutsy_competition_id && !winners.has(r)) {
+        r.gutsy_sport = null
+        r.gutsy_competition = null
+        r.gutsy_competition_id = null
+      }
+    }
   }
 
   const compPaired = compResults.filter((r) => r.gutsy_competition).length
