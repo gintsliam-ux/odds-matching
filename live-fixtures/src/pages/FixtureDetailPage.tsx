@@ -14,7 +14,7 @@ import { leagueLabel, periodAbbrev, periodNoun, periodState } from '../lib/sport
 import { Avatar } from '../components/Avatar'
 import { LeagueBadge } from '../components/LeagueBadge'
 import type { Fixture } from '../lib/types'
-import { agoLabel, fmtDateTime, fmtLine, melbDateTime, overdueMinutes, placementOffset, startsInLabel } from '../lib/format'
+import { agoLabel, fmtDateTime, fmtLine, melbDateTime, melbDayTime, overdueMinutes, placementOffset, startsInLabel } from '../lib/format'
 import { fetchEventMappings, fetchCompetitionMappings, type EventMapping, type CompetitionMapping } from '../lib/mappingData'
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
 import { getMybetCatalog, type MybetCompetition, type MybetEvent } from '../lib/mybetCatalog'
@@ -1216,14 +1216,14 @@ function MybetBetsView({
 
   return (
     <div className="space-y-3 px-5 py-5">
-      <MybetAllCard bets={sorted} scheduledStart={_f.scheduledStart} actualStart={_f.actualStart} />
+      <MybetAllCard bets={sorted} scheduledStart={_f.scheduledStart} actualStart={_f.actualStart} home={_f.homeName} away={_f.awayName} />
     </div>
   )
 }
 
 /** All mybet bets for the game in one table — mirrors SwiftBet's MarketBetsCard
  *  (same columns, header, styling). */
-function MybetAllCard({ bets, scheduledStart, actualStart }: { bets: MybetBetRow[]; scheduledStart: string | null; actualStart: string | null }) {
+function MybetAllCard({ bets, scheduledStart, actualStart, home, away }: { bets: MybetBetRow[]; scheduledStart: string | null; actualStart: string | null; home: string; away: string }) {
   const stake = bets.reduce((s, b) => s + (b.amount_bet ?? 0), 0)
   const pl = bets.reduce((s, b) => s + (b.bet_result ?? 0), 0)
   const users = new Set(bets.map((b) => b.user_accountID)).size
@@ -1260,7 +1260,7 @@ function MybetAllCard({ bets, scheduledStart, actualStart }: { bets: MybetBetRow
           </thead>
           <tbody>
             {bets.map((b) => (
-              <MybetRow key={b.id} b={b} scheduledStart={scheduledStart} actualStart={actualStart} />
+              <MybetRow key={b.id} b={b} scheduledStart={scheduledStart} actualStart={actualStart} home={home} away={away} />
             ))}
           </tbody>
         </table>
@@ -1279,19 +1279,49 @@ function mybetResult(status: string | null): ResolvedResult {
   return { label, tone: RES_TONE[label], derived: false }
 }
 
+/** Does `text` mention this team (any of its significant words, len ≥ 4)? */
+function mentionsTeam(text: string, team: string): boolean {
+  return team.toLowerCase().split(/\s+/).filter((w) => w.length >= 4).some((w) => text.includes(w))
+}
+
+/** The leg of a cross-game multi that IS this fixture — prefer one naming both
+ *  teams, else either. */
+function relevantLeg(legs: MybetBetRow['legs'], home: string, away: string) {
+  const both = legs.find((l) => { const e = (l.event ?? '').toLowerCase(); return mentionsTeam(e, home) && mentionsTeam(e, away) })
+  if (both) return both
+  return legs.find((l) => { const e = (l.event ?? '').toLowerCase(); return mentionsTeam(e, home) || mentionsTeam(e, away) }) ?? null
+}
+
+/** Guess a bet's market from its selection text (mybet legs carry no market):
+ *  Over/Under → Total, ±line/points → Handicap, Draw → Draw, a team name → Head
+ *  to Head. Returns null when nothing matches. */
+function guessMarket(selection: string, home: string, away: string): string | null {
+  const t = (selection ?? '').toLowerCase()
+  if (!t) return null
+  if (/\bover\b|\bunder\b/.test(t)) return 'Total'
+  if (/[+-]\s*\d|\bline\b|handicap|spread|\bpoints?\b/.test(t)) return 'Handicap'
+  if (/\bdraw\b/.test(t)) return 'Draw'
+  if (mentionsTeam(t, home) || mentionsTeam(t, away)) return 'Head to Head'
+  return null
+}
+
 /** One mybet bet row — mirrors SwiftBet's BetRow columns and styling. SGMs (and
  *  only SGMs) expand to a per-leg breakdown; singles/multis stay one row. */
-function MybetRow({ b, scheduledStart, actualStart }: { b: MybetBetRow; scheduledStart: string | null; actualStart: string | null }) {
+function MybetRow({ b, scheduledStart, actualStart, home, away }: { b: MybetBetRow; scheduledStart: string | null; actualStart: string | null; home: string; away: string }) {
   const [open, setOpen] = useState(false)
   const late = b.placed_after_live
   const isSgm = b.sgm && b.legs.length > 1
   const isMulti = b.is_multi && !isSgm
   const expandable = isSgm
   const typeBadge = isSgm ? `SGM · ${b.leg_count}` : isMulti ? `MULTI · ${b.leg_count}` : null
-  // mybet's bet_type IS the market for a single (Win / Total / Handicap / …);
-  // multis have no single market.
-  const market = isSgm || isMulti ? '—' : (b.bet_type ?? '—')
-  const outcome = b.selections ?? '—'
+  // Cross-game multi: show ONLY the leg that is this game, not the whole multi
+  // string. Singles carry their selection directly.
+  const leg = isMulti ? relevantLeg(b.legs, home, away) : null
+  const selection = (isMulti ? leg?.outcome : b.selections) ?? b.selections ?? '—'
+  // Market isn't stored per leg — guess it from the selection; fall back to the
+  // single's bet_type (Win / Place / Total / …).
+  const market = isSgm ? '—' : (guessMarket(isMulti ? leg?.outcome ?? '' : b.selections ?? '', home, away) ?? b.bet_type ?? '—')
+  const outcome = selection
   const res = mybetResult(b.bet_status)
   const stake = b.amount_bet ?? 0
   const pl = b.bet_result ?? 0
@@ -1299,7 +1329,7 @@ function MybetRow({ b, scheduledStart, actualStart }: { b: MybetBetRow; schedule
     <>
       <tr className={`border-t border-[color:var(--line-soft)] ${late ? 'bg-[color:var(--live)]/[0.06]' : 'hover:bg-white/[0.02]'}`}>
         <td className="px-3 py-2 align-top text-[11px] tabular-nums text-gray-200">
-          {b.transaction_date ? melbDateTime(b.transaction_date) : '—'}
+          {b.transaction_date ? melbDayTime(b.transaction_date) : '—'}
           {late && (
             <div className="mt-0.5 inline-flex items-center gap-1 rounded bg-[color:var(--live)]/15 px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--live)]">
               after live

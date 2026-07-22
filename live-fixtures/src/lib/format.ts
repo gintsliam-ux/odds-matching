@@ -45,6 +45,13 @@ export function melbDateTime(iso: string | null): string {
   return p ? `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} MEL` : '—'
 }
 
+/** Compact Melbourne day+time, "27/05 09:30". Matches the SwiftBet bet-time
+ *  format (melbWallClock) so both books' Placed columns read the same. */
+export function melbDayTime(iso: string | null): string {
+  const p = melbParts(iso)
+  return p ? `${p.day}/${p.month} ${p.hour}:${p.minute} MEL` : '—'
+}
+
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 /** "Jun 7 15:00" in Melbourne. Compact form for cramped table cells. */
