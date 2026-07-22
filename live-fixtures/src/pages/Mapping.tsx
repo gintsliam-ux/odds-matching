@@ -800,6 +800,17 @@ function TournamentTable({
             </Cell>
             <Cell>
               <div className="flex items-center gap-1.5">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onEdit(t)
+                  }}
+                  className="shrink-0 rounded p-1 text-gray-500 transition-colors hover:bg-white/10 hover:text-[var(--up)]"
+                  title="Edit SWIFT mapping"
+                  aria-label="Edit SWIFT mapping"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
                 {mapped ? (
                   <div className="flex flex-wrap items-center gap-1.5">
                     {t.mappings.map((m) => (
@@ -816,21 +827,21 @@ function TournamentTable({
                 ) : (
                   <UnmappedSlot />
                 )}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onEdit(t)
-                  }}
-                  className="rounded p-1 text-gray-500 transition-colors hover:bg-white/10 hover:text-[var(--up)]"
-                  title="Edit SWIFT mapping"
-                  aria-label="Edit SWIFT mapping"
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                </button>
               </div>
             </Cell>
             <Cell>
               <div className="flex items-center gap-1.5">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onEditMybet(t)
+                  }}
+                  className="shrink-0 rounded p-1 text-gray-500 transition-colors hover:bg-white/10 hover:text-[var(--live)]"
+                  title="Edit mybet mapping"
+                  aria-label="Edit mybet mapping"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
                 {mybetMapped ? (
                   <div className="flex flex-wrap items-center gap-1.5">
                     {t.mybetMappings.map((m) => (
@@ -847,17 +858,6 @@ function TournamentTable({
                 ) : (
                   <UnmappedSlot />
                 )}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onEditMybet(t)
-                  }}
-                  className="rounded p-1 text-gray-500 transition-colors hover:bg-white/10 hover:text-[var(--live)]"
-                  title="Edit mybet mapping"
-                  aria-label="Edit mybet mapping"
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                </button>
               </div>
             </Cell>
             <Cell width="w-20" align="right">
@@ -1175,7 +1175,7 @@ function DrillView({
           NO EVENTS
         </div>
       ) : (
-        <Table headers={['START', 'STATUS', 'OPTIC · EVENT', 'SWIFT · MAPPED TO', 'MYBET · MAPPED TO', 'CONFIDENCE', '']}>
+        <Table headers={['START', 'STATUS', 'OPTIC · EVENT', 'SWIFT · MAPPED TO', 'MYBET · MAPPED TO', 'CONFIDENCE']}>
           {visible.map((f) => {
             const m = eventMap.get(f.id)
             const mb = mybetEventMap.get(f.id)
@@ -1204,25 +1204,72 @@ function DrillView({
                   </span>
                 </Cell>
                 <Cell width="w-80">
-                  {m?.swift_event_id ? (
-                    <span className="flex flex-col gap-0.5">
-                      <span className="flex items-center gap-2">
-                        <SourcePill kind="SWIFT" />
-                        <span className="truncate text-gray-100">
-                          {swiftEventLabel(m.swift_event_id, swiftEventById)}
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onEditEvent({
+                          kind: 'event',
+                          opticFixtureId: f.id,
+                          opticSportRaw: row.rawSport,
+                          label: `${f.homeName} v ${f.awayName} — ${kickoffLabel(f.startTime)} UTC`,
+                          // Event editor scopes candidate events to ONE SWIFT
+                          // competition. If the OPTIC tournament has multiple,
+                          // we surface the first; the user can still search by
+                          // name across the catalogue.
+                          swiftCompetitionId: row.mappings[0]?.swift_competition_id ?? null,
+                          swiftCompetitionName: row.mappings[0]?.swift_competition ?? null,
+                          currentSwiftId: m?.swift_event_id ?? null,
+                        })
+                      }}
+                      className="shrink-0 rounded p-1 text-gray-500 transition-colors hover:bg-white/10 hover:text-[var(--swift)]"
+                      title="Edit SWIFT mapping"
+                      aria-label="Edit SWIFT mapping"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <div className="min-w-0 flex-1">
+                      {m?.swift_event_id ? (
+                        <span className="flex flex-col gap-0.5">
+                          <span className="flex items-center gap-2">
+                            <SourcePill kind="SWIFT" />
+                            <span className="truncate text-gray-100">
+                              {swiftEventLabel(m.swift_event_id, swiftEventById)}
+                            </span>
+                            {m.source === 'manual' && <ManualBadge />}
+                          </span>
+                          <span className="ml-8 truncate text-[10px] tracking-widest text-gray-600">
+                            {m.swift_event_id}
+                          </span>
                         </span>
-                        {m.source === 'manual' && <ManualBadge />}
-                      </span>
-                      <span className="ml-8 truncate text-[10px] tracking-widest text-gray-600">
-                        {m.swift_event_id}
-                      </span>
-                    </span>
-                  ) : (
-                    <UnmappedSlot />
-                  )}
+                      ) : (
+                        <UnmappedSlot />
+                      )}
+                    </div>
+                  </div>
                 </Cell>
                 <Cell width="w-80">
                   <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onEditEvent({
+                          kind: 'event',
+                          provider: 'mybet',
+                          opticFixtureId: f.id,
+                          opticSportRaw: row.rawSport,
+                          label: `${f.homeName} v ${f.awayName} — ${kickoffLabel(f.startTime)} UTC`,
+                          swiftCompetitionId: null,
+                          swiftCompetitionName: null,
+                          currentSwiftId: mb?.swift_event_id ?? null,
+                        })
+                      }}
+                      className="shrink-0 rounded p-1 text-gray-500 transition-colors hover:bg-white/10 hover:text-[var(--mybet)]"
+                      title="Edit mybet mapping"
+                      aria-label="Edit mybet mapping"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
                     <div className="min-w-0 flex-1">
                       {mb?.swift_event_id ? (
                         <span className="flex flex-col gap-0.5">
@@ -1242,55 +1289,10 @@ function DrillView({
                         <UnmappedSlot />
                       )}
                     </div>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onEditEvent({
-                          kind: 'event',
-                          provider: 'mybet',
-                          opticFixtureId: f.id,
-                          opticSportRaw: row.rawSport,
-                          label: `${f.homeName} v ${f.awayName} — ${kickoffLabel(f.startTime)} UTC`,
-                          swiftCompetitionId: null,
-                          swiftCompetitionName: null,
-                          currentSwiftId: mb?.swift_event_id ?? null,
-                        })
-                      }}
-                      className="rounded p-1 text-gray-500 transition-colors hover:bg-white/10 hover:text-[var(--live)]"
-                      title="Edit mybet mapping"
-                      aria-label="Edit mybet mapping"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
                   </div>
                 </Cell>
                 <Cell width="w-20" align="right">
                   <ConfidenceBadge value={m?.confidence ?? 0} mapped={!!m?.swift_event_id} />
-                </Cell>
-                <Cell width="w-10" align="right">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onEditEvent({
-                        kind: 'event',
-                        opticFixtureId: f.id,
-                        opticSportRaw: row.rawSport,
-                        label: `${f.homeName} v ${f.awayName} — ${kickoffLabel(f.startTime)} UTC`,
-                        // Event editor scopes candidate events to ONE SWIFT
-                        // competition. If the OPTIC tournament has multiple,
-                        // we surface the first; the user can still search by
-                        // name across the catalogue.
-                        swiftCompetitionId: row.mappings[0]?.swift_competition_id ?? null,
-                        swiftCompetitionName: row.mappings[0]?.swift_competition ?? null,
-                        currentSwiftId: m?.swift_event_id ?? null,
-                      })
-                    }}
-                    className="rounded p-1 text-gray-500 transition-colors hover:bg-white/10 hover:text-gray-200"
-                    title="Edit mapping"
-                    aria-label="Edit mapping"
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
                 </Cell>
               </Row>
             )
