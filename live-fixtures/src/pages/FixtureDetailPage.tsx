@@ -1209,30 +1209,21 @@ function MybetBetsView({
     )
   }
 
-  // Group by bet type (multis in one "Multi" bucket). Late-bet cards float up.
-  const groups = new Map<string, MybetBetRow[]>()
-  for (const b of list) {
-    const k = b.is_multi ? 'Multi' : (b.bet_type ?? 'Other')
-    ;(groups.get(k) ?? groups.set(k, []).get(k)!).push(b)
-  }
-  const ordered = [...groups.entries()].sort((a, b) => {
-    const la = a[1].some((x) => x.placed_after_live)
-    const lb = b[1].some((x) => x.placed_after_live)
-    if (la !== lb) return la ? -1 : 1
-    return b[1].reduce((s, x) => s + (x.amount_bet ?? 0), 0) - a[1].reduce((s, x) => s + (x.amount_bet ?? 0), 0)
-  })
+  // One flat "All bets" list, newest placement first — mirrors the SwiftBet
+  // Bets layout (same columns + styling).
+  const placedMs = (b: MybetBetRow) => Date.parse(b.transaction_date ?? '') || 0
+  const sorted = [...list].sort((a, b) => placedMs(b) - placedMs(a))
 
   return (
     <div className="space-y-3 px-5 py-5">
-      {ordered.map(([type, gbets]) => (
-        <MybetTypeCard key={type} title={type} bets={gbets} scheduledStart={_f.scheduledStart} actualStart={_f.actualStart} />
-      ))}
+      <MybetAllCard bets={sorted} scheduledStart={_f.scheduledStart} actualStart={_f.actualStart} />
     </div>
   )
 }
 
-/** One bet-type bucket for mybet — mirror of SwiftBet's MarketBetsCard. */
-function MybetTypeCard({ title, bets, scheduledStart, actualStart }: { title: string; bets: MybetBetRow[]; scheduledStart: string | null; actualStart: string | null }) {
+/** All mybet bets for the game in one table — mirrors SwiftBet's MarketBetsCard
+ *  (same columns, header, styling). */
+function MybetAllCard({ bets, scheduledStart, actualStart }: { bets: MybetBetRow[]; scheduledStart: string | null; actualStart: string | null }) {
   const stake = bets.reduce((s, b) => s + (b.amount_bet ?? 0), 0)
   const pl = bets.reduce((s, b) => s + (b.bet_result ?? 0), 0)
   const users = new Set(bets.map((b) => b.user_accountID)).size
@@ -1240,7 +1231,7 @@ function MybetTypeCard({ title, bets, scheduledStart, actualStart }: { title: st
   return (
     <div className={`overflow-hidden rounded-lg bg-[color:var(--panel)]/50 ${lateCount > 0 ? 'border-t-2 border-[color:var(--live)]/60' : ''}`}>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-[color:var(--line-soft)] bg-black/[0.2] px-4 py-2.5">
-        <span className="text-[13px] font-semibold text-gray-100">{title}</span>
+        <span className="text-[13px] font-semibold text-gray-100">All bets</span>
         {lateCount > 0 && (
           <span className="inline-flex items-center gap-1 rounded-full bg-[color:var(--live)]/10 px-2 py-0.5 text-[10px] font-semibold text-[color:var(--live)]">
             ⚠ {lateCount} after live
@@ -1257,17 +1248,14 @@ function MybetTypeCard({ title, bets, scheduledStart, actualStart }: { title: st
         </span>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[820px] text-[12px]">
+        <table className="w-full min-w-[1000px] text-[12px]">
           <thead>
             <tr className="border-b border-[color:var(--line-soft)] bg-black/[0.12] text-left text-[11px] uppercase tracking-wide text-[color:var(--muted-2)]">
-              <th className="px-3 py-2 font-medium">Placed</th>
-              <th className="px-3 py-2 font-medium">vs Start</th>
-              <th className="px-3 py-2 font-medium">User</th>
-              <th className="px-3 py-2 font-medium">Selection</th>
-              <th className="px-3 py-2 font-medium">Status</th>
-              <th className="px-3 py-2 text-right font-medium">Stake</th>
-              <th className="px-3 py-2 text-right font-medium">Odds</th>
-              <th className="px-3 py-2 text-right font-medium">P/L</th>
+              {BET_COLS.map((c) => (
+                <th key={c} className={`px-3 py-2 font-medium ${c === 'Stake' || c === 'Odds' || c === 'P/L' ? 'text-right' : ''}`}>
+                  {c}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -1281,48 +1269,80 @@ function MybetTypeCard({ title, bets, scheduledStart, actualStart }: { title: st
   )
 }
 
-/** One mybet bet row. Multis expand to a SwiftBet-style leg breakdown
- *  (event · outcome · odds per leg), mirroring the SGM expansion on SwiftBet. */
+/** mybet result badge from bet_status, styled like SwiftBet's ResultCell. */
+function mybetResult(status: string | null): ResolvedResult {
+  const s = (status ?? '').toLowerCase()
+  let label: ResLabel = 'Open'
+  if (/won|winner|\bpaid\b/.test(s)) label = 'Won'
+  else if (/lost|no return|loser/.test(s)) label = 'Lost'
+  else if (/push|refund|cancel|void|dead heat/.test(s)) label = 'Push'
+  return { label, tone: RES_TONE[label], derived: false }
+}
+
+/** One mybet bet row — mirrors SwiftBet's BetRow columns and styling. SGMs (and
+ *  only SGMs) expand to a per-leg breakdown; singles/multis stay one row. */
 function MybetRow({ b, scheduledStart, actualStart }: { b: MybetBetRow; scheduledStart: string | null; actualStart: string | null }) {
   const [open, setOpen] = useState(false)
-  const expandable = b.is_multi && b.legs.length > 0
+  const late = b.placed_after_live
+  const isSgm = b.sgm && b.legs.length > 1
+  const isMulti = b.is_multi && !isSgm
+  const expandable = isSgm
+  const typeBadge = isSgm ? `SGM · ${b.leg_count}` : isMulti ? `MULTI · ${b.leg_count}` : null
+  // mybet's bet_type IS the market for a single (Win / Total / Handicap / …);
+  // multis have no single market.
+  const market = isSgm || isMulti ? '—' : (b.bet_type ?? '—')
+  const outcome = b.selections ?? '—'
+  const res = mybetResult(b.bet_status)
+  const stake = b.amount_bet ?? 0
+  const pl = b.bet_result ?? 0
   return (
     <>
-      <tr className={`border-t border-[color:var(--line-soft)] ${b.placed_after_live ? 'bg-[color:var(--live)]/[0.06] hover:bg-[color:var(--live)]/[0.10]' : 'hover:bg-white/[0.02]'}`}>
-        <td className="whitespace-nowrap px-3 py-2 align-top tabular-nums text-[color:var(--muted)]">
-          {b.placed_after_live && (
-            <span className="mr-1.5 rounded bg-[color:var(--live)] px-1 py-0.5 text-[9px] font-bold text-black">LATE</span>
-          )}
+      <tr className={`border-t border-[color:var(--line-soft)] ${late ? 'bg-[color:var(--live)]/[0.06]' : 'hover:bg-white/[0.02]'}`}>
+        <td className="px-3 py-2 align-top text-[11px] tabular-nums text-gray-200">
           {b.transaction_date ? melbDateTime(b.transaction_date) : '—'}
+          {late && (
+            <div className="mt-0.5 inline-flex items-center gap-1 rounded bg-[color:var(--live)]/15 px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--live)]">
+              after live
+            </div>
+          )}
         </td>
-        <td className="whitespace-nowrap px-3 py-2 align-top tabular-nums">
+        <td className="px-3 py-2 align-top text-[11px] tabular-nums">
           <OffsetLabel placed={b.transaction_date} scheduled={scheduledStart} actual={actualStart} />
         </td>
-        <td className="px-3 py-2 align-top font-mono text-[11px] text-[color:var(--muted-2)]">{b.user_accountID ?? '—'}</td>
-        <td className="max-w-[380px] px-3 py-2 align-top text-gray-200">
-          <div className="flex items-center gap-1.5">
-            {b.is_multi && (
-              <span className="shrink-0 rounded bg-white/5 px-1 py-0.5 text-[9px] font-semibold text-gray-300">MULTI · {b.leg_count}</span>
-            )}
-            {b.is_bonus && (
-              <span className="shrink-0 rounded bg-[color:var(--up)]/10 px-1 py-0.5 text-[9px] font-semibold text-[color:var(--up)]">BONUS</span>
-            )}
-            {expandable ? (
-              <button onClick={() => setOpen((o) => !o)} className="inline-flex min-w-0 items-center gap-1 text-left text-gray-200 hover:text-white">
-                {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
-                <span className="truncate">{b.selections ?? 'Multi'}</span>
-                <span className="shrink-0 text-[color:var(--muted-2)]">· {b.leg_count} legs</span>
-              </button>
-            ) : (
-              <span className="truncate">{b.selections ?? '—'}</span>
-            )}
-          </div>
+        <td className="px-3 py-2 align-top font-mono text-[10.5px] text-[color:var(--muted-2)]">{b.user_accountID ?? '—'}</td>
+        <td className="px-3 py-2 align-top text-gray-200">
+          {typeBadge ? (
+            <span className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-medium text-gray-200">{typeBadge}</span>
+          ) : (
+            <span className="text-[11.5px]">SINGLE</span>
+          )}
+          {b.is_bonus && (
+            <div className="mt-1">
+              <span className="rounded bg-[color:var(--up)]/10 px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--up)]">BONUS</span>
+            </div>
+          )}
         </td>
-        <td className="px-3 py-2 align-top text-[11px] text-[color:var(--muted-2)]">{cleanStatus(b.bet_status)}</td>
-        <td className="whitespace-nowrap px-3 py-2 text-right align-top tabular-nums text-gray-200">${(b.amount_bet ?? 0).toFixed(2)}</td>
-        <td className="px-3 py-2 text-right align-top tabular-nums text-gray-300">{b.price ?? '—'}</td>
-        <td className={`px-3 py-2 text-right align-top tabular-nums ${plTone(b.bet_result ?? 0)}`}>
-          {b.bet_result == null ? '—' : b.bet_result > 0 ? `+${b.bet_result}` : b.bet_result}
+        {expandable ? (
+          <td className="px-3 py-2 align-top text-gray-200" colSpan={2}>
+            <button onClick={() => setOpen((o) => !o)} className="inline-flex items-center gap-1 text-left text-gray-200 hover:text-white">
+              {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              <span>Same Game Multi</span>
+              <span className="text-[color:var(--muted-2)]">· {b.leg_count} legs</span>
+            </button>
+          </td>
+        ) : (
+          <>
+            <td className="px-3 py-2 align-top text-gray-200">{market}</td>
+            <td className="max-w-[320px] px-3 py-2 align-top text-gray-300">{outcome}</td>
+          </>
+        )}
+        <td className="px-3 py-2 align-top text-[11.5px] font-medium">
+          <ResultCell r={res} />
+        </td>
+        <td className="px-3 py-2 text-right align-top tabular-nums text-gray-200">${stake.toFixed(2)}</td>
+        <td className="px-3 py-2 text-right align-top tabular-nums text-gray-200">{b.price != null ? b.price.toFixed(2) : '—'}</td>
+        <td className={`px-3 py-2 text-right align-top tabular-nums ${pl > 0 ? 'text-[color:var(--total)]' : pl < 0 ? 'text-[color:var(--live)]' : 'text-gray-300'}`}>
+          ${pl.toFixed(2)}
         </td>
       </tr>
       {expandable && open && b.legs.map((lg, i) => (
@@ -1330,16 +1350,9 @@ function MybetRow({ b, scheduledStart, actualStart }: { b: MybetBetRow; schedule
           <td />
           <td />
           <td />
-          <td className="px-3 py-1.5 align-top">
-            <span className="text-[10px] text-[color:var(--muted-2)]">leg {i + 1}</span>{' '}
-            <span className="text-[11.5px] text-gray-200">{lg.event ?? '—'}</span>
-            {lg.outcome && (
-              <>
-                <span className="text-[color:var(--muted-2)]"> · </span>
-                <span className="text-[11.5px] text-gray-300">{lg.outcome}</span>
-              </>
-            )}
-          </td>
+          <td className="px-3 py-1.5 align-top text-[10px] text-[color:var(--muted-2)]">leg {i + 1}</td>
+          <td className="px-3 py-1.5 align-top text-[11.5px] text-gray-200">{lg.event ?? '—'}</td>
+          <td className="px-3 py-1.5 align-top text-[11.5px] text-gray-300">{lg.outcome ?? '—'}</td>
           <td />
           <td />
           <td className="px-3 py-1.5 text-right align-top tabular-nums text-[11.5px] text-gray-300">
@@ -1350,12 +1363,6 @@ function MybetRow({ b, scheduledStart, actualStart }: { b: MybetBetRow; schedule
       ))}
     </>
   )
-}
-
-/** mybet bet_status often carries a "<br>Tkt …" HTML fragment — strip it. */
-function cleanStatus(s: string | null): string {
-  if (!s) return '—'
-  return s.replace(/<br>.*/i, '').replace(/\s+/g, ' ').trim() || '—'
 }
 
 /** "2h before" / "+5m after live" — bet placement offset vs the game start. */
