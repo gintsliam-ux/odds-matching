@@ -164,6 +164,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         sport: (d.sport_name as string | null) ?? null,
         is_multi: legs.length > 0,
         leg_count: legs.length,
+        // Per-leg detail so the UI can show a SwiftBet-style multi breakdown.
+        legs: legs.map((lg: Record<string, unknown>) => ({
+          sport: (lg.multileg_sport as string | null) ?? null,
+          event: (lg.multileg_evetdescription as string | null) ?? null,
+          outcome: (lg.multileg_outcome as string | null) ?? null,
+          odds: typeof lg.multileg_dividend === 'number' ? (lg.multileg_dividend as number) : null,
+          date: lg.multileg_outcomedate ? new Date(lg.multileg_outcomedate as string).toISOString() : null,
+        })),
         matched_by: byEventId ? 'event_id' : 'leg_desc',
         placed_after_live: placedAfterLive,
       }

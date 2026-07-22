@@ -1272,43 +1272,83 @@ function MybetTypeCard({ title, bets, scheduledStart, actualStart }: { title: st
           </thead>
           <tbody>
             {bets.map((b) => (
-              <tr
-                key={b.id}
-                className={`border-t border-[color:var(--line-soft)] ${b.placed_after_live ? 'bg-[color:var(--live)]/[0.06] hover:bg-[color:var(--live)]/[0.10]' : 'hover:bg-white/[0.02]'}`}
-              >
-                <td className="whitespace-nowrap px-3 py-2 tabular-nums text-[color:var(--muted)]">
-                  {b.placed_after_live && (
-                    <span className="mr-1.5 rounded bg-[color:var(--live)] px-1 py-0.5 text-[9px] font-bold text-black">LATE</span>
-                  )}
-                  {b.transaction_date ? melbDateTime(b.transaction_date) : '—'}
-                </td>
-                <td className="whitespace-nowrap px-3 py-2 tabular-nums">
-                  <OffsetLabel placed={b.transaction_date} scheduled={scheduledStart} actual={actualStart} />
-                </td>
-                <td className="px-3 py-2 font-mono text-[11px] text-[color:var(--muted-2)]">{b.user_accountID ?? '—'}</td>
-                <td className="max-w-[380px] px-3 py-2 text-gray-200">
-                  <div className="flex items-center gap-1.5">
-                    {b.is_multi && (
-                      <span className="shrink-0 rounded bg-white/5 px-1 py-0.5 text-[9px] font-semibold text-gray-300">MULTI {b.leg_count}</span>
-                    )}
-                    {b.is_bonus && (
-                      <span className="shrink-0 rounded bg-[color:var(--up)]/10 px-1 py-0.5 text-[9px] font-semibold text-[color:var(--up)]">BONUS</span>
-                    )}
-                    <span className="truncate">{b.selections ?? '—'}</span>
-                  </div>
-                </td>
-                <td className="px-3 py-2 text-[11px] text-[color:var(--muted-2)]">{cleanStatus(b.bet_status)}</td>
-                <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-gray-200">${(b.amount_bet ?? 0).toFixed(2)}</td>
-                <td className="px-3 py-2 text-right tabular-nums text-gray-300">{b.price ?? '—'}</td>
-                <td className={`px-3 py-2 text-right tabular-nums ${plTone(b.bet_result ?? 0)}`}>
-                  {b.bet_result == null ? '—' : b.bet_result > 0 ? `+${b.bet_result}` : b.bet_result}
-                </td>
-              </tr>
+              <MybetRow key={b.id} b={b} scheduledStart={scheduledStart} actualStart={actualStart} />
             ))}
           </tbody>
         </table>
       </div>
     </div>
+  )
+}
+
+/** One mybet bet row. Multis expand to a SwiftBet-style leg breakdown
+ *  (event · outcome · odds per leg), mirroring the SGM expansion on SwiftBet. */
+function MybetRow({ b, scheduledStart, actualStart }: { b: MybetBetRow; scheduledStart: string | null; actualStart: string | null }) {
+  const [open, setOpen] = useState(false)
+  const expandable = b.is_multi && b.legs.length > 0
+  return (
+    <>
+      <tr className={`border-t border-[color:var(--line-soft)] ${b.placed_after_live ? 'bg-[color:var(--live)]/[0.06] hover:bg-[color:var(--live)]/[0.10]' : 'hover:bg-white/[0.02]'}`}>
+        <td className="whitespace-nowrap px-3 py-2 align-top tabular-nums text-[color:var(--muted)]">
+          {b.placed_after_live && (
+            <span className="mr-1.5 rounded bg-[color:var(--live)] px-1 py-0.5 text-[9px] font-bold text-black">LATE</span>
+          )}
+          {b.transaction_date ? melbDateTime(b.transaction_date) : '—'}
+        </td>
+        <td className="whitespace-nowrap px-3 py-2 align-top tabular-nums">
+          <OffsetLabel placed={b.transaction_date} scheduled={scheduledStart} actual={actualStart} />
+        </td>
+        <td className="px-3 py-2 align-top font-mono text-[11px] text-[color:var(--muted-2)]">{b.user_accountID ?? '—'}</td>
+        <td className="max-w-[380px] px-3 py-2 align-top text-gray-200">
+          <div className="flex items-center gap-1.5">
+            {b.is_multi && (
+              <span className="shrink-0 rounded bg-white/5 px-1 py-0.5 text-[9px] font-semibold text-gray-300">MULTI · {b.leg_count}</span>
+            )}
+            {b.is_bonus && (
+              <span className="shrink-0 rounded bg-[color:var(--up)]/10 px-1 py-0.5 text-[9px] font-semibold text-[color:var(--up)]">BONUS</span>
+            )}
+            {expandable ? (
+              <button onClick={() => setOpen((o) => !o)} className="inline-flex min-w-0 items-center gap-1 text-left text-gray-200 hover:text-white">
+                {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
+                <span className="truncate">{b.selections ?? 'Multi'}</span>
+                <span className="shrink-0 text-[color:var(--muted-2)]">· {b.leg_count} legs</span>
+              </button>
+            ) : (
+              <span className="truncate">{b.selections ?? '—'}</span>
+            )}
+          </div>
+        </td>
+        <td className="px-3 py-2 align-top text-[11px] text-[color:var(--muted-2)]">{cleanStatus(b.bet_status)}</td>
+        <td className="whitespace-nowrap px-3 py-2 text-right align-top tabular-nums text-gray-200">${(b.amount_bet ?? 0).toFixed(2)}</td>
+        <td className="px-3 py-2 text-right align-top tabular-nums text-gray-300">{b.price ?? '—'}</td>
+        <td className={`px-3 py-2 text-right align-top tabular-nums ${plTone(b.bet_result ?? 0)}`}>
+          {b.bet_result == null ? '—' : b.bet_result > 0 ? `+${b.bet_result}` : b.bet_result}
+        </td>
+      </tr>
+      {expandable && open && b.legs.map((lg, i) => (
+        <tr key={i} className="border-t border-[color:var(--line-soft)]/40 bg-black/[0.18]">
+          <td />
+          <td />
+          <td />
+          <td className="px-3 py-1.5 align-top">
+            <span className="text-[10px] text-[color:var(--muted-2)]">leg {i + 1}</span>{' '}
+            <span className="text-[11.5px] text-gray-200">{lg.event ?? '—'}</span>
+            {lg.outcome && (
+              <>
+                <span className="text-[color:var(--muted-2)]"> · </span>
+                <span className="text-[11.5px] text-gray-300">{lg.outcome}</span>
+              </>
+            )}
+          </td>
+          <td />
+          <td />
+          <td className="px-3 py-1.5 text-right align-top tabular-nums text-[11.5px] text-gray-300">
+            {lg.odds != null ? lg.odds.toFixed(2) : '—'}
+          </td>
+          <td />
+        </tr>
+      ))}
+    </>
   )
 }
 
@@ -1378,10 +1418,13 @@ function StatCard({
 /** Users / Bets / Stake / P/L summary shown directly under the scoreboard. P/L
  *  is computed from the current score (so it ticks while live) and flips its
  *  badge LIVE → FINAL when the game ends. */
-/** Market bucket for a bet — its market type, or "Same Game Multi" for SGMs. */
-function marketGroupKey(b: SwiftBetRow): string {
-  if ((b.type ?? '').toUpperCase() === 'SGM') return 'Same Game Multi'
-  return b.matched_leg?.mt ?? b.matched_leg?.market ?? b.market_category ?? 'Other'
+/** Bet-type bucket — mirrors the mybet view (all bets grouped by type):
+ *  Single / Multi / Same Game Multi. */
+function typeGroupKey(b: SwiftBetRow): string {
+  const t = (b.type ?? 'SINGLE').toUpperCase()
+  if (t === 'SGM') return 'Same Game Multi'
+  if (t === 'MULTI') return 'Multi'
+  return 'Single'
 }
 
 const BET_COLS = ['Placed', 'vs Start', 'User', 'Type', 'Market', 'Outcome', 'Result', 'Stake', 'Odds', 'P/L'] as const
@@ -1497,7 +1540,7 @@ function BetsTab({
   // that contains one ahead of the rest (then by stake).
   const groups = new Map<string, SwiftBetRow[]>()
   for (const b of list) {
-    const k = marketGroupKey(b)
+    const k = typeGroupKey(b)
     ;(groups.get(k) ?? groups.set(k, []).get(k)!).push(b)
   }
   const isFlagged = (x: SwiftBetRow) => x.placed_after_start || betMismatch(x, ctx)

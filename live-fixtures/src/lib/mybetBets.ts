@@ -2,6 +2,15 @@
 // on one game, joined by the mybet event_identifier (singles) or leg
 // description (multis).
 
+/** One leg of a mybet multi (from the bet's `legs[]`), normalised for display. */
+export interface MybetLeg {
+  sport: string | null
+  event: string | null
+  outcome: string | null
+  odds: number | null
+  date: string | null
+}
+
 export interface MybetBetRow {
   id: string
   transaction_id: number | null
@@ -18,6 +27,7 @@ export interface MybetBetRow {
   sport: string | null
   is_multi: boolean
   leg_count: number
+  legs: MybetLeg[]
   /** How the bet joined this game: the single's event_identifier, or a multi
    *  leg's description matched on both team names. */
   matched_by: 'event_id' | 'leg_desc'
