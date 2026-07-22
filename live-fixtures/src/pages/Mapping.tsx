@@ -10,6 +10,7 @@ import { MappingEditor, type EditorTarget } from '../components/MappingEditor'
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
 import { getMybetCatalog, type MybetEvent } from '../lib/mybetCatalog'
 import { fetchSwiftStatuses } from '../lib/swiftStatus'
+import { fetchMybetStatuses } from '../lib/mybetStatus'
 import { displaySport, sportEmoji, sportGroupKey, sportLabel } from '../lib/sports'
 import { kickoffLabel, melbDateTimeShort, utcDateTimeShort } from '../lib/format'
 import {
@@ -130,6 +131,38 @@ export default function MappingPage() {
       alive = false
     }
   }, [eventMap, swiftEventById])
+
+  // Same live-resolve for mybet: the mybet snapshot is a daily file, so a mapped
+  // mybet event that isn't in it would show a bare numeric id. Resolve names from
+  // /api/mybet-status. Each id fetched at most once.
+  const mybetResolveAttempted = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (mybetEventMap.size === 0) return
+    let alive = true
+    const missing: string[] = []
+    for (const m of mybetEventMap.values()) {
+      const id = m.swift_event_id
+      if (id && !mybetEventById.has(id) && !mybetResolveAttempted.current.has(id)) missing.push(id)
+    }
+    if (missing.length === 0) return
+    for (const id of missing) mybetResolveAttempted.current.add(id)
+    const CHUNK = 300
+    for (let i = 0; i < missing.length; i += CHUNK) {
+      fetchMybetStatuses(missing.slice(i, i + CHUNK))
+        .then((evs) => {
+          if (!alive || evs.length === 0) return
+          setMybetEventById((prev) => {
+            const next = new Map(prev)
+            for (const e of evs) next.set(e.id, { id: e.id, cid: null, sport: e.sport, competition: e.competition, name: e.name, home: e.home, away: e.away, start: e.start, suspendAt: e.suspendAt, status: e.status })
+            return next
+          })
+        })
+        .catch(() => {/* keep id fallback */})
+    }
+    return () => {
+      alive = false
+    }
+  }, [mybetEventMap, mybetEventById])
 
   useEffect(() => {
     let alive = true
@@ -1196,7 +1229,7 @@ function DrillView({
                           <span className="flex items-center gap-2">
                             <SourcePill kind="MYBET" />
                             <span className="truncate text-gray-100">
-                              {mybetEventById.get(mb.swift_event_id)?.name ?? mb.swift_event_id}
+                              {mybetEventLabel(mb.swift_event_id, mybetEventById)}
                             </span>
                             {mb.source === 'manual' && <ManualBadge />}
                           </span>
@@ -1276,6 +1309,15 @@ function swiftEventLabel(id: string, byId: Map<string, SwiftEvent>): string {
   if (e.home && e.away) return `${e.home} v ${e.away}`
   if (e.name) return e.name
   return id.slice(0, 8) + '…'
+}
+
+/** Readable label for a mybet event by id — "Home v Away", else name, else id. */
+function mybetEventLabel(id: string, byId: Map<string, MybetEvent>): string {
+  const e = byId.get(id)
+  if (!e) return id
+  if (e.home && e.away) return `${e.home} v ${e.away}`
+  if (e.name) return e.name
+  return id
 }
 
 function StatusChip({
