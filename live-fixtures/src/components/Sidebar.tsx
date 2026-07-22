@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { Activity, Bell, ChevronDown, ChevronRight, Clock, GitMerge, LayoutGrid, ListChecks, Pencil, Plus, Radio, Star } from 'lucide-react'
 import type { Fixture } from '../lib/types'
-import { fetchCompetitionMappings } from '../lib/mappingData'
+import { useMappedLeagues } from '../hooks/useMappedLeagues'
 import { displaySport, sportGroupKey } from '../lib/sports'
 import { LeagueBadge } from './LeagueBadge'
 import { favouriteMatches, useFavourites, type Favourite } from '../lib/favourites'
@@ -91,27 +91,9 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
     return map
   }, [favourites, fixtures])
 
-  // Leagues with a VERIFIED mapping on at least one brand (SwiftBet or mybet).
-  // Verified only — the name-matcher produces a lot of fuzzy auto-matches
-  // (a bare "Premier League" bolted onto Zimbabwe/Morocco/etc.), so counting
-  // those as "mapped" would clutter the nav with wrong leagues. Keyed by
-  // prettified league name only — auto-mapped rows store the feed's raw sport
-  // ("rugby") while the sidebar shows the reclassified one ("rugby league"), so
-  // a sport-qualified key would miss the split rugby buckets; league slugs are
-  // region-prefixed and effectively unique.
-  const [mappedLeagues, setMappedLeagues] = useState<Set<string>>(new Set())
-  useEffect(() => {
-    let alive = true
-    Promise.all([fetchCompetitionMappings(), fetchCompetitionMappings('mybet')])
-      .then(([sw, mb]) => {
-        if (!alive) return
-        const s = new Set<string>()
-        for (const c of [...sw, ...mb]) if (c.swift_competition && c.verified) s.add(c.optic_league)
-        setMappedLeagues(s)
-      })
-      .catch(() => {/* leagues just won't show until this loads */})
-    return () => { alive = false }
-  }, [])
+  // Leagues mapped to at least one brand (SwiftBet or mybet) — the nav shows
+  // only these under each sport.
+  const mappedLeagues = useMappedLeagues()
 
   // Every KNOWN league per PARENT sport group, from the full universe (not just
   // the live window) so the tree is complete even when a league's games are

@@ -7,6 +7,7 @@ import { useMongoPulse } from '../hooks/useMongoPulse'
 import { useMappingTick } from '../hooks/useMappingTick'
 import { useNow } from '../hooks/useNow'
 import { useStableOrder } from '../hooks/useStableOrder'
+import { useMappedLeagues } from '../hooks/useMappedLeagues'
 import { useDayFixtures } from '../hooks/useDayFixtures'
 import { useNotifications, type Notification } from '../hooks/useNotifications'
 import { useSwiftActualStartCapture } from '../hooks/useSwiftActualStartCapture'
@@ -48,7 +49,14 @@ function statusFromPath(pathname: string): 'live' | 'upcoming' | 'completed' | '
 export default function Layout() {
   const now = useNow(1000)
   const { fixtures: raw, feed, nextPollAt, error, lastUpdated } = useFixtures()
-  const fixtures = useStableOrder(raw)
+  const ordered = useStableOrder(raw)
+  // Restrict the board + counts to MAPPED events (league mapped to ≥1 brand).
+  // Fall back to everything until the mapping set loads (avoids an empty flash).
+  const mappedLeagues = useMappedLeagues()
+  const fixtures = useMemo(
+    () => (mappedLeagues.size === 0 ? ordered : ordered.filter((f) => mappedLeagues.has(f.league))),
+    [ordered, mappedLeagues],
+  )
   // SWIFT (Mongo) feed health — shown next to the OpticOdds feed pulse in the
   // header. Independent poll; the two upstreams can fail separately.
   const { pulse: mongoPulse, state: mongoState } = useMongoPulse()
@@ -65,7 +73,11 @@ export default function Layout() {
   const dayStatus: 'upcoming' | 'completed' = status === 'completed' ? 'completed' : 'upcoming'
   const date = params.get('date') || melbToday()
   const dayData = useDayFixtures(dayMode ? date : null, dayStatus)
-  const day: DayView = { mode: dayMode, status: dayStatus, date, ...dayData }
+  const dayFixtures = useMemo(
+    () => (mappedLeagues.size === 0 ? dayData.fixtures : dayData.fixtures.filter((f) => mappedLeagues.has(f.league))),
+    [dayData.fixtures, mappedLeagues],
+  )
+  const day: DayView = { mode: dayMode, status: dayStatus, date, ...dayData, fixtures: dayFixtures }
 
   const counts = useMemo(
     () => ({

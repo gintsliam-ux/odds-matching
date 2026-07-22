@@ -60,6 +60,15 @@ export default function NotificationsPage() {
     return [...m.entries()].filter(([, list]) => list.length > 0)
   }, [notifications])
 
+  // Collapsible notification groups (all expanded by default).
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const toggle = (k: string) =>
+    setCollapsed((prev) => {
+      const n = new Set(prev)
+      n.has(k) ? n.delete(k) : n.add(k)
+      return n
+    })
+
   const stillOpen = notifications.filter(
     (n) =>
       n.kind === 'swift_still_open' ||
@@ -102,33 +111,42 @@ export default function NotificationsPage() {
           </div>
         </div>
       ) : (
-        grouped.map(([kind, list]) => (
-          <section key={kind} className="mb-8">
-            <h2 className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-[color:var(--muted-2)]">
-              <BrandPill brand={kindBrand(kind)} />
-              {KIND_LABEL[kind]}
-              <span className="text-[color:var(--muted)]">· {list.length}</span>
-            </h2>
-            <div className="overflow-x-auto rounded-lg bg-[color:var(--panel)]/40">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-[11px] uppercase tracking-wide text-[color:var(--muted-2)]">
-                    <th className="px-4 py-2.5 font-medium">Sport</th>
-                    <th className="px-4 py-2.5 font-medium">Match-up</th>
-                    <th className="px-4 py-2.5 font-medium">Book event</th>
-                    <th className="px-4 py-2.5 font-medium">Started</th>
-                    <th className="px-4 py-2.5"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {list.map((n) => (
-                    <NotificationRow key={n.id} n={n} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        ))
+        grouped.map(([kind, list]) => {
+          const open = !collapsed.has(kind)
+          return (
+            <section key={kind} className="mb-8">
+              <button
+                onClick={() => toggle(kind)}
+                className="mb-3 flex w-full items-center gap-2 text-left text-xs font-medium uppercase tracking-wide text-[color:var(--muted-2)] transition-colors hover:text-gray-300"
+              >
+                {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                <BrandPill brand={kindBrand(kind)} />
+                {KIND_LABEL[kind]}
+                <span className="text-[color:var(--muted)]">· {list.length}</span>
+              </button>
+              {open && (
+                <div className="overflow-x-auto rounded-lg bg-[color:var(--panel)]/40">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-[11px] uppercase tracking-wide text-[color:var(--muted-2)]">
+                        <th className="px-4 py-2.5 font-medium">Sport</th>
+                        <th className="px-4 py-2.5 font-medium">Match-up</th>
+                        <th className="px-4 py-2.5 font-medium">Book event</th>
+                        <th className="px-4 py-2.5 font-medium">Started</th>
+                        <th className="px-4 py-2.5"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {list.map((n) => (
+                        <NotificationRow key={n.id} n={n} />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          )
+        })
       )}
 
       <CoverageSection
