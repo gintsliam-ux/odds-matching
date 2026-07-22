@@ -97,6 +97,16 @@ const LEAGUE_SPORT_OVERRIDES: Record<string, string> = {
   'australia_-_ice_hockey_league': 'icehockey', // fed as soccer
   'iceland_-_1_deild': 'soccer', // fed as unknown (Icelandic 2nd-div football)
   'spain_-_la_liga': 'soccer', // fed under its own `laliga` sport bucket
+  // OPTIC files these under Soccer, but they're other sports (confirmed while
+  // hand-mapping competitions).
+  'england_-_one_day_cup': 'cricket', // Royal London One-Day Cup
+  'icc_-_cwc_challenge_league_2': 'cricket', // ODI World Cup qualifier
+  'sri_lanka_-_lanka_premier_league': 'cricket', // LPL (T20 cricket)
+  'india_-_tamil_nadu_premier_league': 'cricket', // TNPL (T20 cricket)
+  'west_indies_-_caribbean_premier_league': 'cricket', // CPL (T20 cricket)
+  'philippines_-_governors_cup': 'basketball', // PBA Governors' Cup
+  'usa_-_premier_lacrosse_league': 'lacrosse', // PLL
+  'fivb_-_nations_league_women': 'volleyball', // FIVB Volleyball Nations League
 }
 
 /**
