@@ -435,24 +435,32 @@ export default function MappingPage() {
         getSwiftCatalog(),
         getMybetCatalog().catch(() => null),
       ])
-      // Name-match every tournament against each brand's catalogue. An UNMAPPED
-      // tournament takes the best match above threshold; a tournament that's
-      // ALREADY mapped still accepts an ADDITIONAL competition when it's a 100%
-      // (exact) match not already present — a book competition can legitimately
-      // cover several OPTIC tournaments. Existing mappings are always preserved.
-      // Tennis is skipped on the mybet side — its bucket names ("wta"/"atp")
-      // name-match every WTA/ATP competition, so mybet tennis is only trustworthy
-      // from event evidence (the nightly matcher), not names.
-      const FULL_MATCH = 0.999
-      const jobs: Array<{ t: TournamentRow; catalog: SwiftCompetition[]; provider: 'swift' | 'mybet'; existing: CompetitionMapping[] }> = []
+      // Name-match ONLY unmapped tournaments against each brand's catalogue.
+      // A tournament that already has a mapping is left alone (no extra picks).
+      // Each competition stays 1:1 — a competition already attached to another
+      // tournament is never reused. Tennis is skipped on the mybet side (its
+      // "wta"/"atp" buckets name-match every WTA/ATP competition, so mybet tennis
+      // is only trustworthy from event evidence, not names).
+      const usedSwift = new Set(
+        tournaments.flatMap((t) => t.mappings.map((m) => m.swift_competition_id).filter(Boolean)),
+      )
+      const usedMybet = new Set(
+        tournaments.flatMap((t) => t.mybetMappings.map((m) => m.swift_competition_id).filter(Boolean)),
+      )
+      const jobs: Array<{ t: TournamentRow; catalog: SwiftCompetition[]; provider: 'swift' | 'mybet'; used: Set<string | null> }> = []
       for (const t of visibleTournaments) {
-        if (!t.stickyUnmapped) jobs.push({ t, catalog: swiftCat.competitions, provider: 'swift', existing: t.mappings })
-        if (mybetCat && t.sport.toLowerCase() !== 'tennis')
-          jobs.push({ t, catalog: mybetCat.competitions, provider: 'mybet', existing: t.mybetMappings })
+        if (t.mappings.length === 0 && !t.stickyUnmapped) jobs.push({ t, catalog: swiftCat.competitions, provider: 'swift', used: usedSwift })
+        if (mybetCat && t.mybetMappings.length === 0 && t.sport.toLowerCase() !== 'tennis')
+          jobs.push({ t, catalog: mybetCat.competitions, provider: 'mybet', used: usedMybet })
+      }
+      if (jobs.length === 0) {
+        setAutoStatus('Nothing to auto-map in this view.')
+        setAutoRunning(false)
+        return
       }
       let paired = 0
       for (let i = 0; i < jobs.length; i++) {
-        const { t, catalog, provider, existing } = jobs[i]
+        const { t, catalog, provider, used } = jobs[i]
         setAutoStatus(`Auto-mapping ${i + 1}/${jobs.length}…`)
         const hit = bestSwiftMatch({
           opticSportRaw: t.rawSport,
@@ -461,34 +469,23 @@ export default function MappingPage() {
           catalog,
         })
         if (!hit) continue
-        const real = existing.filter((m) => m.swift_competition_id)
-        // Respect an explicit "no mapping" marker (a sentinel row with no real
-        // picks) — the user deliberately unmapped this one.
-        if (real.length === 0 && existing.length > 0) continue
-        const existingIds = new Set(real.map((m) => m.swift_competition_id))
-        if (existingIds.has(hit.competition.id)) continue // already mapped to this one
-        // Only ADD to an already-mapped tournament when the match is exact (100%);
-        // an unmapped one takes the best match (bestSwiftMatch already gates on
-        // the per-sport threshold).
-        if (real.length > 0 && hit.confidence < FULL_MATCH) continue
+        // 1:1 — don't attach a competition already mapped to another tournament.
+        if (used.has(hit.competition.id)) continue
         try {
           await setCompetitionMappingsManual({
             opticSportRaw: t.rawSport,
             opticLeagueRaw: t.rawLeague,
             opticTournamentRaw: t.rawTournament,
-            // Keep the existing mappings, append the new pick.
-            picks: [
-              ...real.map((m) => ({ id: m.swift_competition_id as string, name: m.swift_competition ?? '', sport: m.swift_sport })),
-              { id: hit.competition.id, name: hit.competition.name, sport: hit.competition.sport },
-            ],
+            picks: [{ id: hit.competition.id, name: hit.competition.name, sport: hit.competition.sport }],
             provider,
           })
+          used.add(hit.competition.id) // claim it so nothing else in this run reuses it
           paired++
         } catch {
           /* per-row failure shouldn't kill the whole run */
         }
       }
-      setAutoStatus(`Done — added ${paired} mapping${paired === 1 ? '' : 's'} across both books.`)
+      setAutoStatus(`Done — paired ${paired}/${jobs.length} across both books.`)
       setReloadKey((k) => k + 1)
       setTimeout(() => setAutoStatus(null), 4000)
     } catch (e) {
@@ -518,7 +515,15 @@ export default function MappingPage() {
         </span>
         <button
           onClick={runAutoMap}
-          disabled={autoRunning || visibleTournaments.length === 0}
+          disabled={
+            autoRunning ||
+            // Enabled while EITHER book has an unmapped, non-sticky row to fill.
+            !visibleTournaments.some(
+              (t) =>
+                (t.mappings.length === 0 && !t.stickyUnmapped) ||
+                (t.mybetMappings.length === 0 && t.sport.toLowerCase() !== 'tennis'),
+            )
+          }
           className="flex items-center gap-1.5 rounded-md border border-[color:var(--total)]/40 bg-[color:var(--total)]/10 px-3 py-1.5 text-[12px] font-medium text-[color:var(--total)] transition-colors hover:bg-[color:var(--total)]/15 disabled:cursor-not-allowed disabled:opacity-40"
           title="Auto-map every unmapped tournament in the current view"
         >
