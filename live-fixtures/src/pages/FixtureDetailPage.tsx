@@ -1418,15 +1418,6 @@ function StatCard({
 /** Users / Bets / Stake / P/L summary shown directly under the scoreboard. P/L
  *  is computed from the current score (so it ticks while live) and flips its
  *  badge LIVE → FINAL when the game ends. */
-/** Bet-type bucket — mirrors the mybet view (all bets grouped by type):
- *  Single / Multi / Same Game Multi. */
-function typeGroupKey(b: SwiftBetRow): string {
-  const t = (b.type ?? 'SINGLE').toUpperCase()
-  if (t === 'SGM') return 'Same Game Multi'
-  if (t === 'MULTI') return 'Multi'
-  return 'Single'
-}
-
 const BET_COLS = ['Placed', 'vs Start', 'User', 'Type', 'Market', 'Outcome', 'Result', 'Stake', 'Odds', 'P/L'] as const
 
 /** One market's bets, as a card with its own aggregate header + bet table. */
@@ -1535,27 +1526,10 @@ function BetsTab({
     )
   }
 
-  // Group by market. Bets placed AFTER the actual start are the worrying ones,
-  // so they float to the top — both within each card and by bumping any card
-  // that contains one ahead of the rest (then by stake).
-  const groups = new Map<string, SwiftBetRow[]>()
-  for (const b of list) {
-    const k = typeGroupKey(b)
-    ;(groups.get(k) ?? groups.set(k, []).get(k)!).push(b)
-  }
-  const isFlagged = (x: SwiftBetRow) => x.placed_after_start || betMismatch(x, ctx)
-  for (const gbets of groups.values()) {
-    // stable sort (API already returns bet_time desc) → flagged bets first
-    gbets.sort((a, b) => Number(isFlagged(b)) - Number(isFlagged(a)))
-  }
-  const hasFlag = (gbets: SwiftBetRow[]) => gbets.some(isFlagged)
-  const stakeOf = (gbets: SwiftBetRow[]) => gbets.reduce((s, x) => s + legStake(x), 0)
-  const ordered = [...groups.entries()].sort((a, b) => {
-    const la = hasFlag(a[1])
-    const lb = hasFlag(b[1])
-    if (la !== lb) return la ? -1 : 1
-    return stakeOf(b[1]) - stakeOf(a[1])
-  })
+  // One flat list of every bet on this event, newest placement on top — no
+  // market/type grouping.
+  const placedMs = (b: SwiftBetRow) => Date.parse(b.placed_at_utc ?? '') || Date.parse(b.bet_time ?? '') || 0
+  const sorted = [...list].sort((a, b) => placedMs(b) - placedMs(a))
 
   return (
     <div className="space-y-3 px-5 py-5">
@@ -1582,9 +1556,7 @@ function BetsTab({
           )}
         </div>
       )}
-      {ordered.map(([key, gbets]) => (
-        <MarketBetsCard key={key} title={key} bets={gbets} fixture={f} />
-      ))}
+      <MarketBetsCard title="All bets" bets={sorted} fixture={f} />
     </div>
   )
 }
