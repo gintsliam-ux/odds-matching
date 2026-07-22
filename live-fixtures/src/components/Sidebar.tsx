@@ -139,10 +139,10 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
       .sort((a, b) => b.live - a.live || b.total - a.total || a.league.localeCompare(b.league))
   }
 
+  // Clicking the sport name OR the chevron toggles its league list (navigating
+  // to the board too); clicking an open sport again closes it. Accordion: only
+  // one sport open at a time.
   const toggleExpand = (k: string) => setExpanded((prev) => (prev === k ? null : k))
-  // Clicking the sport name navigates to its board AND opens its league list
-  // (two actions in one click); the chevron still toggles open/closed.
-  const openExpand = (k: string) => setExpanded(k)
 
   // Collapsed icon rail — just the navigable icons, tooltips on hover.
   if (collapsed) {
@@ -214,7 +214,6 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
                 leagues={leaguesForGroup(s.key)}
                 expanded={expanded === s.key}
                 onToggle={() => toggleExpand(s.key)}
-                onOpen={() => openExpand(s.key)}
               />
             ))}
           </Group>
@@ -332,7 +331,6 @@ function SportRow({
   leagues,
   expanded,
   onToggle,
-  onOpen,
 }: {
   sportKey: string
   label: string
@@ -342,7 +340,6 @@ function SportRow({
   leagues: Array<{ league: string; total: number; live: number }>
   expanded: boolean
   onToggle: () => void
-  onOpen: () => void
 }) {
   const dim = total === 0
   const canExpand = leagues.length > 0
@@ -351,7 +348,7 @@ function SportRow({
       <div className="group flex items-center">
         <NavLink
           to={`/sport/${encodeURIComponent(sportKey)}`}
-          onClick={() => canExpand && onOpen()}
+          onClick={() => canExpand && onToggle()}
           className={({ isActive }) =>
             [
               'flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pl-2.5 pr-1 text-[12.5px] font-medium transition-colors',
