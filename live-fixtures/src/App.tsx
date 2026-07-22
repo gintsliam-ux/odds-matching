@@ -17,9 +17,12 @@ export default function App() {
             <Route path="upcoming" element={<Terminal />} />
             <Route path="completed" element={<Terminal />} />
             <Route path="sport/:sport" element={<Terminal />} />
+            <Route path="sport/:sport/:league" element={<Terminal />} />
             <Route path="favourite/:favId" element={<Terminal />} />
             <Route path="fixture/:id" element={<FixtureDetailPage />} />
             <Route path="mapping" element={<MappingPage />} />
+            <Route path="mapping/:sport" element={<MappingPage />} />
+            <Route path="mapping/:sport/:league" element={<MappingPage />} />
             <Route path="notifications" element={<NotificationsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

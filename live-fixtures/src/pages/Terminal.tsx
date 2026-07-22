@@ -6,7 +6,7 @@ import { DateBar } from '../components/DateBar'
 import { GridSkeleton } from '../components/Skeleton'
 import { useTerminal } from '../components/Layout'
 import { favouriteMatches, useFavourites } from '../lib/favourites'
-import { sportGroupKey } from '../lib/sports'
+import { sportGroupKey, slugToSport } from '../lib/sports'
 import { useSportUniverse } from '../hooks/useSportUniverse'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { fetchFixturesBySport } from '../lib/dataSource'
@@ -43,7 +43,10 @@ export default function Terminal() {
   const { fixtures, now, feed, error, day } = useTerminal()
   const navigate = useNavigate()
   const { pathname } = useLocation()
-  const { sport, favId } = useParams()
+  const { sport: sportSlug, league: leagueSlug, favId } = useParams()
+  // `/sport/:sport` pins a sport group (URL slug → group key, "rugby-league" →
+  // "rugby league"); `/sport/:sport/:league` also pins a raw league slug.
+  const sport = sportSlug ? slugToSport(sportSlug) : undefined
   const [params, setParams] = useSearchParams()
   const favourites = useFavourites()
   const universe = useSportUniverse()
@@ -184,9 +187,11 @@ export default function Terminal() {
     })
   }, [universe, sportCounts])
 
-  // A `?league=` param (e.g. from the sidebar's expandable sports) pre-selects
-  // the league filter. Applied on navigation; the dropdown takes over after.
-  const leagueParam = params.get('league')
+  // The `/sport/:sport/:league` path segment (raw league slug, e.g. from the
+  // sidebar's expandable sports) pre-selects the league filter. The dropdown
+  // takes over after — it holds a prettified name, so the filter below matches
+  // EITHER the raw slug or the pretty league.
+  const leagueParam = leagueSlug ?? null
   useEffect(() => {
     if (leagueParam) setLeague(leagueParam)
   }, [leagueParam])
@@ -235,7 +240,8 @@ export default function Terminal() {
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase()
     const filtered = scoped.filter((f) => {
-      if (league !== 'all' && f.league !== league) return false
+      // `league` is a pretty name (dropdown) or a raw slug (URL) — match either.
+      if (league !== 'all' && f.league !== league && f.rawLeague !== league) return false
       if (q && !`${f.homeName} ${f.awayName} ${f.league}`.toLowerCase().includes(q)) return false
       return true
     })

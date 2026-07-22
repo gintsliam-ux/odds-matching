@@ -15,6 +15,8 @@ export interface SportUniverse {
   rawSportsAll: Map<string, string[]>
   /** "prettifiedSport|prettifiedLeague" → raw league slug. */
   rawLeague: Map<string, string>
+  /** "groupKey|prettifiedLeague" → raw league slug (for building clean URLs). */
+  rawLeagueByGroup: Map<string, string>
   /** Non-completed (upcoming + live) fixture count per PARENT sport group key
    *  (sportGroupKey), computed over the whole table. The sidebar uses this so a
    *  sport whose next game is outside the board's ±6h window isn't shown as a
@@ -37,6 +39,7 @@ async function load(): Promise<SportUniverse> {
   const rawSport = new Map<string, string>()
   const rawSportsAll = new Map<string, Set<string>>() // sport -> all underlying raw slugs
   const rawLeague = new Map<string, string>()
+  const rawLeagueByGroup = new Map<string, string>() // `${groupKey}|${prettyLeague}` -> raw league slug
   const activeBySport = new Map<string, number>()
   const activeByLeague = new Map<string, number>()
   for (let from = 0; ; from += PAGE) {
@@ -76,6 +79,7 @@ async function load(): Promise<SportUniverse> {
         if (!pRaws) rawSportsAll.set(parent, (pRaws = new Set()))
         if (r.sport) pRaws.add(r.sport)
       }
+      if (l && rl) rawLeagueByGroup.set(`${parent}|${l}`, rl)
       let set = seen.get(s)
       if (!set) seen.set(s, (set = new Set()))
       if (l) {
@@ -100,7 +104,7 @@ async function load(): Promise<SportUniverse> {
   for (const [s, lset] of seen) leaguesBySport.set(s, [...lset].sort())
   const rawSportsAllOut = new Map<string, string[]>()
   for (const [s, raws] of rawSportsAll) rawSportsAllOut.set(s, [...raws])
-  return { sports, leaguesBySport, rawSport, rawSportsAll: rawSportsAllOut, rawLeague, activeBySport, activeByLeague }
+  return { sports, leaguesBySport, rawSport, rawSportsAll: rawSportsAllOut, rawLeague, rawLeagueByGroup, activeBySport, activeByLeague }
 }
 
 const EMPTY: SportUniverse = {
@@ -109,6 +113,7 @@ const EMPTY: SportUniverse = {
   rawSport: new Map(),
   rawSportsAll: new Map(),
   rawLeague: new Map(),
+  rawLeagueByGroup: new Map(),
   activeBySport: new Map(),
   activeByLeague: new Map(),
 }

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ArrowLeftRight, Check, ChevronRight, Database, GitMerge, Loader2, Pencil, Sparkles } from 'lucide-react'
 import { TableSkeleton } from '../components/Skeleton'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useTerminal } from '../components/Layout'
 import { useSportUniverse } from '../hooks/useSportUniverse'
 import { useTournamentFixtures } from '../hooks/useTournamentFixtures'
@@ -11,7 +11,7 @@ import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/
 import { getMybetCatalog, type MybetEvent } from '../lib/mybetCatalog'
 import { fetchSwiftStatuses } from '../lib/swiftStatus'
 import { fetchMybetStatuses } from '../lib/mybetStatus'
-import { displaySport, sportEmoji, sportGroupKey, sportLabel } from '../lib/sports'
+import { displaySport, slugToSport, sportEmoji, sportGroupKey, sportLabel, sportToSlug } from '../lib/sports'
 import { kickoffLabel, melbDateTimeShort, utcDateTimeShort } from '../lib/format'
 import {
   fetchCompetitionMappings,
@@ -32,7 +32,6 @@ import { BRAND_PILL, BRAND_CHIP, type Brand } from '../lib/brand'
 //   - List view: tournaments under the selected sport.
 //   - Drill view: click a tournament → events under it (`?tournament=key`).
 
-const TOURNAMENT_SEPARATOR = '||' // for the URL-encoded tournament key
 
 // OPTIC leagues we never list in the Mapping table. Mirrors EXCLUDE_LEAGUES in
 // scripts/build-mapping.mjs — ITF / UTR tennis tiers don't appear in gutsy.
@@ -59,6 +58,11 @@ export default function MappingPage() {
   useDocumentTitle('Mapping')
   const { fixtures } = useTerminal()
   const universe = useSportUniverse()
+  const navigate = useNavigate()
+  // `/mapping/:sport` pins a sport tab (URL slug → group key); adding `/:league`
+  // (raw league slug) drills into that tournament. Tennis season_type + filters
+  // (`mapped`, `q`) ride as query params.
+  const { sport: sportSlug, league: leagueSlug } = useParams()
   const [params, setParams] = useSearchParams()
 
   // One OPTIC tournament can have multiple SWIFT mappings (e.g. cricket
@@ -204,14 +208,24 @@ export default function MappingPage() {
   }, [reloadKey])
 
   // URL state ------------------------------------------------------------
-  const sportFilter = params.get('sport') ?? 'all' // sportGroupKey or 'all'
-  const tournamentKey = params.get('tournament') ?? null // "sport||league||tournament"
+  const sportFilter = sportSlug ? slugToSport(sportSlug) : 'all' // sportGroupKey or 'all'
+  const tournamentTennis = params.get('t') ?? '' // tennis season_type (drill only)
   const search = params.get('q') ?? ''
   const mappedFilter =
     (params.get('mapped') as 'all' | 'mapped' | 'unmapped' | 'verified' | 'unverified' | null) ?? 'all'
 
   function setParam(key: string, value: string | null) {
     updateParams({ [key]: value })
+  }
+
+  /** The current filter query (mapped/q), preserved when navigating between
+   *  sport/league paths so a tab click doesn't reset the filters. */
+  function filterQuery() {
+    const q = new URLSearchParams()
+    if (mappedFilter !== 'all') q.set('mapped', mappedFilter)
+    if (search) q.set('q', search)
+    const s = q.toString()
+    return s ? `?${s}` : ''
   }
 
   /**
@@ -444,10 +458,16 @@ export default function MappingPage() {
   // already-rendered list rather than re-parsing from the URL, which keeps the
   // raw query slugs handy without any extra plumbing.
   const selectedTournament = useMemo(() => {
-    if (!tournamentKey) return null
-    const [s, l, t] = tournamentKey.split(TOURNAMENT_SEPARATOR)
-    return tournaments.find((row) => row.sport === s && row.league === l && row.tournament === (t ?? '')) ?? null
-  }, [tournamentKey, tournaments])
+    if (!leagueSlug) return null
+    return (
+      tournaments.find(
+        (row) =>
+          sportGroupKey(row.rawSport) === sportFilter &&
+          row.rawLeague === leagueSlug &&
+          row.rawTournament === tournamentTennis,
+      ) ?? null
+    )
+  }, [leagueSlug, sportFilter, tournamentTennis, tournaments])
 
   // -----------------------------------------------------------------
 
@@ -576,7 +596,7 @@ export default function MappingPage() {
       <div className="-mx-1 mb-4 flex flex-wrap items-center gap-1.5 px-1">
         <SportTab
           active={sportFilter === 'all'}
-          onClick={() => updateParams({ sport: null, tournament: null })}
+          onClick={() => navigate(`/mapping${filterQuery()}`)}
           label="All"
           count={tournaments.length}
         />
@@ -584,7 +604,7 @@ export default function MappingPage() {
           <SportTab
             key={s.key}
             active={sportFilter === s.key}
-            onClick={() => updateParams({ sport: s.key, tournament: null })}
+            onClick={() => navigate(`/mapping/${sportToSlug(s.key)}${filterQuery()}`)}
             emoji={s.emoji}
             label={s.name}
             count={s.total}
@@ -676,7 +696,7 @@ export default function MappingPage() {
           swiftEventById={swiftEventById}
           mybetEventMap={mybetEventMap}
           mybetEventById={mybetEventById}
-          onBack={() => setParam('tournament', null)}
+          onBack={() => navigate(`/mapping/${sportSlug ?? ''}${filterQuery()}`)}
           onEditEvent={(t) => setEditor(t)}
           onReloadMappings={() => setReloadKey((k) => k + 1)}
         />
@@ -684,9 +704,10 @@ export default function MappingPage() {
         <TournamentTable
           rows={visibleTournaments}
           onOpen={(t) =>
-            setParam(
-              'tournament',
-              [t.sport, t.league, t.tournament].join(TOURNAMENT_SEPARATOR),
+            navigate(
+              `/mapping/${sportToSlug(sportGroupKey(t.rawSport))}/${encodeURIComponent(t.rawLeague)}${
+                t.rawTournament ? `?t=${encodeURIComponent(t.rawTournament)}` : ''
+              }`,
             )
           }
           onEdit={(t) =>
@@ -770,7 +791,7 @@ function TournamentTable({
   onToggleVerify,
 }: {
   rows: TournamentRowShape[]
-  onOpen: (t: { sport: string; league: string; tournament: string }) => void
+  onOpen: (t: TournamentRowShape) => void
   onEdit: (t: TournamentRowShape) => void
   onEditMybet: (t: TournamentRowShape) => void
   onToggleVerify: (t: TournamentRowShape, m: CompetitionMapping) => void

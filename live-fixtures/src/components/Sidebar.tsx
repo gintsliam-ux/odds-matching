@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom'
 import { Activity, Bell, ChevronDown, ChevronRight, Clock, GitMerge, LayoutGrid, ListChecks, Pencil, Plus, Radio, Star } from 'lucide-react'
 import type { Fixture } from '../lib/types'
 import { useMappedLeagues } from '../hooks/useMappedLeagues'
-import { displaySport, sportGroupKey } from '../lib/sports'
+import { displaySport, sportGroupKey, sportToSlug } from '../lib/sports'
 import { LeagueBadge } from './LeagueBadge'
 import { favouriteMatches, useFavourites, type Favourite } from '../lib/favourites'
 import { FavouriteEditor } from './FavouriteEditor'
@@ -140,7 +140,9 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
         // league with games beyond the ±6h window still shows its real count.
         const live = counts?.get(league)?.live ?? 0
         const total = Math.max(universe.activeByLeague.get(`${groupKey}|${league}`) ?? 0, live)
-        return { league, total, live }
+        // Raw league slug for the URL ("Australia - NRL" → "australia_-_nrl").
+        const raw = universe.rawLeagueByGroup.get(`${groupKey}|${league}`) ?? league
+        return { league, raw, total, live }
       })
       .sort((a, b) => b.live - a.live || b.total - a.total || a.league.localeCompare(b.league))
   }
@@ -343,7 +345,7 @@ function SportRow({
   badgeRaw: string
   total: number
   live: number
-  leagues: Array<{ league: string; total: number; live: number }>
+  leagues: Array<{ league: string; raw: string; total: number; live: number }>
   expanded: boolean
   onToggle: () => void
 }) {
@@ -353,7 +355,7 @@ function SportRow({
     <div>
       <div className="group flex items-center">
         <NavLink
-          to={`/sport/${encodeURIComponent(sportKey)}`}
+          to={`/sport/${sportToSlug(sportKey)}`}
           onClick={() => canExpand && onToggle()}
           className={({ isActive }) =>
             [
@@ -388,7 +390,7 @@ function SportRow({
             return (
               <NavLink
                 key={l.league}
-                to={`/sport/${encodeURIComponent(sportKey)}?league=${encodeURIComponent(l.league)}`}
+                to={`/sport/${sportToSlug(sportKey)}/${encodeURIComponent(l.raw)}`}
                 className={`flex items-center gap-2 rounded px-2 py-1 text-[11.5px] hover:bg-white/[0.04] hover:text-gray-200 ${dimLeague ? 'text-gray-600' : 'text-gray-400'}`}
               >
                 <span className="flex-1 truncate">{l.league}</span>
@@ -430,7 +432,7 @@ function CollapsedRail({
         {sports.map((s) => (
           <NavLink
             key={s.key}
-            to={`/sport/${encodeURIComponent(s.key)}`}
+            to={`/sport/${sportToSlug(s.key)}`}
             className={railLink}
             title={`${s.label}${s.total ? ` · ${s.total}` : ''}`}
           >

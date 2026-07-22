@@ -244,6 +244,17 @@ export function sportGroupKey(raw: string): string {
   return displaySport(raw).toLowerCase()
 }
 
+/** Sport group key → URL slug: "rugby league" → "rugby-league". */
+export function sportToSlug(groupKey: string): string {
+  return groupKey.trim().toLowerCase().replace(/\s+/g, '-')
+}
+
+/** URL slug → sport group key: "rugby-league" → "rugby league". Inverse of
+ *  sportToSlug (no display sport name contains a hyphen, so it round-trips). */
+export function slugToSport(slug: string): string {
+  return decodeURIComponent(slug).replace(/-/g, ' ').trim()
+}
+
 /**
  * Sidebar / chip-friendly sport label. Handles raw slugs (`icehockey`,
  * `rugby_union`) and prettified forms (`Rugby union`) alike, with explicit

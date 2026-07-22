@@ -5,7 +5,7 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { useTerminal } from '../components/Layout'
 import type { Notification } from '../hooks/useNotifications'
 import { useCoverageGaps } from '../hooks/useCoverageGaps'
-import { sportLabel } from '../lib/sports'
+import { sportGroupKey, sportLabel, sportToSlug } from '../lib/sports'
 import { BRAND_LABEL, BRAND_PILL, type Brand } from '../lib/brand'
 import { LeagueBadge } from '../components/LeagueBadge'
 import { melbDateTimeShort, placementOffset, utcDateTimeShort } from '../lib/format'
@@ -190,7 +190,7 @@ export default function NotificationsPage() {
               <div className="text-[11px] text-[color:var(--muted-2)]">{sportLabel(t.sport)}</div>
             </div>
             <Link
-              to={`/mapping?tournament=${encodeURIComponent(t.tournamentKey)}`}
+              to={`/mapping/${sportToSlug(sportGroupKey(t.rawSport))}/${encodeURIComponent(t.rawLeague)}`}
               className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-gray-300 hover:bg-white/5"
             >
               <GitMerge className="h-3 w-3" /> Map
