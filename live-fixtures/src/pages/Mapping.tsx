@@ -11,7 +11,7 @@ import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/
 import { getMybetCatalog, type MybetEvent } from '../lib/mybetCatalog'
 import { fetchSwiftStatuses } from '../lib/swiftStatus'
 import { fetchMybetStatuses } from '../lib/mybetStatus'
-import { displaySport, slugToSport, sportEmoji, sportGroupKey, sportLabel, sportToSlug } from '../lib/sports'
+import { displaySport, mybetSportOf, slugToSport, sportEmoji, sportGroupKey, sportLabel, sportToSlug } from '../lib/sports'
 import { kickoffLabel, melbDateTimeShort, utcDateTimeShort } from '../lib/format'
 import {
   fetchCompetitionMappings,
@@ -479,47 +479,48 @@ export default function MappingPage() {
   // Auto-map every CURRENTLY-VISIBLE unmapped tournament using bestSwiftMatch
   // (same scoring as the offline matcher). Saves as source='manual' so reruns
   // of build-mapping leave the user's accepted suggestions alone.
-  async function runAutoMap() {
+  // Auto-map one brand's competitions. Name-matches ONLY unmapped, non-sticky
+  // tournaments against that brand's catalogue; each competition stays 1:1 (a
+  // competition already attached to another tournament is never reused). Tennis
+  // is skipped on the mybet side (its "wta"/"atp" buckets name-match every
+  // WTA/ATP competition, so mybet tennis is only trustworthy from event evidence).
+  async function runAutoMap(provider: 'swift' | 'mybet') {
     if (autoRunning) return
     setAutoRunning(true)
-    setAutoStatus('Loading catalogues…')
+    setAutoStatus('Loading catalogue…')
+    const brand = provider === 'mybet' ? 'mybet' : 'SwiftBet'
     try {
-      const [swiftCat, mybetCat] = await Promise.all([
-        getSwiftCatalog(),
-        getMybetCatalog().catch(() => null),
-      ])
-      // Name-match ONLY unmapped tournaments against each brand's catalogue.
-      // A tournament that already has a mapping is left alone (no extra picks).
-      // Each competition stays 1:1 — a competition already attached to another
-      // tournament is never reused. Tennis is skipped on the mybet side (its
-      // "wta"/"atp" buckets name-match every WTA/ATP competition, so mybet tennis
-      // is only trustworthy from event evidence, not names).
-      const usedSwift = new Set(
-        tournaments.flatMap((t) => t.mappings.map((m) => m.swift_competition_id).filter(Boolean)),
-      )
-      const usedMybet = new Set(
-        tournaments.flatMap((t) => t.mybetMappings.map((m) => m.swift_competition_id).filter(Boolean)),
-      )
-      const jobs: Array<{ t: TournamentRow; catalog: SwiftCompetition[]; provider: 'swift' | 'mybet'; used: Set<string | null> }> = []
-      for (const t of visibleTournaments) {
-        if (t.mappings.length === 0 && !t.stickyUnmapped) jobs.push({ t, catalog: swiftCat.competitions, provider: 'swift', used: usedSwift })
-        if (mybetCat && t.mybetMappings.length === 0 && t.sport.toLowerCase() !== 'tennis')
-          jobs.push({ t, catalog: mybetCat.competitions, provider: 'mybet', used: usedMybet })
-      }
-      if (jobs.length === 0) {
-        setAutoStatus('Nothing to auto-map in this view.')
+      const cat = provider === 'mybet' ? await getMybetCatalog().catch(() => null) : await getSwiftCatalog()
+      if (!cat) {
+        setAutoStatus('mybet catalogue unavailable.')
         setAutoRunning(false)
+        return
+      }
+      const used = new Set(
+        tournaments.flatMap((t) =>
+          (provider === 'mybet' ? t.mybetMappings : t.mappings).map((m) => m.swift_competition_id).filter(Boolean),
+        ),
+      )
+      const jobs = visibleTournaments.filter((t) =>
+        provider === 'swift'
+          ? t.mappings.length === 0 && !t.stickyUnmapped
+          : t.mybetMappings.length === 0 && t.sport.toLowerCase() !== 'tennis',
+      )
+      if (jobs.length === 0) {
+        setAutoStatus(`Nothing to auto-map on ${brand} in this view.`)
+        setAutoRunning(false)
+        setTimeout(() => setAutoStatus(null), 3500)
         return
       }
       let paired = 0
       for (let i = 0; i < jobs.length; i++) {
-        const { t, catalog, provider, used } = jobs[i]
-        setAutoStatus(`Auto-mapping ${i + 1}/${jobs.length}…`)
+        const t = jobs[i]
+        setAutoStatus(`Auto-mapping ${brand} ${i + 1}/${jobs.length}…`)
         const hit = bestSwiftMatch({
           opticSportRaw: t.rawSport,
           opticLeagueRaw: t.rawLeague,
           opticTournamentRaw: t.rawTournament,
-          catalog,
+          catalog: cat.competitions,
         })
         if (!hit) continue
         // 1:1 — don't attach a competition already mapped to another tournament.
@@ -538,7 +539,7 @@ export default function MappingPage() {
           /* per-row failure shouldn't kill the whole run */
         }
       }
-      setAutoStatus(`Done — paired ${paired}/${jobs.length} across both books.`)
+      setAutoStatus(`Done — paired ${paired}/${jobs.length} on ${brand}.`)
       setReloadKey((k) => k + 1)
       setTimeout(() => setAutoStatus(null), 4000)
     } catch (e) {
@@ -566,23 +567,26 @@ export default function MappingPage() {
           Paired <span className="font-semibold tabular-nums text-gray-100">{totals.tPaired}</span>
           <span className="text-[color:var(--muted-2)]"> / {totals.tTotal}</span>
         </span>
-        <button
-          onClick={runAutoMap}
-          disabled={
-            autoRunning ||
-            // Enabled while EITHER book has an unmapped, non-sticky row to fill.
-            !visibleTournaments.some(
-              (t) =>
-                (t.mappings.length === 0 && !t.stickyUnmapped) ||
-                (t.mybetMappings.length === 0 && t.sport.toLowerCase() !== 'tennis'),
-            )
-          }
-          className="flex items-center gap-1.5 rounded-md border border-[color:var(--total)]/40 bg-[color:var(--total)]/10 px-3 py-1.5 text-[12px] font-medium text-[color:var(--total)] transition-colors hover:bg-[color:var(--total)]/15 disabled:cursor-not-allowed disabled:opacity-40"
-          title="Auto-map every unmapped tournament in the current view"
-        >
-          {autoRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-          Auto-map
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => runAutoMap('swift')}
+            disabled={autoRunning || !visibleTournaments.some((t) => t.mappings.length === 0 && !t.stickyUnmapped)}
+            className="flex items-center gap-1.5 rounded-md border border-[color:var(--swift)]/40 bg-[color:var(--swift)]/10 px-3 py-1.5 text-[12px] font-medium text-[color:var(--swift)] transition-colors hover:bg-[color:var(--swift)]/15 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Auto-map every unmapped tournament to SwiftBet in the current view"
+          >
+            {autoRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            Auto-map SWIFT
+          </button>
+          <button
+            onClick={() => runAutoMap('mybet')}
+            disabled={autoRunning || !visibleTournaments.some((t) => t.mybetMappings.length === 0 && t.sport.toLowerCase() !== 'tennis')}
+            className="flex items-center gap-1.5 rounded-md border border-[color:var(--mybet)]/40 bg-[color:var(--mybet)]/10 px-3 py-1.5 text-[12px] font-medium text-[color:var(--mybet)] transition-colors hover:bg-[color:var(--mybet)]/15 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Auto-map every unmapped tournament to mybet in the current view"
+          >
+            {autoRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            Auto-map MYBET
+          </button>
+        </div>
       </div>
 
       {autoStatus && (
@@ -1001,6 +1005,7 @@ function DrillView({
     rawLeague: string
     rawTournament: string
     mappings: CompetitionMapping[]
+    mybetMappings: CompetitionMapping[]
   }
   eventMap: Map<string, EventMapping>
   swiftEventById: Map<string, SwiftEvent>
@@ -1042,41 +1047,53 @@ function DrillView({
     })
   }, [fixtures, statusFilter])
 
-  // Auto-map every currently-visible unmapped event using bestSwiftEventMatch.
-  // Candidates = SWIFT events from every competition this tournament maps to
-  // (1-to-N: e.g. a tournament linked to multiple test series).
-  async function runEventAutoMap() {
+  // Auto-map every currently-visible unmapped event for one brand, by team names
+  // + start time. SwiftBet candidates are pooled from the tournament's mapped
+  // competitions; mybet's competitions are too sparse, so its candidates are all
+  // mybet events of the tournament's sport (the team+time match does the rest).
+  async function runEventAutoMap(provider: 'swift' | 'mybet') {
     if (autoRunning) return
     setAutoRunning(true)
-    setAutoStatus('Loading SWIFT catalogue…')
+    const brand = provider === 'mybet' ? 'mybet' : 'SwiftBet'
+    setAutoStatus(`Loading ${brand} catalogue…`)
     try {
-      const cat = await getSwiftCatalog()
-      // Pool candidate events from every mapped SWIFT competition.
-      const candidates: SwiftEvent[] = []
-      const seen = new Set<string>()
-      for (const m of row.mappings) {
-        if (!m.swift_competition_id) continue
-        for (const e of cat.eventsByCompId.get(m.swift_competition_id) ?? []) {
-          if (!seen.has(e.id)) {
-            seen.add(e.id)
-            candidates.push(e)
+      const emap = provider === 'mybet' ? mybetEventMap : eventMap
+      let candidates: SwiftEvent[] = []
+      if (provider === 'swift') {
+        const cat = await getSwiftCatalog()
+        const seen = new Set<string>()
+        for (const m of row.mappings) {
+          if (!m.swift_competition_id) continue
+          for (const e of cat.eventsByCompId.get(m.swift_competition_id) ?? []) {
+            if (!seen.has(e.id)) {
+              seen.add(e.id)
+              candidates.push(e)
+            }
           }
         }
+      } else {
+        const cat = await getMybetCatalog().catch(() => null)
+        if (!cat) {
+          setAutoStatus('mybet catalogue unavailable.')
+          setAutoRunning(false)
+          return
+        }
+        const wantSport = (mybetSportOf(row.rawSport) ?? '').toLowerCase()
+        candidates = cat.events.filter((e) => (e.sport ?? '').toLowerCase() === wantSport)
       }
       if (candidates.length === 0) {
-        setAutoStatus('No SWIFT events available for this tournament.')
+        setAutoStatus(`No ${brand} events available for this tournament.`)
         setAutoRunning(false)
         setTimeout(() => setAutoStatus(null), 3500)
         return
       }
-      // Don't reassign SWIFT events already taken by an existing event_mapping
-      // — that would cause the new mapping to silently overwrite the old one.
+      // Don't reassign an event already taken by an existing event_mapping.
       const taken = new Set<string>()
-      for (const m of eventMap.values()) if (m.swift_event_id) taken.add(m.swift_event_id)
+      for (const m of emap.values()) if (m.swift_event_id) taken.add(m.swift_event_id)
 
-      const todo = visible.filter((f) => !eventMap.get(f.id)?.swift_event_id)
+      const todo = visible.filter((f) => !emap.get(f.id)?.swift_event_id)
       if (todo.length === 0) {
-        setAutoStatus('Nothing to auto-map — every visible event is already mapped.')
+        setAutoStatus(`Nothing to auto-map on ${brand} — every visible event is already mapped.`)
         setAutoRunning(false)
         setTimeout(() => setAutoStatus(null), 3500)
         return
@@ -1084,7 +1101,7 @@ function DrillView({
       let paired = 0
       for (let i = 0; i < todo.length; i++) {
         const f = todo[i]
-        setAutoStatus(`Auto-mapping ${i + 1}/${todo.length}…`)
+        setAutoStatus(`Auto-mapping ${brand} ${i + 1}/${todo.length}…`)
         const hit = bestSwiftEventMatch({
           opticHome: f.homeName,
           opticAway: f.awayName,
@@ -1093,14 +1110,14 @@ function DrillView({
         })
         if (!hit) continue
         try {
-          await setEventMappingManual({ opticFixtureId: f.id, swiftEventId: hit.event.id })
+          await setEventMappingManual({ opticFixtureId: f.id, swiftEventId: hit.event.id, provider })
           taken.add(hit.event.id)
           paired++
         } catch {
           /* per-row failure shouldn't kill the run */
         }
       }
-      setAutoStatus(`Done — paired ${paired}/${todo.length}.`)
+      setAutoStatus(`Done — paired ${paired}/${todo.length} on ${brand}.`)
       onReloadMappings()
       setTimeout(() => setAutoStatus(null), 4500)
     } catch (e) {
@@ -1159,23 +1176,34 @@ function DrillView({
         <StatusChip active={statusFilter === 'upcoming'} onClick={() => setStatusFilter('upcoming')} label="UPCOMING" count={counts.upcoming} tone="up" />
         <StatusChip active={statusFilter === 'completed'} onClick={() => setStatusFilter('completed')} label="COMPLETED" count={counts.completed} />
 
-        <button
-          onClick={runEventAutoMap}
-          disabled={
-            autoRunning ||
-            row.mappings.length === 0 ||
-            visible.every((f) => !!eventMap.get(f.id)?.swift_event_id)
-          }
-          className="ml-auto flex items-center gap-1.5 rounded-md border border-[var(--total)]/40 bg-[var(--total)]/10 px-3 py-1.5 text-[10px] font-bold tracking-widest text-[var(--total)] transition-colors hover:bg-[var(--total)]/20 disabled:cursor-not-allowed disabled:opacity-40"
-          title={
-            row.mappings.length === 0
-              ? 'Map this tournament first, then auto-map its events.'
-              : 'Auto-map every unmapped event currently visible'
-          }
-        >
-          {autoRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-          AUTO-MAP EVENTS
-        </button>
+        <div className="ml-auto flex items-center gap-1.5">
+          <button
+            onClick={() => runEventAutoMap('swift')}
+            disabled={
+              autoRunning ||
+              row.mappings.length === 0 ||
+              visible.every((f) => !!eventMap.get(f.id)?.swift_event_id)
+            }
+            className="flex items-center gap-1.5 rounded-md border border-[var(--swift)]/40 bg-[var(--swift)]/10 px-3 py-1.5 text-[10px] font-bold tracking-widest text-[var(--swift)] transition-colors hover:bg-[var(--swift)]/20 disabled:cursor-not-allowed disabled:opacity-40"
+            title={
+              row.mappings.length === 0
+                ? 'Map this tournament to SwiftBet first, then auto-map its events.'
+                : 'Auto-map every unmapped SwiftBet event currently visible'
+            }
+          >
+            {autoRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            AUTO-MAP SWIFT
+          </button>
+          <button
+            onClick={() => runEventAutoMap('mybet')}
+            disabled={autoRunning || visible.every((f) => !!mybetEventMap.get(f.id)?.swift_event_id)}
+            className="flex items-center gap-1.5 rounded-md border border-[var(--mybet)]/40 bg-[var(--mybet)]/10 px-3 py-1.5 text-[10px] font-bold tracking-widest text-[var(--mybet)] transition-colors hover:bg-[var(--mybet)]/20 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Auto-map every unmapped mybet event currently visible"
+          >
+            {autoRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            AUTO-MAP MYBET
+          </button>
+        </div>
       </div>
 
       {autoStatus && (
