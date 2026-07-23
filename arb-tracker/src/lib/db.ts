@@ -75,15 +75,28 @@ export async function fetchAllEvents(): Promise<SportEvent[]> {
   return perSport.flat();
 }
 
-/** Load the odds rows for a single fixture from its sport's `_odds` table. */
+/**
+ * Load the odds rows for a single fixture. PostgREST caps a response at 1000
+ * rows, and a fixture's full ladder can exceed that, so page until drained.
+ */
 export async function fetchOdds(event: SportEvent): Promise<OddsRow[]> {
   if (!supabase) return [];
   const sp = configForLeagueId(event.league.id);
   if (!sp) return [];
-  const { data, error } = await supabase
-    .from(sp.oddsTable)
-    .select('market_id,selection,line,sportsbook,is_lay,current_price,open_price,status')
-    .eq('fixture_id', event.id);
-  if (error) throw new Error(`${sp.oddsTable}: ${error.message}`);
-  return data as OddsRow[];
+
+  const PAGE = 1000;
+  const all: OddsRow[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from(sp.oddsTable)
+      .select('market_id,selection,line,sportsbook,is_lay,current_price,open_price,status')
+      .eq('fixture_id', event.id)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`${sp.oddsTable}: ${error.message}`);
+    const rows = data as OddsRow[];
+    all.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+  return all;
 }

@@ -53,6 +53,10 @@ export interface SelectionRow {
   /** Best takeable price across fixed-odds books + Betfair back. */
   bestBookId: string | null;
   bestPrice: number | null;
+  /** True for both rows of the pick-'em main line (spread/total ladders). */
+  isMain?: boolean;
+  /** True on the first row of each line pair, for a divider above it. */
+  groupStart?: boolean;
 }
 
 export interface MarketGroup {
@@ -147,37 +151,76 @@ function makeSelectionRow(
 
 const isOver = (sel: string) => sel.toLowerCase() === 'over';
 
-/**
- * Pick the main line for a spread/total: prefer a line/magnitude that has BOTH
- * sides priced, then the best-covered among those; fall back to best-covered.
- */
-function pickMainLine(
-  marketRows: OddsRow[],
-  keyOf: (r: OddsRow) => string,
-  bothSides: (rs: OddsRow[]) => boolean,
-): OddsRow[] {
-  const byLine = new Map<string, OddsRow[]>();
-  for (const r of marketRows) {
-    const k = keyOf(r);
-    (byLine.get(k) ?? byLine.set(k, []).get(k)!).push(r);
+// How many lines to show either side of the pick-'em main line.
+const LADDER_RADIUS = 5;
+
+/** Mean of the takeable (non-lay) prices in a set of rows, or null. */
+function meanPrice(rows: OddsRow[]): number | null {
+  const ps: number[] = [];
+  for (const r of rows) {
+    if (r.is_lay) continue;
+    const p = r.current_price ?? r.open_price;
+    if (p != null) ps.push(p);
   }
-  let best: OddsRow[] = [];
-  let bestScore = -1;
-  for (const [, rs] of byLine) {
-    // Two-sided lines always outrank one-sided ones, then by book coverage.
-    const score = (bothSides(rs) ? 1000 : 0) + coverage(rs);
-    if (score > bestScore) {
-      bestScore = score;
-      best = rs;
+  return ps.length ? ps.reduce((a, b) => a + b, 0) / ps.length : null;
+}
+
+// Pick 'em is the line where each outcome pays ~evens.
+const PICKEM_TARGET = 1.9;
+
+/**
+ * The "pick 'em" main line: the line/magnitude where BOTH sides price closest
+ * to ~1.90 (evens). Falls back to the best-covered line when no line has both
+ * sides priced.
+ */
+function pickEmLine(
+  marketRows: OddsRow[],
+  keyNum: (r: OddsRow) => number,
+  isSideA: (r: OddsRow) => boolean,
+): number | null {
+  const groups = new Map<number, OddsRow[]>();
+  for (const r of marketRows) {
+    const k = keyNum(r);
+    if (!Number.isFinite(k)) continue;
+    (groups.get(k) ?? groups.set(k, []).get(k)!).push(r);
+  }
+  let best: number | null = null;
+  let bestScore = Infinity;
+  let fallback: number | null = null;
+  let fbCov = -1;
+  for (const [k, rs] of groups) {
+    const cov = coverage(rs);
+    if (cov > fbCov) {
+      fbCov = cov;
+      fallback = k;
+    }
+    const a = meanPrice(rs.filter(isSideA));
+    const b = meanPrice(rs.filter((r) => !isSideA(r)));
+    if (a != null && b != null) {
+      // Distance of both outcomes from evens — smallest wins.
+      const score = Math.abs(a - PICKEM_TARGET) + Math.abs(b - PICKEM_TARGET);
+      if (score < bestScore) {
+        bestScore = score;
+        best = k;
+      }
     }
   }
-  return best;
+  return best ?? fallback;
+}
+
+/** The main line plus up to `radius` lines either side, in value order. */
+function ladderWindow(values: number[], main: number | null, radius: number): number[] {
+  const sorted = [...values].sort((a, b) => a - b);
+  if (main == null) return sorted.slice(0, radius * 2 + 1);
+  const i = sorted.indexOf(main);
+  if (i < 0) return sorted.slice(0, radius * 2 + 1);
+  return sorted.slice(Math.max(0, i - radius), i + radius + 1);
 }
 
 /**
  * Pivot a fixture's odds rows into the H2H → Line → Total (full + 1H) grid.
- * Spread/Total ladders collapse to a single best-covered "main line", and
- * every market always renders both canonical outcomes (missing side => "–").
+ * H2H shows both teams; Spread/Total show the pick-'em main line plus five
+ * lines either side, each with both outcomes (missing side => "–").
  */
 export function buildMarkets(rows: OddsRow[], home: string, away: string): MarketGroup[] {
   const groups: MarketGroup[] = [];
@@ -191,31 +234,46 @@ export function buildMarkets(rows: OddsRow[], home: string, away: string): Marke
     let selections: SelectionRow[];
 
     if (totals) {
-      const lineRows = pickMainLine(
-        marketRows,
-        (r) => `${r.line ?? ''}`,
-        (rs) => rs.some((r) => isOver(r.selection)) && rs.some((r) => !isOver(r.selection)),
-      );
-      const L = lineRows[0]?.line ?? null;
-      const suffix = L != null ? ` ${L}` : '';
-      selections = [
-        makeSelectionRow('over', `Over${suffix}`, lineRows.filter((r) => isOver(r.selection))),
-        makeSelectionRow('under', `Under${suffix}`, lineRows.filter((r) => !isOver(r.selection))),
-      ];
+      const isSideA = (r: OddsRow) => isOver(r.selection);
+      const main = pickEmLine(marketRows, (r) => r.line ?? NaN, isSideA);
+      const lines = [...new Set(marketRows.map((r) => r.line).filter((l): l is number => l != null))];
+      selections = ladderWindow(lines, main, LADDER_RADIUS)
+        .sort((a, b) => Math.abs(a) - Math.abs(b))
+        .flatMap((L) => {
+        const over = marketRows.filter((r) => r.line === L && isOver(r.selection));
+        const under = marketRows.filter((r) => r.line === L && !isOver(r.selection));
+        const isMain = L === main;
+        return [
+          { ...makeSelectionRow(`over_${L}`, `Over ${L}`, over), isMain, groupStart: true },
+          { ...makeSelectionRow(`under_${L}`, `Under ${L}`, under), isMain },
+        ];
+      });
     } else if (spread) {
-      const magRows = pickMainLine(
-        marketRows,
-        (r) => `${Math.abs(r.line ?? 0)}`,
-        (rs) => rs.some((r) => r.selection === home) && rs.some((r) => r.selection === away),
-      );
-      const homeRows = magRows.filter((r) => r.selection === home);
-      const awayRows = magRows.filter((r) => r.selection === away);
-      const homeLine = homeRows[0]?.line ?? (awayRows[0]?.line != null ? -awayRows[0].line! : null);
-      const awayLine = awayRows[0]?.line ?? (homeRows[0]?.line != null ? -homeRows[0].line! : null);
-      selections = [
-        makeSelectionRow(home, `${home}${homeLine != null ? ` ${signed(homeLine)}` : ''}`, homeRows, home),
-        makeSelectionRow(away, `${away}${awayLine != null ? ` ${signed(awayLine)}` : ''}`, awayRows, away),
-      ];
+      // Key by the home-perspective handicap so home −X pairs with away +X
+      // (and stays separate from home +X). Away rows key on their negated line.
+      const isSideA = (r: OddsRow) => r.selection === home;
+      const keyNum = (r: OddsRow) =>
+        r.selection === home ? (r.line ?? 0) : -(r.line ?? 0);
+      const main = pickEmLine(marketRows, keyNum, isSideA);
+      const keys = [...new Set(marketRows.map(keyNum))];
+      selections = ladderWindow(keys, main, LADDER_RADIUS)
+        .sort((a, b) => Math.abs(a) - Math.abs(b))
+        .flatMap((K) => {
+        const hr = marketRows.filter((r) => r.selection === home && (r.line ?? 0) === K);
+        const ar = marketRows.filter((r) => r.selection === away && (r.line ?? 0) === -K);
+        const isMain = K === main;
+        return [
+          {
+            ...makeSelectionRow(`${home}_${K}`, `${home} ${signed(K)}`, hr, home),
+            isMain,
+            groupStart: true,
+          },
+          {
+            ...makeSelectionRow(`${away}_${K}`, `${away} ${signed(-K)}`, ar, away),
+            isMain,
+          },
+        ];
+      });
     } else {
       // Moneyline: canonical [home, away], plus any extra selection (e.g. Draw).
       const rowsFor = (sel: string) => marketRows.filter((r) => r.selection === sel);

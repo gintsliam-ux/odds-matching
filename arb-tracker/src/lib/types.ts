@@ -22,6 +22,9 @@ export interface SportEvent {
   name: string;
   home: string;
   away: string;
+  /** Live/final scores when available (null until a score source is wired). */
+  homeScore?: number | null;
+  awayScore?: number | null;
   /** ISO timestamp of scheduled start. */
   startsAt: string;
   status: EventStatus;

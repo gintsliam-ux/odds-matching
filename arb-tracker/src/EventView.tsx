@@ -15,8 +15,10 @@ export interface LayoutContext {
 
 function Placeholder({ text }: { text: string }) {
   return (
-    <div className="grid h-full min-h-[320px] place-items-center rounded-xl border border-dashed border-surface-border bg-surface-raised/30 text-sm text-slate-600">
-      {text}
+    <div className="p-4">
+      <div className="grid min-h-[320px] place-items-center rounded-xl border border-dashed border-surface-border bg-surface-raised/30 text-sm text-slate-600">
+        {text}
+      </div>
     </div>
   );
 }

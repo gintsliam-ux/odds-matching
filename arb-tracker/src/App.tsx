@@ -117,13 +117,13 @@ export default function App() {
   const outletContext: LayoutContext = { events, now, eventsLoading, oddsNonce };
 
   return (
-    <div className="min-h-full">
+    <div className="flex h-screen flex-col overflow-hidden">
       <Header onRefresh={refresh} refreshing={eventsLoading} />
 
-      <div className="flex">
-        {/* Left rail: next to jump events */}
-        <aside className="flex w-[320px] shrink-0 flex-col border-r border-surface-border">
-          <div className="border-b border-surface-border p-3">
+      <div className="flex min-h-0 flex-1">
+        {/* Left rail: next to jump events — scrolls within itself */}
+        <aside className="flex w-[320px] shrink-0 flex-col overflow-hidden border-r border-surface-border">
+          <div className="shrink-0 border-b border-surface-border p-3">
             <FilterBar
               date={date}
               onDate={setDate}
@@ -136,11 +136,11 @@ export default function App() {
             />
           </div>
 
-          <div className="px-3 py-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <div className="shrink-0 px-3 py-2 text-xs font-medium uppercase tracking-wide text-slate-500">
             {dateHeading}
           </div>
 
-          <nav className="flex-1 space-y-0.5 px-2 pb-4">
+          <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-4">
             {eventsError ? (
               <div className="px-2 py-8 text-center text-sm text-red-400">
                 {eventsError}
@@ -167,8 +167,8 @@ export default function App() {
           </nav>
         </aside>
 
-        {/* Main: routed event detail */}
-        <main className="min-w-0 flex-1 p-4">
+        {/* Main: routed event detail — pinned info bar + scrolling grid */}
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <Outlet context={outletContext} />
         </main>
       </div>

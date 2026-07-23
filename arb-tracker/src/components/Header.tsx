@@ -8,7 +8,7 @@ interface HeaderProps {
 
 export function Header({ onRefresh, refreshing }: HeaderProps) {
   return (
-    <header className="sticky top-0 z-10 border-b border-surface-border bg-surface/80 backdrop-blur">
+    <header className="shrink-0 border-b border-surface-border bg-surface">
       <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-3">
           <div className="grid h-9 w-9 place-items-center rounded-lg bg-emerald-500/15 text-emerald-400">

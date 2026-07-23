@@ -1,4 +1,3 @@
-import { Bell } from 'lucide-react';
 import type { SportEvent } from '../lib/types';
 import { countdownFor, TONE_CLASSES } from '../lib/countdown';
 import { BETFAIR, BOOKMAKERS, brandById, type MarketGroup } from '../lib/markets';
@@ -9,9 +8,18 @@ import { TeamLogo } from './TeamLogo';
 // Selection + Betfair(back,lay) + Best + one column per fixed-odds book.
 const TOTAL_COLS = 4 + BOOKMAKERS.length;
 
-function startLabel(iso: string): string {
+function metaLabel(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
     weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function timeLabel(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, {
     hour: '2-digit',
     minute: '2-digit',
   });
@@ -30,126 +38,160 @@ interface Props {
 
 export function EventDetail({ event, now, markets, loading }: Props) {
   const cd = countdownFor(event, now);
-  const { home, away } = event;
+  const { home, away, homeScore, awayScore } = event;
+  const hasScore = homeScore != null && awayScore != null;
 
   return (
-    <div className="space-y-3">
-      {/* Event header — the two teams + start time + info */}
-      <div className="rounded-xl border border-surface-border bg-surface-raised p-4">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <LeagueBadge league={event.league} size={40} />
-            <div>
-              <h2 className="flex items-center gap-2 text-lg font-semibold leading-tight text-slate-100">
-                <Bell size={14} className="text-slate-500" />
-                <TeamLogo name={home} size={24} />
-                {home}
-                <span className="mx-1 text-sm font-normal text-slate-500">vs</span>
-                <TeamLogo name={away} size={24} />
-                {away}
-              </h2>
-              <p className="mt-0.5 text-sm text-slate-500">
-                {event.league.name} · {event.sport} · {startLabel(event.startsAt)}
-              </p>
+    <div className="flex h-full flex-col">
+      {/* Event info scoreboard — pinned, full width */}
+      <div className="shrink-0 border-b border-surface-border bg-surface-raised px-4 py-2.5">
+        {/* meta line */}
+        <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
+          <span className="flex items-center gap-1.5">
+            <LeagueBadge league={event.league} size={16} />
+            {event.league.name} · {event.sport}
+          </span>
+          <span>{metaLabel(event.startsAt)}</span>
+        </div>
+
+        {/* scoreboard */}
+        <div className="flex items-center gap-3">
+          {/* home */}
+          <div className="flex min-w-0 flex-1 items-center justify-end gap-2.5">
+            <span className="truncate text-right text-base font-semibold text-slate-100">
+              {home}
+            </span>
+            <TeamLogo name={home} size={40} />
+          </div>
+
+          {/* score / status */}
+          <div className="flex shrink-0 flex-col items-center gap-1">
+            {hasScore ? (
+              <div className="flex items-baseline gap-2 text-3xl font-bold tabular-nums text-slate-100">
+                <span>{homeScore}</span>
+                <span className="text-lg text-slate-600">–</span>
+                <span>{awayScore}</span>
+              </div>
+            ) : (
+              <div className="text-xl font-semibold tabular-nums text-slate-300">
+                {timeLabel(event.startsAt)}
+              </div>
+            )}
+            <div
+              className={`flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold tabular-nums ${TONE_CLASSES[cd.tone]}`}
+            >
+              {cd.pulse && (
+                <span className="relative flex h-1.5 w-1.5">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-current opacity-75" />
+                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-current" />
+                </span>
+              )}
+              {cd.label}
             </div>
           </div>
-          <div
-            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-semibold tabular-nums ${TONE_CLASSES[cd.tone]}`}
-          >
-            {cd.pulse && (
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-current opacity-75" />
-                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-current" />
-              </span>
-            )}
-            {cd.label}
+
+          {/* away */}
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+            <TeamLogo name={away} size={40} />
+            <span className="truncate text-base font-semibold text-slate-100">
+              {away}
+            </span>
           </div>
         </div>
       </div>
 
-      {/* Markets × bookmakers price grid */}
+      {/* Markets × bookmakers price grid — scrolls under the pinned info */}
       {loading ? (
-        <div className="grid place-items-center rounded-xl border border-surface-border bg-surface-raised py-16 text-sm text-slate-500">
+        <div className="flex flex-1 items-center justify-center text-sm text-slate-500">
           Loading odds…
         </div>
       ) : markets.length === 0 ? (
-        <div className="grid place-items-center rounded-xl border border-dashed border-surface-border bg-surface-raised/50 py-16 text-sm text-slate-500">
+        <div className="flex flex-1 items-center justify-center text-sm text-slate-500">
           No odds available for this event.
         </div>
       ) : (
-      <div className="overflow-x-auto rounded-xl border border-surface-border bg-surface-raised">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="border-b border-surface-border">
-              <th
-                rowSpan={2}
-                className="sticky left-0 z-10 bg-surface-raised px-3 py-2 text-left align-bottom text-xs font-medium uppercase tracking-wide text-slate-500"
-              >
-                Selection
-              </th>
-              <th
-                colSpan={2}
-                className="border-l border-surface-border px-2 pt-2 text-center"
-              >
-                <BookmakerLogo brand={BETFAIR} />
-              </th>
-              <th
-                rowSpan={2}
-                className="border-l border-surface-border px-2 py-2 text-center align-bottom text-xs font-medium uppercase tracking-wide text-slate-500"
-              >
-                Best
-              </th>
-              {BOOKMAKERS.map((book) => (
-                <th
-                  key={book.id}
-                  rowSpan={2}
-                  className="border-l border-surface-border px-1.5 py-2 text-center align-bottom"
-                >
-                  <BookmakerLogo brand={book} />
+        <div className="min-h-0 flex-1 overflow-auto">
+          <table className="w-full border-separate border-spacing-0 text-sm">
+            <thead>
+              <tr className="h-14">
+                <th className="sticky left-0 top-0 z-40 border-b border-surface-border bg-surface-raised px-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Selection
                 </th>
-              ))}
-            </tr>
-            <tr className="border-b border-surface-border text-[11px] uppercase tracking-wide text-slate-500">
-              <th className="border-l border-surface-border px-2 pb-1.5 text-center font-medium">
-                Back
-              </th>
-              <th className="px-2 pb-1.5 text-center font-medium">Lay</th>
-            </tr>
-          </thead>
-          <tbody>
+                <th className="sticky top-0 z-30 border-b border-l border-surface-border bg-surface-raised px-2">
+                  <BetfairHead label="Back" />
+                </th>
+                <th className="sticky top-0 z-30 border-b border-surface-border bg-surface-raised px-2">
+                  <BetfairHead label="Lay" />
+                </th>
+                <th className="sticky top-0 z-30 border-b border-l border-surface-border bg-surface-raised px-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Best
+                </th>
+                {BOOKMAKERS.map((book) => (
+                  <th
+                    key={book.id}
+                    className="sticky top-0 z-30 border-b border-l border-surface-border bg-surface-raised px-1.5"
+                  >
+                    <div className="flex justify-center">
+                      <BookmakerLogo brand={book} />
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
             {markets.map((group) => (
               <MarketRows key={group.key} group={group} />
             ))}
-          </tbody>
-        </table>
-      </div>
+          </table>
+        </div>
       )}
     </div>
   );
 }
 
-function MarketRows({ group }: { group: MarketGroup }) {
+function BetfairHead({ label }: { label: string }) {
   return (
-    <>
-      <tr className="border-b border-surface-border bg-surface/60">
+    <div className="flex flex-col items-center gap-0.5">
+      <BookmakerLogo brand={BETFAIR} size={18} />
+      <span className="text-[10px] uppercase tracking-wide text-slate-500">{label}</span>
+    </div>
+  );
+}
+
+function MarketRows({ group }: { group: MarketGroup }) {
+  // Each market is its own <tbody> so its sticky name is bounded by the market
+  // — the next market's name pushes it out and replaces it.
+  return (
+    <tbody>
+      {/* Sticky market name — pinned below the column header until replaced. */}
+      <tr>
         <td
           colSpan={TOTAL_COLS}
-          className="sticky left-0 px-3 py-1.5 text-xs font-semibold text-slate-300"
+          className="sticky top-14 z-20 border-b border-surface-border bg-surface p-0"
         >
-          {group.label}
+          <span className="sticky left-0 inline-block px-3 py-1.5 text-xs font-semibold text-slate-300">
+            {group.label}
+          </span>
         </td>
       </tr>
       {group.selections.map((row) => {
         const bestBrand = row.bestBookId ? brandById(row.bestBookId) : undefined;
+        const cellBg = row.isMain ? 'bg-emerald-500/[0.06]' : 'bg-surface-raised';
         return (
           <tr
             key={row.key}
-            className="border-b border-surface-border/60 last:border-0 hover:bg-white/[0.02]"
+            className={`border-b border-surface-border/50 hover:bg-white/[0.02] ${
+              row.isMain ? 'bg-emerald-500/[0.06]' : ''
+            }`}
           >
-            <td className="sticky left-0 z-10 bg-surface-raised px-3 py-2 text-slate-200">
+            <td className={`sticky left-0 z-10 px-3 py-2 text-slate-200 ${cellBg}`}>
               <span className="flex items-center gap-2">
                 {row.team && <TeamLogo name={row.team} size={18} />}
                 {row.label}
+                {row.isMain && row.groupStart && (
+                  <span className="rounded bg-emerald-500/20 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-300">
+                    Pick&apos;em
+                  </span>
+                )}
               </span>
             </td>
 
@@ -196,6 +238,6 @@ function MarketRows({ group }: { group: MarketGroup }) {
           </tr>
         );
       })}
-    </>
+    </tbody>
   );
 }
