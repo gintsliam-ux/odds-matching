@@ -13,6 +13,11 @@ import type { LayoutContext } from './EventView';
 
 const STATUS_ORDER: Record<EventStatus, number> = { live: 0, upcoming: 1, final: 2 };
 
+// The ticker is a next-to-jump strip: live now plus anything starting within a
+// day. Live games always qualify (they started in the past); this only bounds
+// how far ahead upcoming fixtures reach.
+const TICKER_HORIZON_MS = 24 * 60 * 60 * 1000;
+
 /** Local YYYY-MM-DD for date-filter comparison. */
 function localDay(value: string | number | Date): string {
   const d = new Date(value);
@@ -130,27 +135,52 @@ export default function App() {
     [filtered, now],
   );
 
-  // Best H2H price for the scoreboard's upcoming (not-yet-played) fixtures.
-  // Keyed on the fixture set + oddsNonce, so it refetches on the 60s poll but
-  // not every render.
+  // The top ticker ignores the rail's filters — live now plus everything within
+  // the next 24h, finals dropped, live first then soonest to jump.
+  const tickerEvents = useMemo(
+    () =>
+      events
+        .filter(
+          (e) =>
+            effectiveStatus(e, now) !== 'final' &&
+            new Date(e.startsAt).getTime() < now + TICKER_HORIZON_MS,
+        )
+        .sort((a, b) => {
+          const sa = STATUS_ORDER[effectiveStatus(a, now)];
+          const sb = STATUS_ORDER[effectiveStatus(b, now)];
+          if (sa !== sb) return sa - sb;
+          return new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime();
+        }),
+    [events, now],
+  );
+
+  // Best H2H price for the ticker's upcoming (not-yet-played) fixtures. Keyed on
+  // all unplayed events — not the filtered set — since the ticker is filter-
+  // independent; refetches on the 60s poll, not every render.
   const [prices, setPrices] = useState<Map<string, H2HPrices>>(new Map());
   const upcomingKey = useMemo(
     () =>
-      filtered
+      events
         .filter((e) => e.homeScore == null || e.awayScore == null)
         .map((e) => e.id)
         .sort()
         .join(','),
-    [filtered],
+    [events],
   );
   useEffect(() => {
     const ids = new Set(upcomingKey ? upcomingKey.split(',') : []);
-    if (ids.size === 0) {
+    // Only the fixtures the ticker can actually show — unplayed and within the
+    // horizon. Date.now() here (not `now`) keeps the effect off the 1s tick.
+    const horizon = Date.now() + TICKER_HORIZON_MS;
+    const windowed = events.filter(
+      (e) => ids.has(e.id) && new Date(e.startsAt).getTime() < horizon,
+    );
+    if (windowed.length === 0) {
       setPrices(new Map());
       return;
     }
     let cancelled = false;
-    fetchH2HPrices(filtered.filter((e) => ids.has(e.id)))
+    fetchH2HPrices(windowed)
       .then((m) => !cancelled && setPrices(m))
       .catch(() => {});
     return () => {
@@ -200,9 +230,9 @@ export default function App() {
         </button>
       </div>
 
-      {/* Top ticker: the whole slate at a glance */}
+      {/* Top ticker: live + upcoming across everything, ignoring the filters. */}
       <ScoreboardBar
-        events={visible}
+        events={tickerEvents}
         now={now}
         prices={prices}
         activeId={activeId}
