@@ -1,12 +1,12 @@
 import type { SportEvent } from '../lib/types';
-import { countdownFor, TONE_CLASSES } from '../lib/countdown';
-import { BETFAIR, BOOKMAKERS, brandById, type MarketGroup } from '../lib/markets';
+import { countdownFor, effectiveStatus, TONE_CLASSES } from '../lib/countdown';
+import { BETFAIR, booksFor, brandById, type MarketGroup } from '../lib/markets';
 import { LeagueBadge } from './LeagueBadge';
 import { BookmakerLogo } from './BookmakerLogo';
 import { TeamLogo } from './TeamLogo';
 
-// Selection + Betfair(back,lay) + Best + one column per fixed-odds book.
-const TOTAL_COLS = 4 + BOOKMAKERS.length;
+// Selection + Betfair(back,lay) + Best, then one column per fixed-odds book.
+const FIXED_COLS = 4;
 
 function metaLabel(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
@@ -29,6 +29,40 @@ function fmt(n: number | null): string {
   return n != null ? n.toFixed(2) : '–';
 }
 
+function ordinal(n: number): string {
+  const teens = n % 100;
+  if (teens >= 11 && teens <= 13) return `${n}th`;
+  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
+}
+
+const isBaseball = (sport: string) => sport === 'Baseball';
+
+/** Period abbreviation per sport (Q for quarters, H for halves). */
+function periodPrefix(sport: string): string {
+  if (sport === 'Aussie Rules') return 'Q';
+  if (sport === 'Rugby League') return 'H';
+  return 'P';
+}
+
+/** Short label for a completed/current period: "Q3", "6th" for innings. */
+function periodLabel(sport: string, period: number): string {
+  return isBaseball(sport) ? ordinal(period) : `${periodPrefix(sport)}${period}`;
+}
+
+/**
+ * The live badge text. Baseball's `clock` is the half-inning ("Top"/"Bot")
+ * rather than a countdown, so it reads ahead of the inning.
+ */
+function liveLabel(
+  sport: string,
+  period: number | null | undefined,
+  clock: string | null | undefined,
+): string {
+  if (period == null) return 'LIVE';
+  if (isBaseball(sport)) return `${clock ? `${clock} ` : ''}${ordinal(period)}`;
+  return `${periodLabel(sport, period)}${clock ? ` ${clock}` : ''}`;
+}
+
 interface Props {
   event: SportEvent;
   now: number;
@@ -38,8 +72,12 @@ interface Props {
 
 export function EventDetail({ event, now, markets, loading }: Props) {
   const cd = countdownFor(event, now);
-  const { home, away, homeScore, awayScore } = event;
+  const { home, away, homeScore, awayScore, periodScores } = event;
+  const status = effectiveStatus(event, now);
   const hasScore = homeScore != null && awayScore != null;
+  const books = booksFor(event.league.id);
+  const totalCols = FIXED_COLS + books.length;
+  const clockText = liveLabel(event.sport, event.period, event.clock);
 
   return (
     <div className="flex h-full flex-col">
@@ -78,15 +116,17 @@ export function EventDetail({ event, now, markets, loading }: Props) {
               </div>
             )}
             <div
-              className={`flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold tabular-nums ${TONE_CLASSES[cd.tone]}`}
+              className={`flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-semibold tabular-nums ${
+                status === 'live' ? TONE_CLASSES.live : TONE_CLASSES[cd.tone]
+              }`}
             >
-              {cd.pulse && (
+              {(status === 'live' || cd.pulse) && (
                 <span className="relative flex h-1.5 w-1.5">
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-current opacity-75" />
                   <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-current" />
                 </span>
               )}
-              {cd.label}
+              {status === 'live' ? clockText : cd.label}
             </div>
           </div>
 
@@ -98,6 +138,20 @@ export function EventDetail({ event, now, markets, loading }: Props) {
             </span>
           </div>
         </div>
+
+        {/* per-period breakdown — only once it adds info beyond the total */}
+        {periodScores && periodScores.length > 1 && (
+          <div className="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+            {periodScores.map((ps) => (
+              <span key={ps.period} className="tabular-nums">
+                {periodLabel(event.sport, ps.period)}{' '}
+                <span className="text-slate-300">
+                  {ps.home}-{ps.away}
+                </span>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Markets × bookmakers price grid — scrolls under the pinned info */}
@@ -126,7 +180,7 @@ export function EventDetail({ event, now, markets, loading }: Props) {
                 <th className="sticky top-0 z-30 border-b border-l border-surface-border bg-surface-raised px-2 text-xs font-medium uppercase tracking-wide text-slate-500">
                   Best
                 </th>
-                {BOOKMAKERS.map((book) => (
+                {books.map((book) => (
                   <th
                     key={book.id}
                     className="sticky top-0 z-30 border-b border-l border-surface-border bg-surface-raised px-1.5"
@@ -139,7 +193,7 @@ export function EventDetail({ event, now, markets, loading }: Props) {
               </tr>
             </thead>
             {markets.map((group) => (
-              <MarketRows key={group.key} group={group} />
+              <MarketRows key={group.key} group={group} totalCols={totalCols} />
             ))}
           </table>
         </div>
@@ -157,7 +211,7 @@ function BetfairHead({ label }: { label: string }) {
   );
 }
 
-function MarketRows({ group }: { group: MarketGroup }) {
+function MarketRows({ group, totalCols }: { group: MarketGroup; totalCols: number }) {
   // Each market is its own <tbody> so its sticky name is bounded by the market
   // — the next market's name pushes it out and replaces it.
   return (
@@ -165,7 +219,7 @@ function MarketRows({ group }: { group: MarketGroup }) {
       {/* Sticky market name — pinned below the column header until replaced. */}
       <tr>
         <td
-          colSpan={TOTAL_COLS}
+          colSpan={totalCols}
           className="sticky top-14 z-20 border-b border-surface-border bg-surface p-0"
         >
           <span className="sticky left-0 inline-block px-3 py-1.5 text-xs font-semibold text-slate-300">

@@ -4,6 +4,12 @@
 
 export type EventStatus = 'upcoming' | 'live' | 'final';
 
+export interface PeriodScore {
+  period: number;
+  home: number;
+  away: number;
+}
+
 export interface League {
   id: string;
   name: string;
@@ -22,9 +28,15 @@ export interface SportEvent {
   name: string;
   home: string;
   away: string;
-  /** Live/final scores when available (null until a score source is wired). */
+  /** Live/final scores when available (null until the game has started). */
   homeScore?: number | null;
   awayScore?: number | null;
+  /** Live game clock/period (from in_play). */
+  period?: number | null;
+  clock?: string | null;
+  clockStopped?: boolean;
+  /** Per-period score breakdown, ordered by period. */
+  periodScores?: PeriodScore[];
   /** ISO timestamp of scheduled start. */
   startsAt: string;
   status: EventStatus;

@@ -12,8 +12,8 @@ import type { LayoutContext } from './EventView';
 const STATUS_ORDER: Record<EventStatus, number> = { live: 0, upcoming: 1, final: 2 };
 
 /** Local YYYY-MM-DD for date-filter comparison. */
-function localDay(iso: string): string {
-  const d = new Date(iso);
+function localDay(value: string | number | Date): string {
+  const d = new Date(value);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
     d.getDate(),
   ).padStart(2, '0')}`;
@@ -52,10 +52,22 @@ export default function App() {
     loadEvents();
   }, [loadEvents]);
 
+  // Silent background refresh of the events list (statuses, new fixtures).
+  useEffect(() => {
+    const id = setInterval(() => {
+      fetchAllEvents()
+        .then(setEvents)
+        .catch(() => {});
+    }, 60_000);
+    return () => clearInterval(id);
+  }, []);
+
   // --- filters ---
   const [sportSel, setSportSel] = useState<string[]>([]);
   const [leagueSel, setLeagueSel] = useState<string[]>([]);
-  const [date, setDate] = useState('');
+  // The rail is a single day's board — default to today. Clearing the pill
+  // widens it back to every fixture we hold.
+  const [date, setDate] = useState(() => localDay(Date.now()));
 
   const sportOptions = useMemo(
     () => Array.from(new Set(events.map((e) => e.sport))).sort(),
@@ -107,12 +119,15 @@ export default function App() {
     setOddsNonce((n) => n + 1);
   }, [loadEvents]);
 
-  const dateHeading = new Date(now).toLocaleDateString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
+  // Heading tracks the filtered day, so it can never disagree with the list.
+  const dateHeading = date
+    ? new Date(`${date}T00:00:00`).toLocaleDateString(undefined, {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : 'All dates';
 
   const outletContext: LayoutContext = { events, now, eventsLoading, oddsNonce };
 

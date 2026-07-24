@@ -17,6 +17,24 @@ export const BOOKMAKERS: Bookmaker[] = [
   { id: 'pinnacle', name: 'Pinnacle', color: '#c81e1e', mark: 'PIN', logoUrl: '/logos/brands/pinnacle.png' },
 ];
 
+const FANDUEL: Bookmaker = {
+  id: 'fanduel',
+  name: 'FanDuel',
+  color: '#1493ff',
+  mark: 'FD',
+  logoUrl: '/logos/brands/fanduel.png',
+};
+
+// Columns are per-league so a brand that never prices a competition doesn't
+// leave a dead column behind (FanDuel prices MLB, not the AU footy codes).
+const LEAGUE_BOOKS: Record<string, Bookmaker[]> = {
+  mlb: [...BOOKMAKERS, FANDUEL],
+};
+
+export function booksFor(leagueId: string): Bookmaker[] {
+  return LEAGUE_BOOKS[leagueId] ?? BOOKMAKERS;
+}
+
 // Betfair is the exchange. Back = `betfair_exchange_australia` (is_lay false),
 // lay = `betfair_exchange_australia_lay` (is_lay true, a separate sportsbook).
 export const BETFAIR: Bookmaker = {
@@ -29,7 +47,7 @@ export const BETFAIR: Bookmaker = {
 const BETFAIR_LAY_ID = 'betfair_exchange_australia_lay';
 
 const BY_ID: Record<string, Bookmaker> = Object.fromEntries(
-  [...BOOKMAKERS, BETFAIR].map((b) => [b.id, b]),
+  [...BOOKMAKERS, FANDUEL, BETFAIR].map((b) => [b.id, b]),
 );
 
 export function brandById(id: string): Bookmaker | undefined {
@@ -77,18 +95,38 @@ export interface OddsRow {
   status: string | null;
 }
 
-// market_id -> display, in the order the grid shows them.
-const MARKET_DEFS: { id: string; label: string }[] = [
-  { id: 'moneyline', label: 'Head to Head' },
-  { id: 'point_spread', label: 'Line' },
-  { id: 'total_points', label: 'Total' },
-  { id: '1st_half_moneyline', label: '1st Half — Head to Head' },
-  { id: '1st_half_point_spread', label: '1st Half — Line' },
-  { id: '1st_half_total_points', label: '1st Half — Total' },
+// market_id -> display, in the order the grid shows them. `kind` drives the
+// ladder shape, since the id naming differs per sport (point_spread/run_line).
+type MarketKind = 'h2h' | 'spread' | 'total';
+interface MarketDef {
+  id: string;
+  label: string;
+  kind: MarketKind;
+}
+
+const DEFAULT_MARKETS: MarketDef[] = [
+  { id: 'moneyline', label: 'Head to Head', kind: 'h2h' },
+  { id: 'point_spread', label: 'Line', kind: 'spread' },
+  { id: 'total_points', label: 'Total', kind: 'total' },
+  { id: '1st_half_moneyline', label: '1st Half — Head to Head', kind: 'h2h' },
+  { id: '1st_half_point_spread', label: '1st Half — Line', kind: 'spread' },
+  { id: '1st_half_total_points', label: '1st Half — Total', kind: 'total' },
 ];
 
-const isTotals = (mid: string) => mid.includes('total');
-const isSpread = (mid: string) => mid.includes('spread');
+// Baseball prices a run line rather than a spread, and its `1st_half_*` feed
+// markets are the first five innings.
+const MLB_MARKETS: MarketDef[] = [
+  { id: 'moneyline', label: 'Head to Head', kind: 'h2h' },
+  { id: 'run_line', label: 'Run Line', kind: 'spread' },
+  { id: 'total_runs', label: 'Total Runs', kind: 'total' },
+  { id: '1st_half_moneyline', label: 'First 5 Innings — Head to Head', kind: 'h2h' },
+  { id: '1st_half_run_line', label: 'First 5 Innings — Run Line', kind: 'spread' },
+  { id: '1st_half_total_runs', label: 'First 5 Innings — Total Runs', kind: 'total' },
+];
+
+const LEAGUE_MARKETS: Record<string, MarketDef[]> = {
+  mlb: MLB_MARKETS,
+};
 
 const signed = (n: number) => (n > 0 ? `+${n}` : `${n}`);
 
@@ -123,12 +161,13 @@ function coverage(rows: OddsRow[]): number {
 }
 
 function makeSelectionRow(
+  books: Bookmaker[],
   key: string,
   label: string,
   groupRows: OddsRow[],
   team?: string,
 ): SelectionRow {
-  const prices = BOOKMAKERS.map<PriceCell>((b) => ({
+  const prices = books.map<PriceCell>((b) => ({
     bookId: b.id,
     price: priceOf(groupRows, b.id, false),
   }));
@@ -222,18 +261,22 @@ function ladderWindow(values: number[], main: number | null, radius: number): nu
  * H2H shows both teams; Spread/Total show the pick-'em main line plus five
  * lines either side, each with both outcomes (missing side => "–").
  */
-export function buildMarkets(rows: OddsRow[], home: string, away: string): MarketGroup[] {
+export function buildMarkets(
+  rows: OddsRow[],
+  home: string,
+  away: string,
+  leagueId: string,
+): MarketGroup[] {
   const groups: MarketGroup[] = [];
+  const books = booksFor(leagueId);
 
-  for (const def of MARKET_DEFS) {
+  for (const def of LEAGUE_MARKETS[leagueId] ?? DEFAULT_MARKETS) {
     const marketRows = rows.filter((r) => r.market_id === def.id);
     if (marketRows.length === 0) continue;
 
-    const totals = isTotals(def.id);
-    const spread = isSpread(def.id);
     let selections: SelectionRow[];
 
-    if (totals) {
+    if (def.kind === 'total') {
       const isSideA = (r: OddsRow) => isOver(r.selection);
       const main = pickEmLine(marketRows, (r) => r.line ?? NaN, isSideA);
       const lines = [...new Set(marketRows.map((r) => r.line).filter((l): l is number => l != null))];
@@ -244,11 +287,11 @@ export function buildMarkets(rows: OddsRow[], home: string, away: string): Marke
         const under = marketRows.filter((r) => r.line === L && !isOver(r.selection));
         const isMain = L === main;
         return [
-          { ...makeSelectionRow(`over_${L}`, `Over ${L}`, over), isMain, groupStart: true },
-          { ...makeSelectionRow(`under_${L}`, `Under ${L}`, under), isMain },
+          { ...makeSelectionRow(books, `over_${L}`, `Over ${L}`, over), isMain, groupStart: true },
+          { ...makeSelectionRow(books, `under_${L}`, `Under ${L}`, under), isMain },
         ];
       });
-    } else if (spread) {
+    } else if (def.kind === 'spread') {
       // Key by the home-perspective handicap so home −X pairs with away +X
       // (and stays separate from home +X). Away rows key on their negated line.
       const isSideA = (r: OddsRow) => r.selection === home;
@@ -264,12 +307,12 @@ export function buildMarkets(rows: OddsRow[], home: string, away: string): Marke
         const isMain = K === main;
         return [
           {
-            ...makeSelectionRow(`${home}_${K}`, `${home} ${signed(K)}`, hr, home),
+            ...makeSelectionRow(books, `${home}_${K}`, `${home} ${signed(K)}`, hr, home),
             isMain,
             groupStart: true,
           },
           {
-            ...makeSelectionRow(`${away}_${K}`, `${away} ${signed(-K)}`, ar, away),
+            ...makeSelectionRow(books, `${away}_${K}`, `${away} ${signed(-K)}`, ar, away),
             isMain,
           },
         ];
@@ -281,9 +324,9 @@ export function buildMarkets(rows: OddsRow[], home: string, away: string): Marke
         (s) => s !== home && s !== away,
       );
       selections = [
-        makeSelectionRow(home, home, rowsFor(home), home),
-        ...extras.map((ex) => makeSelectionRow(ex, ex, rowsFor(ex))),
-        makeSelectionRow(away, away, rowsFor(away), away),
+        makeSelectionRow(books, home, home, rowsFor(home), home),
+        ...extras.map((ex) => makeSelectionRow(books, ex, ex, rowsFor(ex))),
+        makeSelectionRow(books, away, away, rowsFor(away), away),
       ];
     }
 

@@ -42,7 +42,8 @@ export default function EventView() {
     setOddsLoading(true);
     fetchOdds(selected)
       .then((rows) => {
-        if (!cancelled) setMarkets(buildMarkets(rows, selected.home, selected.away));
+        if (!cancelled)
+          setMarkets(buildMarkets(rows, selected.home, selected.away, selected.league.id));
       })
       .catch((e) => {
         if (!cancelled) {
@@ -58,6 +59,26 @@ export default function EventView() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id, oddsNonce]);
+
+  // Live-refresh odds every 30s (silent) so the pick'em line tracks moving
+  // prices/lines without a loading flash.
+  useEffect(() => {
+    if (!selected) return;
+    let cancelled = false;
+    const id = setInterval(() => {
+      fetchOdds(selected)
+        .then((rows) => {
+          if (!cancelled)
+            setMarkets(buildMarkets(rows, selected.home, selected.away, selected.league.id));
+        })
+        .catch(() => {});
+    }, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
 
   // Normalise the URL to the canonical name slug for the fixture.
   useEffect(() => {

@@ -169,21 +169,25 @@ export function FilterBar({
   leagueOptions,
   onLeague,
 }: Props) {
+  // The date gets its own row — squeezed into a third of a 320px rail there is
+  // no date format that survives the icon + clear button.
   return (
-    <div className="grid grid-cols-3 gap-2">
+    <div className="space-y-2">
       <DatePill value={date} onChange={onDate} />
-      <MultiPill
-        label="Sport"
-        selected={sportSel}
-        options={sportOptions}
-        onChange={onSport}
-      />
-      <MultiPill
-        label="League"
-        selected={leagueSel}
-        options={leagueOptions}
-        onChange={onLeague}
-      />
+      <div className="grid grid-cols-2 gap-2">
+        <MultiPill
+          label="Sport"
+          selected={sportSel}
+          options={sportOptions}
+          onChange={onSport}
+        />
+        <MultiPill
+          label="League"
+          selected={leagueSel}
+          options={leagueOptions}
+          onChange={onLeague}
+        />
+      </div>
     </div>
   );
 }
