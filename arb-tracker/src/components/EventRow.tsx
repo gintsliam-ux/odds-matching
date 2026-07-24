@@ -28,7 +28,9 @@ export function EventRow({ event, now, selected, onSelect }: Props) {
         <div className="truncate text-sm font-medium text-slate-100">
           {event.name}
         </div>
-        <div className="truncate text-xs text-slate-500">{event.league.name}</div>
+        <div className="truncate text-xs text-slate-500">
+          {event.subtitle ? `${event.league.name} · ${event.subtitle}` : event.league.name}
+        </div>
       </div>
 
       <span

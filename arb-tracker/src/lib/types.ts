@@ -18,6 +18,11 @@ export interface League {
   sport: string;
   /** Optional real crest URL; falls back to the code badge when absent. */
   logoUrl?: string;
+  /**
+   * True when the logo is a horizontal wordmark rather than a square crest
+   * (the tennis tours). It needs a wider slot and a light chip behind it.
+   */
+  wordmark?: boolean;
 }
 
 export interface SportEvent {
@@ -26,8 +31,13 @@ export interface SportEvent {
   league: League;
   /** Display name, typically "Home vs Away". */
   name: string;
+  /** Extra context where the name isn't enough — tennis's tournament. */
+  subtitle?: string;
   home: string;
   away: string;
+  /** ISO-3166 alpha-2, lowercased — tennis players fly a flag, teams don't. */
+  homeCountry?: string | null;
+  awayCountry?: string | null;
   /** Live/final scores when available (null until the game has started). */
   homeScore?: number | null;
   awayScore?: number | null;

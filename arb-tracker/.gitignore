@@ -6,3 +6,6 @@ dist
 .vercel
 *.log
 *.tsbuildinfo
+
+# Resolver work-queue — regenerated each run, not source
+supabase/player-countries-review.json

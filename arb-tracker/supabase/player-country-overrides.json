@@ -1,0 +1,15 @@
+{
+  "_readme": [
+    "Hand-checked corrections for players Wikidata can't disambiguate — it lists",
+    "several countries with no ranks and no start/end dates, so the resolver",
+    "refuses to guess and writes them to player-countries-review.json instead.",
+    "Add an entry here (iso2, plus a note saying how you checked) and re-run",
+    "scripts/resolve-player-countries.mjs --all.",
+    "Entries here always win over Wikidata."
+  ],
+  "Alexander Bublik": {
+    "iso2": "kz",
+    "country_qid": "Q232",
+    "note": "Wikidata carries bare Russia + Kazakhstan claims, undated. Has represented Kazakhstan since 2016; ATP lists him as KAZ."
+  }
+}

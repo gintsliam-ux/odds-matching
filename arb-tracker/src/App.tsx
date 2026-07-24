@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Outlet, useMatch, useNavigate } from 'react-router-dom';
 import { Header } from './components/Header';
 import { FilterBar } from './components/FilterBar';
 import { EventRow } from './components/EventRow';
-import { fetchAllEvents } from './lib/db';
+import { ScoreboardBar } from './components/ScoreboardBar';
+import { fetchAllEvents, fetchH2HPrices, type H2HPrices } from './lib/db';
 import { effectiveStatus } from './lib/countdown';
 import { eventPath } from './lib/routing';
 import type { EventStatus, SportEvent } from './lib/types';
@@ -34,29 +35,37 @@ export default function App() {
   const [events, setEvents] = useState<SportEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(true);
   const [eventsError, setEventsError] = useState<string | null>(null);
+  // Bumped by the background poll so the open event's odds refresh in step.
   const [oddsNonce, setOddsNonce] = useState(0);
 
-  const loadEvents = useCallback(async () => {
-    setEventsLoading(true);
-    try {
-      setEvents(await fetchAllEvents());
-      setEventsError(null);
-    } catch (e) {
-      setEventsError((e as Error).message);
-    } finally {
-      setEventsLoading(false);
-    }
+  useEffect(() => {
+    let cancelled = false;
+    fetchAllEvents()
+      .then((e) => {
+        if (cancelled) return;
+        setEvents(e);
+        setEventsError(null);
+      })
+      .catch((e) => {
+        if (!cancelled) setEventsError((e as Error).message);
+      })
+      .finally(() => {
+        if (!cancelled) setEventsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  useEffect(() => {
-    loadEvents();
-  }, [loadEvents]);
-
-  // Silent background refresh of the events list (statuses, new fixtures).
+  // The board auto-polls — no manual refresh. Pull fresh events (statuses, new
+  // fixtures) every 60s and nudge the open event's odds to reload with them.
   useEffect(() => {
     const id = setInterval(() => {
       fetchAllEvents()
-        .then(setEvents)
+        .then((e) => {
+          setEvents(e);
+          setOddsNonce((n) => n + 1);
+        })
         .catch(() => {});
     }, 60_000);
     return () => clearInterval(id);
@@ -91,33 +100,65 @@ export default function App() {
     setLeagueSel((prev) => prev.filter((l) => allowed.has(l)));
   }
 
-  // Next to jump: live first, then soonest upcoming, finals last.
-  const visible = useMemo(() => {
-    return events
-      .filter((e) => {
+  // The filtered slate (no clock dependency), then sorted next-to-jump. Keeping
+  // these separate means the H2H fetch keys off filters, not the 1s tick.
+  const filtered = useMemo(
+    () =>
+      events.filter((e) => {
         if (sportSel.length && !sportSel.includes(e.sport)) return false;
         if (leagueSel.length && !leagueSel.includes(e.league.name)) return false;
         if (date && localDay(e.startsAt) !== date) return false;
         return true;
-      })
-      .sort((a, b) => {
+      }),
+    [events, sportSel, leagueSel, date],
+  );
+
+  // Next to jump: live first, then soonest upcoming, finals last.
+  const visible = useMemo(
+    () =>
+      [...filtered].sort((a, b) => {
         const sa = STATUS_ORDER[effectiveStatus(a, now)];
         const sb = STATUS_ORDER[effectiveStatus(b, now)];
         if (sa !== sb) return sa - sb;
         return new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime();
-      });
-  }, [events, sportSel, leagueSel, date, now]);
+      }),
+    [filtered, now],
+  );
+
+  // Best H2H price for the scoreboard's upcoming (not-yet-played) fixtures.
+  // Keyed on the fixture set + oddsNonce, so it refetches on the 60s poll but
+  // not every render.
+  const [prices, setPrices] = useState<Map<string, H2HPrices>>(new Map());
+  const upcomingKey = useMemo(
+    () =>
+      filtered
+        .filter((e) => e.homeScore == null || e.awayScore == null)
+        .map((e) => e.id)
+        .sort()
+        .join(','),
+    [filtered],
+  );
+  useEffect(() => {
+    const ids = new Set(upcomingKey ? upcomingKey.split(',') : []);
+    if (ids.size === 0) {
+      setPrices(new Map());
+      return;
+    }
+    let cancelled = false;
+    fetchH2HPrices(filtered.filter((e) => ids.has(e.id)))
+      .then((m) => !cancelled && setPrices(m))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [upcomingKey, oddsNonce]);
 
   // Land on the first event when none is selected in the URL.
   useEffect(() => {
     if (activeId) return;
     if (visible.length > 0) navigate(eventPath(visible[0]), { replace: true });
   }, [activeId, visible, navigate]);
-
-  const refresh = useCallback(() => {
-    loadEvents();
-    setOddsNonce((n) => n + 1);
-  }, [loadEvents]);
 
   // Heading tracks the filtered day, so it can never disagree with the list.
   const dateHeading = date
@@ -133,11 +174,19 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
-      <Header onRefresh={refresh} refreshing={eventsLoading} />
+      {/* Top ticker: the whole slate at a glance */}
+      <ScoreboardBar
+        events={visible}
+        now={now}
+        prices={prices}
+        activeId={activeId}
+        onSelect={(event) => navigate(eventPath(event))}
+      />
 
       <div className="flex min-h-0 flex-1">
-        {/* Left rail: next to jump events — scrolls within itself */}
+        {/* Left rail: brand, filters, then the next-to-jump list */}
         <aside className="flex w-[320px] shrink-0 flex-col overflow-hidden border-r border-surface-border">
+          <Header />
           <div className="shrink-0 border-b border-surface-border p-3">
             <FilterBar
               date={date}

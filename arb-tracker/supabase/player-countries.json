@@ -1,0 +1,233 @@
+[
+  {
+    "player_name": "Alexander Blockx",
+    "country_iso2": "be",
+    "country_qid": "Q31",
+    "player_qid": "Q114728346",
+    "source": "sport"
+  },
+  {
+    "player_name": "Alexander Bublik",
+    "country_iso2": "kz",
+    "country_qid": "Q232",
+    "player_qid": "Q23678983",
+    "source": "override"
+  },
+  {
+    "player_name": "Andrey Rublev",
+    "country_iso2": "ru",
+    "country_qid": "Q159",
+    "player_qid": "Q17373391",
+    "source": "sport"
+  },
+  {
+    "player_name": "Anhelina Kalinina",
+    "country_iso2": "ua",
+    "country_qid": "Q212",
+    "player_qid": "Q15642606",
+    "source": "sport"
+  },
+  {
+    "player_name": "Anna Bondar",
+    "country_iso2": "hu",
+    "country_qid": "Q28",
+    "player_qid": "Q19281715",
+    "source": "sport"
+  },
+  {
+    "player_name": "Barbora Krejcikova",
+    "country_iso2": "cz",
+    "country_qid": "Q213",
+    "player_qid": "Q11052500",
+    "source": "sport"
+  },
+  {
+    "player_name": "Clara Burel",
+    "country_iso2": "fr",
+    "country_qid": "Q142",
+    "player_qid": "Q54086890",
+    "source": "sport"
+  },
+  {
+    "player_name": "Daria Snigur",
+    "country_iso2": "ua",
+    "country_qid": "Q212",
+    "player_qid": "Q65553008",
+    "source": "sport"
+  },
+  {
+    "player_name": "Dominika Salkova",
+    "country_iso2": "cz",
+    "country_qid": "Q213",
+    "player_qid": "Q113215656",
+    "source": "citizenship"
+  },
+  {
+    "player_name": "Elina Avanesyan",
+    "country_iso2": "am",
+    "country_qid": "Q399",
+    "player_qid": "Q106312033",
+    "source": "sport"
+  },
+  {
+    "player_name": "Fiona Ferro",
+    "country_iso2": "fr",
+    "country_qid": "Q142",
+    "player_qid": "Q16885515",
+    "source": "sport"
+  },
+  {
+    "player_name": "Francesca Jones",
+    "country_iso2": "gb",
+    "country_qid": "Q145",
+    "player_qid": "Q62700236",
+    "source": "citizenship"
+  },
+  {
+    "player_name": "Hugo Gaston",
+    "country_iso2": "fr",
+    "country_qid": "Q142",
+    "player_qid": "Q47483451",
+    "source": "sport"
+  },
+  {
+    "player_name": "Jaime Faria",
+    "country_iso2": "pt",
+    "country_qid": "Q45",
+    "player_qid": "Q125249050",
+    "source": "citizenship"
+  },
+  {
+    "player_name": "Jennifer Ruggeri",
+    "country_iso2": "it",
+    "country_qid": "Q38",
+    "player_qid": "Q119795145",
+    "source": "citizenship"
+  },
+  {
+    "player_name": "Lanlana Tararudee",
+    "country_iso2": "th",
+    "country_qid": "Q869",
+    "player_qid": "Q113162452",
+    "source": "citizenship"
+  },
+  {
+    "player_name": "Lilli Tagger",
+    "country_iso2": "at",
+    "country_qid": "Q40",
+    "player_qid": "Q128688561",
+    "source": "citizenship"
+  },
+  {
+    "player_name": "Luca Van Assche",
+    "country_iso2": "fr",
+    "country_qid": "Q142",
+    "player_qid": "Q107205896",
+    "source": "sport"
+  },
+  {
+    "player_name": "Lucia Bronzetti",
+    "country_iso2": "it",
+    "country_qid": "Q38",
+    "player_qid": "Q90569642",
+    "source": "sport"
+  },
+  {
+    "player_name": "Luciano Darderi",
+    "country_iso2": "it",
+    "country_qid": "Q38",
+    "player_qid": "Q109144854",
+    "source": "citizenship"
+  },
+  {
+    "player_name": "Marie Bouzkova",
+    "country_iso2": "cz",
+    "country_qid": "Q213",
+    "player_qid": "Q18003204",
+    "source": "sport"
+  },
+  {
+    "player_name": "Mayar Sherif",
+    "country_iso2": "eg",
+    "country_qid": "Q79",
+    "player_qid": "Q19577829",
+    "source": "citizenship"
+  },
+  {
+    "player_name": "Mina Hodzic",
+    "country_iso2": "de",
+    "country_qid": "Q183",
+    "player_qid": "Q65515756",
+    "source": "citizenship"
+  },
+  {
+    "player_name": "Oleksandra Oliynykova",
+    "country_iso2": "ua",
+    "country_qid": "Q212",
+    "player_qid": "Q105711730",
+    "source": "sport"
+  },
+  {
+    "player_name": "Paula Badosa",
+    "country_iso2": "es",
+    "country_qid": "Q29",
+    "player_qid": "Q19560013",
+    "source": "sport"
+  },
+  {
+    "player_name": "Quentin Halys",
+    "country_iso2": "fr",
+    "country_qid": "Q142",
+    "player_qid": "Q18001228",
+    "source": "sport"
+  },
+  {
+    "player_name": "Roman Andres Burruchaga",
+    "country_iso2": "ar",
+    "country_qid": "Q414",
+    "player_qid": "Q113870466",
+    "source": "sport"
+  },
+  {
+    "player_name": "Sara Bejlek",
+    "country_iso2": "cz",
+    "country_qid": "Q213",
+    "player_qid": "Q107640117",
+    "source": "sport"
+  },
+  {
+    "player_name": "Tamara Korpatsch",
+    "country_iso2": "de",
+    "country_qid": "Q183",
+    "player_qid": "Q19924597",
+    "source": "sport"
+  },
+  {
+    "player_name": "Tereza Valentova",
+    "country_iso2": "cz",
+    "country_qid": "Q213",
+    "player_qid": "Q113218343",
+    "source": "sport"
+  },
+  {
+    "player_name": "Tomas Martin Etcheverry",
+    "country_iso2": "ar",
+    "country_qid": "Q414",
+    "player_qid": "Q104728520",
+    "source": "sport"
+  },
+  {
+    "player_name": "Yannick Hanfmann",
+    "country_iso2": "de",
+    "country_qid": "Q183",
+    "player_qid": "Q29628209",
+    "source": "sport"
+  },
+  {
+    "player_name": "Yasmine Kabbaj",
+    "country_iso2": "ma",
+    "country_qid": "Q1028",
+    "player_qid": "Q111994096",
+    "source": "citizenship"
+  }
+]

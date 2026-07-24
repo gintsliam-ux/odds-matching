@@ -54,9 +54,45 @@ export function brandById(id: string): Bookmaker | undefined {
   return BY_ID[id];
 }
 
+/**
+ * A suspended price is the last one seen before the book pulled the market —
+ * still worth showing, but not takeable right now.
+ */
+export function isSuspended(cell: PriceCell): boolean {
+  return cell.detail?.status === 'suspended';
+}
+
+/** One observed price change, as stored in the `flucs` jsonb column. */
+export interface Fluc {
+  p: number;
+  t: string;
+}
+
+/** A price snapshot taken at a fixed point before the jump. */
+export interface Snapshot {
+  label: string;
+  price: number;
+}
+
+/** Everything the hover card shows about one book's price for one selection. */
+export interface PriceDetail {
+  bookId: string;
+  price: number;
+  open: number | null;
+  openAt: string | null;
+  /** Full change history, oldest first. Length 1 means it never moved. */
+  flucs: Fluc[];
+  /** Pre-jump snapshots that exist for this row, in time order. */
+  snapshots: Snapshot[];
+  updatedAt: string | null;
+  status: string | null;
+}
+
 export interface PriceCell {
   bookId: string;
   price: number | null;
+  /** Null when this book doesn't price the selection. */
+  detail: PriceDetail | null;
 }
 
 export interface SelectionRow {
@@ -65,12 +101,13 @@ export interface SelectionRow {
   /** Team name when the selection is a team (H2H/Line), for its crest. */
   team?: string;
   prices: PriceCell[];
-  /** Betfair exchange back/lay, null when the exchange doesn't cover it. */
-  betfairBack: number | null;
-  betfairLay: number | null;
+  /** Betfair exchange back/lay; `price` is null when it doesn't cover it. */
+  betfairBack: PriceCell;
+  betfairLay: PriceCell;
   /** Best takeable price across fixed-odds books + Betfair back. */
   bestBookId: string | null;
   bestPrice: number | null;
+  bestDetail: PriceDetail | null;
   /** True for both rows of the pick-'em main line (spread/total ladders). */
   isMain?: boolean;
   /** True on the first row of each line pair, for a divider above it. */
@@ -93,6 +130,13 @@ export interface OddsRow {
   current_price: number | null;
   open_price: number | null;
   status: string | null;
+  flucs: Fluc[] | null;
+  open_at: string | null;
+  price_3h: number | null;
+  price_1h: number | null;
+  price_10m: number | null;
+  close_price: number | null;
+  current_at: string | null;
 }
 
 // market_id -> display, in the order the grid shows them. `kind` drives the
@@ -124,31 +168,74 @@ const MLB_MARKETS: MarketDef[] = [
   { id: '1st_half_total_runs', label: 'First 5 Innings — Total Runs', kind: 'total' },
 ];
 
+// Tennis handicaps come in two flavours (games and sets) and the short-form
+// market is the opening set rather than a half.
+const TENNIS_MARKETS: MarketDef[] = [
+  { id: 'moneyline', label: 'Head to Head', kind: 'h2h' },
+  { id: 'game_spread', label: 'Game Handicap', kind: 'spread' },
+  { id: 'set_handicap', label: 'Set Handicap', kind: 'spread' },
+  { id: 'total_games', label: 'Total Games', kind: 'total' },
+  { id: '1st_set_moneyline', label: '1st Set — Head to Head', kind: 'h2h' },
+  { id: '1st_set_game_spread', label: '1st Set — Game Handicap', kind: 'spread' },
+  { id: '1st_set_total_games', label: '1st Set — Total Games', kind: 'total' },
+];
+
 const LEAGUE_MARKETS: Record<string, MarketDef[]> = {
   mlb: MLB_MARKETS,
+  atp: TENNIS_MARKETS,
+  wta: TENNIS_MARKETS,
 };
 
 const signed = (n: number) => (n > 0 ? `+${n}` : `${n}`);
 
-function priceOf(rows: OddsRow[], bookId: string, isLay: boolean): number | null {
+const priceOfRow = (r: OddsRow) => r.current_price ?? r.open_price;
+
+/** Lift a row into the hover card's view of it. */
+function detailFrom(r: OddsRow, price: number): PriceDetail {
+  const snapshots: Snapshot[] = [];
+  const add = (label: string, p: number | null) => {
+    if (p != null) snapshots.push({ label, price: p });
+  };
+  add('3h', r.price_3h);
+  add('1h', r.price_1h);
+  add('10m', r.price_10m);
+  add('Close', r.close_price);
+
+  return {
+    bookId: r.sportsbook,
+    price,
+    open: r.open_price,
+    openAt: r.open_at,
+    flucs: (r.flucs ?? []).filter((f) => f && typeof f.p === 'number' && f.t),
+    snapshots,
+    updatedAt: r.current_at,
+    status: r.status,
+  };
+}
+
+function emptyCell(bookId: string): PriceCell {
+  return { bookId, price: null, detail: null };
+}
+
+function cellOf(rows: OddsRow[], bookId: string, isLay: boolean): PriceCell {
   for (const r of rows) {
     if (r.sportsbook === bookId && r.is_lay === isLay) {
-      const p = r.current_price ?? r.open_price;
-      if (p != null) return p;
+      const p = priceOfRow(r);
+      if (p != null) return { bookId, price: p, detail: detailFrom(r, p) };
     }
   }
-  return null;
+  return emptyCell(bookId);
 }
 
 /** Betfair lay: the dedicated `_lay` sportsbook, or legacy is_lay rows. */
-function betfairLayOf(rows: OddsRow[]): number | null {
+function betfairLayCell(rows: OddsRow[]): PriceCell {
   for (const r of rows) {
     if (r.sportsbook === BETFAIR_LAY_ID || (r.sportsbook === BETFAIR.id && r.is_lay)) {
-      const p = r.current_price ?? r.open_price;
-      if (p != null) return p;
+      const p = priceOfRow(r);
+      if (p != null) return { bookId: BETFAIR.id, price: p, detail: detailFrom(r, p) };
     }
   }
-  return null;
+  return emptyCell(BETFAIR.id);
 }
 
 /** Distinct books (fixed + Betfair back) that actually price a set of rows. */
@@ -167,25 +254,37 @@ function makeSelectionRow(
   groupRows: OddsRow[],
   team?: string,
 ): SelectionRow {
-  const prices = books.map<PriceCell>((b) => ({
-    bookId: b.id,
-    price: priceOf(groupRows, b.id, false),
-  }));
-  const betfairBack = priceOf(groupRows, BETFAIR.id, false);
-  const betfairLay = betfairLayOf(groupRows);
+  const prices = books.map<PriceCell>((b) => cellOf(groupRows, b.id, false));
+  const betfairBack = cellOf(groupRows, BETFAIR.id, false);
+  const betfairLay = betfairLayCell(groupRows);
 
   let bestBookId: string | null = null;
   let bestPrice: number | null = null;
-  const consider = (id: string, price: number | null) => {
-    if (price != null && (bestPrice == null || price > bestPrice)) {
-      bestPrice = price;
-      bestBookId = id;
+  let bestDetail: PriceDetail | null = null;
+  // Best means takeable, so a suspended price can't win it — even when it is
+  // the top number on the row. Every price suspended => no best at all.
+  const consider = (cell: PriceCell) => {
+    if (isSuspended(cell)) return;
+    if (cell.price != null && (bestPrice == null || cell.price > bestPrice)) {
+      bestPrice = cell.price;
+      bestBookId = cell.bookId;
+      bestDetail = cell.detail;
     }
   };
-  for (const cell of prices) consider(cell.bookId, cell.price);
-  consider(BETFAIR.id, betfairBack);
+  for (const cell of prices) consider(cell);
+  consider(betfairBack);
 
-  return { key, label, team, prices, betfairBack, betfairLay, bestBookId, bestPrice };
+  return {
+    key,
+    label,
+    team,
+    prices,
+    betfairBack,
+    betfairLay,
+    bestBookId,
+    bestPrice,
+    bestDetail,
+  };
 }
 
 const isOver = (sel: string) => sel.toLowerCase() === 'over';

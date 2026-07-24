@@ -2,7 +2,9 @@ import { supabase } from './supabase';
 import type { EventStatus, League, PeriodScore, SportEvent } from './types';
 import type { OddsRow } from './markets';
 
-// Each competition is a pair of tables: <key>_events and <key>_odds.
+// Most competitions are a pair of tables: <key>_events and <key>_odds. Tennis
+// is the exception — ATP and WTA share tennis_events/tennis_odds and are told
+// apart by `category`, so a config can narrow a shared table with `where`.
 // `league` is the competition (AFL/NRL); `sport` is its umbrella sport.
 export interface SportConfig {
   key: string;
@@ -10,12 +12,34 @@ export interface SportConfig {
   sport: string;
   eventsTable: string;
   oddsTable: string;
+  /** Narrows a shared events table to just this league's rows. */
+  where?: { column: string; value: string };
+  /** Extra events columns this table carries, e.g. tennis's `tournament`. */
+  extraColumns?: string;
 }
 
 export const SPORTS: SportConfig[] = [
   { key: 'afl', league: 'AFL', sport: 'Aussie Rules', eventsTable: 'afl_events', oddsTable: 'afl_odds' },
   { key: 'nrl', league: 'NRL', sport: 'Rugby League', eventsTable: 'nrl_events', oddsTable: 'nrl_odds' },
   { key: 'mlb', league: 'MLB', sport: 'Baseball', eventsTable: 'mlb_events', oddsTable: 'mlb_odds' },
+  {
+    key: 'atp',
+    league: 'ATP',
+    sport: 'Tennis',
+    eventsTable: 'tennis_events',
+    oddsTable: 'tennis_odds',
+    where: { column: 'category', value: 'ATP' },
+    extraColumns: 'tournament',
+  },
+  {
+    key: 'wta',
+    league: 'WTA',
+    sport: 'Tennis',
+    eventsTable: 'tennis_events',
+    oddsTable: 'tennis_odds',
+    where: { column: 'category', value: 'WTA' },
+    extraColumns: 'tournament',
+  },
 ];
 
 function configForLeagueId(leagueId: string): SportConfig | undefined {
@@ -29,6 +53,7 @@ function leagueFor(cfg: SportConfig): League {
     code: cfg.league,
     sport: cfg.sport,
     logoUrl: `/logos/leagues/${cfg.key}.png`,
+    wordmark: cfg.sport === 'Tennis',
   };
 }
 
@@ -45,12 +70,17 @@ function mapStatus(raw: string | null): EventStatus {
 interface PeriodBag {
   periods?: Record<string, number> | null;
 }
+const EVENT_COLUMNS =
+  'fixture_id,start_date,home_team,away_team,status,home_score,away_score,scores,in_play';
+
 interface EventRowDB {
   fixture_id: string;
   start_date: string;
   home_team: string;
   away_team: string;
   status: string | null;
+  /** Tennis only — the event the match belongs to. */
+  tournament?: string | null;
   home_score: number | null;
   away_score: number | null;
   scores: { home?: PeriodBag | null; away?: PeriodBag | null } | null;
@@ -76,20 +106,43 @@ function periodScoresFrom(scores: EventRowDB['scores']): PeriodScore[] {
     .map((n) => ({ period: n, home: hp[`period_${n}`] ?? 0, away: ap[`period_${n}`] ?? 0 }));
 }
 
+/**
+ * Player -> ISO country for tennis flags, keyed by the name exactly as the odds
+ * feed spells it. Populated out of band by scripts/resolve-player-countries.mjs;
+ * an empty map (table not migrated yet) just means no flags, never an error.
+ */
+async function playerCountries(
+  client: NonNullable<typeof supabase>,
+): Promise<Map<string, string>> {
+  const { data, error } = await client
+    .from('tennis_player_countries')
+    .select('player_name,country_iso2');
+  if (error || !data) return new Map();
+  return new Map(
+    (data as { player_name: string; country_iso2: string }[]).map((r) => [
+      r.player_name,
+      r.country_iso2,
+    ]),
+  );
+}
+
 /** Load fixtures from every sport's `_events` table and normalise them. */
 export async function fetchAllEvents(): Promise<SportEvent[]> {
   if (!supabase) return [];
   const client = supabase;
+  const countries = await playerCountries(client);
   const perSport = await Promise.all(
     SPORTS.map(async (sp) => {
-      const { data, error } = await client
+      let q = client
         .from(sp.eventsTable)
-        .select(
-          'fixture_id,start_date,home_team,away_team,status,home_score,away_score,scores,in_play',
-        )
-        .order('start_date', { ascending: true });
+        .select(sp.extraColumns ? `${EVENT_COLUMNS},${sp.extraColumns}` : EVENT_COLUMNS);
+      if (sp.where) q = q.eq(sp.where.column, sp.where.value);
+
+      const { data, error } = await q.order('start_date', { ascending: true });
       if (error) throw new Error(`${sp.eventsTable}: ${error.message}`);
-      return (data as EventRowDB[]).map<SportEvent>((r) => {
+      // The column list is built at runtime, so postgrest-js can't infer the
+      // row shape from it — EventRowDB is the contract instead.
+      return (data as unknown as EventRowDB[]).map<SportEvent>((r) => {
         const ip = r.in_play ?? {};
         const period =
           ip.period_number ?? (ip.period != null ? Number(ip.period) : null);
@@ -98,8 +151,11 @@ export async function fetchAllEvents(): Promise<SportEvent[]> {
           sport: sp.sport,
           league: leagueFor(sp),
           name: `${r.home_team} vs ${r.away_team}`,
+          subtitle: r.tournament ?? undefined,
           home: r.home_team,
           away: r.away_team,
+          homeCountry: countries.get(r.home_team) ?? null,
+          awayCountry: countries.get(r.away_team) ?? null,
           homeScore: r.home_score,
           awayScore: r.away_score,
           period: Number.isFinite(period) ? (period as number) : null,
@@ -113,6 +169,68 @@ export async function fetchAllEvents(): Promise<SportEvent[]> {
     }),
   );
   return perSport.flat();
+}
+
+/** Best (highest) H2H decimal price for each side of a fixture. */
+export interface H2HPrices {
+  home: number | null;
+  away: number | null;
+}
+
+/**
+ * Best moneyline price per side for a batch of fixtures, for the scoreboard
+ * ticker. Unlike fetchOdds this pulls only the `moneyline` market across many
+ * fixtures at once (one query per odds table), so a whole day's prices is a
+ * couple of small requests rather than a full ladder per event.
+ */
+export async function fetchH2HPrices(
+  events: SportEvent[],
+): Promise<Map<string, H2HPrices>> {
+  const out = new Map<string, H2HPrices>();
+  if (!supabase || events.length === 0) return out;
+  const client = supabase;
+
+  // Group by odds table (tennis's ATP/WTA share one), keeping a name lookup so
+  // a selection string can be resolved back to home/away.
+  const byTable = new Map<string, SportEvent[]>();
+  for (const e of events) {
+    const sp = configForLeagueId(e.league.id);
+    if (!sp) continue;
+    (byTable.get(sp.oddsTable) ?? byTable.set(sp.oddsTable, []).get(sp.oddsTable)!).push(e);
+  }
+
+  await Promise.all(
+    [...byTable.entries()].map(async ([table, evs]) => {
+      const byId = new Map(evs.map((e) => [e.id, e]));
+      const ids = evs.map((e) => e.id);
+      // Chunk the id list so the `in.()` filter can't blow the URL length.
+      for (let i = 0; i < ids.length; i += 100) {
+        const { data, error } = await client
+          .from(table)
+          .select('fixture_id,selection,is_lay,current_price,open_price')
+          .eq('market_id', 'moneyline')
+          .in('fixture_id', ids.slice(i, i + 100));
+        if (error || !data) continue;
+        for (const r of data as {
+          fixture_id: string;
+          selection: string;
+          is_lay: boolean;
+          current_price: number | null;
+          open_price: number | null;
+        }[]) {
+          if (r.is_lay) continue;
+          const price = r.current_price ?? r.open_price;
+          const ev = byId.get(r.fixture_id);
+          if (price == null || !ev) continue;
+          const cur = out.get(r.fixture_id) ?? { home: null, away: null };
+          if (r.selection === ev.home) cur.home = Math.max(cur.home ?? 0, price);
+          else if (r.selection === ev.away) cur.away = Math.max(cur.away ?? 0, price);
+          out.set(r.fixture_id, cur);
+        }
+      }
+    }),
+  );
+  return out;
 }
 
 /**
@@ -129,7 +247,9 @@ export async function fetchOdds(event: SportEvent): Promise<OddsRow[]> {
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabase
       .from(sp.oddsTable)
-      .select('market_id,selection,line,sportsbook,is_lay,current_price,open_price,status')
+      .select(
+        'market_id,selection,line,sportsbook,is_lay,current_price,open_price,status,flucs,open_at,price_3h,price_1h,price_10m,close_price,current_at',
+      )
       .eq('fixture_id', event.id)
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1);

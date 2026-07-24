@@ -1,41 +1,26 @@
-import { Activity, RefreshCw } from 'lucide-react';
+import { Activity } from 'lucide-react';
 import { hasSupabaseCredentials } from '../lib/supabase';
 
-interface HeaderProps {
-  onRefresh?: () => void;
-  refreshing?: boolean;
-}
-
-export function Header({ onRefresh, refreshing }: HeaderProps) {
+/**
+ * Rail brand block — logo + title above the filters. The board auto-polls, so
+ * there's no manual refresh; the connection pill shows the live/mock state.
+ */
+export function Header() {
   return (
-    <header className="shrink-0 border-b border-surface-border bg-surface">
-      <div className="flex items-center justify-between px-4 py-3">
-        <div className="flex items-center gap-3">
-          <div className="grid h-9 w-9 place-items-center rounded-lg bg-emerald-500/15 text-emerald-400">
-            <Activity size={20} />
-          </div>
-          <div>
-            <h1 className="text-[15px] font-semibold leading-tight tracking-tight">
-              Arb Tracker
-            </h1>
-            <p className="text-xs text-slate-500">Next to jump</p>
-          </div>
+    <div className="flex items-center justify-between gap-2 border-b border-surface-border px-3 py-3">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-emerald-500/15 text-emerald-400">
+          <Activity size={20} />
         </div>
-
-        <div className="flex items-center gap-3">
-          <ConnectionPill />
-          <button
-            type="button"
-            onClick={onRefresh}
-            disabled={refreshing}
-            className="flex items-center gap-2 rounded-lg border border-surface-border bg-surface-raised px-3 py-1.5 text-sm text-slate-300 transition-colors hover:border-slate-600 hover:text-white disabled:opacity-60"
-          >
-            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
-            Refresh
-          </button>
+        <div className="min-w-0">
+          <h1 className="truncate text-[15px] font-semibold leading-tight tracking-tight">
+            Arb Tracker
+          </h1>
+          <p className="text-xs text-slate-500">Next to jump</p>
         </div>
       </div>
-    </header>
+      <ConnectionPill />
+    </div>
   );
 }
 
