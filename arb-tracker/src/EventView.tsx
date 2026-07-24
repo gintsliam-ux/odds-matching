@@ -25,7 +25,7 @@ function Placeholder({ text }: { text: string }) {
 
 export default function EventView() {
   const { fixtureId, slug } = useParams();
-  const { events, now, eventsLoading, oddsNonce } = useOutletContext<LayoutContext>();
+  const { events, now, eventsLoading } = useOutletContext<LayoutContext>();
   const navigate = useNavigate();
 
   const selected = events.find((e) => e.id === fixtureId) ?? null;
@@ -33,6 +33,8 @@ export default function EventView() {
   const [markets, setMarkets] = useState<MarketGroup[]>([]);
   const [oddsLoading, setOddsLoading] = useState(false);
 
+  // Initial load for a newly selected event — the only time we show the loading
+  // state (keyed on the fixture id, so it fires on navigation, not on a poll).
   useEffect(() => {
     if (!selected) {
       setMarkets([]);
@@ -58,10 +60,10 @@ export default function EventView() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, oddsNonce]);
+  }, [selected?.id]);
 
-  // Live-refresh odds every 30s (silent) so the pick'em line tracks moving
-  // prices/lines without a loading flash.
+  // Silently refresh odds every 30s, updating markets in place — no loading
+  // toggle, so the grid never flashes.
   useEffect(() => {
     if (!selected) return;
     let cancelled = false;
