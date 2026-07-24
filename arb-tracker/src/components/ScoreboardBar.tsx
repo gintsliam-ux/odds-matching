@@ -1,6 +1,6 @@
 import type { SportEvent } from '../lib/types';
 import type { H2HPrices } from '../lib/db';
-import { countdownFor, effectiveStatus } from '../lib/countdown';
+import { countdownFor, effectiveStatus, livePositionLabel } from '../lib/countdown';
 import { teamAbbr } from '../lib/teamLogos';
 import { LeagueBadge } from './LeagueBadge';
 import { TeamLogo } from './TeamLogo';
@@ -15,30 +15,6 @@ interface Props {
 
 function priceText(p: number | null | undefined): string {
   return p != null ? p.toFixed(2) : '–';
-}
-
-/**
- * Where a live game is up to, abbreviated for the ticker: "Q3" (quarters),
- * "H2" (halves), "S2" (tennis sets), "T6"/"B6" (baseball half-innings). Falls
- * back to "LIVE" when we have no period yet — the blinker still marks it live.
- */
-function livePosition(event: SportEvent): string {
-  const { sport, period, clock } = event;
-  if (period == null) return 'LIVE';
-  if (sport === 'Baseball') {
-    // clock carries the half-inning ("Top"/"Bot") — take its first letter.
-    const half = clock ? clock[0].toUpperCase() : '';
-    return `${half}${period}`;
-  }
-  const prefix =
-    sport === 'Aussie Rules'
-      ? 'Q'
-      : sport === 'Rugby League'
-        ? 'H'
-        : sport === 'Tennis'
-          ? 'S'
-          : 'P';
-  return `${prefix}${period}`;
 }
 
 /** One team's line: crest/flag + abbreviation, then its score or H2H price. */
@@ -105,7 +81,7 @@ function Cell({
   const played = event.homeScore != null && event.awayScore != null;
   const cd = countdownFor(event, now);
   const statusLabel =
-    status === 'live' ? livePosition(event) : status === 'final' ? 'FT' : cd.label;
+    status === 'live' ? livePositionLabel(event) : status === 'final' ? 'FT' : cd.label;
 
   return (
     <button

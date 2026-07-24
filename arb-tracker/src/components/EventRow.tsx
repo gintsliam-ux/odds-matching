@@ -1,5 +1,5 @@
 import type { SportEvent } from '../lib/types';
-import { countdownFor, TONE_CLASSES } from '../lib/countdown';
+import { countdownFor, effectiveStatus, livePositionLabel, TONE_CLASSES } from '../lib/countdown';
 import { LeagueBadge } from './LeagueBadge';
 
 interface Props {
@@ -11,6 +11,10 @@ interface Props {
 
 export function EventRow({ event, now, selected, onSelect }: Props) {
   const cd = countdownFor(event, now);
+  // Live rows show where the game is up to instead of "LIVE"; the live tone and
+  // blinker (from cd) stay.
+  const label =
+    effectiveStatus(event, now) === 'live' ? livePositionLabel(event) : cd.label;
 
   return (
     <button
@@ -42,7 +46,7 @@ export function EventRow({ event, now, selected, onSelect }: Props) {
             <span className="relative inline-flex h-1 w-1 rounded-full bg-current" />
           </span>
         )}
-        {cd.label}
+        {label}
       </span>
     </button>
   );

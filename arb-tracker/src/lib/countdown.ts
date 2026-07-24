@@ -61,6 +61,31 @@ export function countdownFor(event: SportEvent, now: number): Countdown {
   return { tone: 'scheduled', label: relativeLabel(ms), pulse: false };
 }
 
+/**
+ * Where a live game is up to, abbreviated: "Q3" (quarters), "H2" (halves),
+ * "S2" (tennis sets), and baseball's half-inning as "Top 5" / "Mid 5" /
+ * "Bot 5" / "End 5". Falls back to "LIVE" when no period is reported yet.
+ */
+export function livePositionLabel(event: SportEvent): string {
+  const { sport, period, clock } = event;
+  if (period == null) return 'LIVE';
+  if (sport === 'Baseball') {
+    // clock is the half-inning: Top / Middle / Bottom / End.
+    const abbr = clock ? clock.slice(0, 3) : '';
+    const half = abbr ? abbr.charAt(0).toUpperCase() + abbr.slice(1).toLowerCase() : '';
+    return half ? `${half} ${period}` : `${period}`;
+  }
+  const prefix =
+    sport === 'Aussie Rules'
+      ? 'Q'
+      : sport === 'Rugby League'
+        ? 'H'
+        : sport === 'Tennis'
+          ? 'S'
+          : 'P';
+  return `${prefix}${period}`;
+}
+
 export const TONE_CLASSES: Record<CountdownTone, string> = {
   live: 'bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30',
   final: 'bg-slate-500/10 text-slate-400 ring-1 ring-slate-500/20',
