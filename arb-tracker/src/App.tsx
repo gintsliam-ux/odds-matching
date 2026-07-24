@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Activity } from 'lucide-react';
 import { Outlet, useMatch, useNavigate } from 'react-router-dom';
 import { Header } from './components/Header';
 import { FilterBar } from './components/FilterBar';
@@ -77,6 +78,10 @@ export default function App() {
   // The rail is a single day's board — default to today. Clearing the pill
   // widens it back to every fixture we hold.
   const [date, setDate] = useState(() => localDay(Date.now()));
+
+  // Below md the rail is a drawer, hidden until the logo opens it; from md up
+  // it's always in-flow and this flag is inert (md: styles override it).
+  const [railOpen, setRailOpen] = useState(false);
 
   const sportOptions = useMemo(
     () => Array.from(new Set(events.map((e) => e.sport))).sort(),
@@ -172,8 +177,29 @@ export default function App() {
 
   const outletContext: LayoutContext = { events, now, eventsLoading, oddsNonce };
 
+  // Opening an event from the rail also closes the mobile drawer.
+  const openEvent = (event: SportEvent) => {
+    navigate(eventPath(event));
+    setRailOpen(false);
+  };
+
   return (
     <div className="flex h-screen flex-col overflow-hidden">
+      {/* Mobile-only top bar: the logo opens the rail drawer. */}
+      <div className="flex items-center gap-2.5 border-b border-surface-border px-3 py-2 md:hidden">
+        <button
+          type="button"
+          onClick={() => setRailOpen(true)}
+          aria-label="Open events menu"
+          className="flex min-w-0 items-center gap-2.5"
+        >
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-emerald-500/15 text-emerald-400">
+            <Activity size={18} />
+          </span>
+          <span className="text-[15px] font-semibold tracking-tight">Arb Tracker</span>
+        </button>
+      </div>
+
       {/* Top ticker: the whole slate at a glance */}
       <ScoreboardBar
         events={visible}
@@ -183,10 +209,25 @@ export default function App() {
         onSelect={(event) => navigate(eventPath(event))}
       />
 
-      <div className="flex min-h-0 flex-1">
-        {/* Left rail: brand, filters, then the next-to-jump list */}
-        <aside className="flex w-[320px] shrink-0 flex-col overflow-hidden border-r border-surface-border">
-          <Header />
+      <div className="relative flex min-h-0 flex-1">
+        {/* Backdrop behind the open drawer (mobile only). */}
+        {railOpen && (
+          <button
+            type="button"
+            aria-label="Close events menu"
+            onClick={() => setRailOpen(false)}
+            className="fixed inset-0 z-40 bg-black/60 md:hidden"
+          />
+        )}
+
+        {/* Left rail: an in-flow column from md up; a slide-in drawer below it.
+            On mobile the brand logo doubles as the close control. */}
+        <aside
+          className={`fixed inset-y-0 left-0 z-50 flex w-[300px] flex-col overflow-hidden border-r border-surface-border bg-surface shadow-2xl transition-transform duration-200 md:static md:z-auto md:w-[320px] md:shrink-0 md:translate-x-0 md:shadow-none ${
+            railOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
+        >
+          <Header onLogoClick={() => setRailOpen(false)} />
           <div className="shrink-0 border-b border-surface-border p-3">
             <FilterBar
               date={date}
@@ -224,7 +265,7 @@ export default function App() {
                   event={event}
                   now={now}
                   selected={event.id === activeId}
-                  onSelect={() => navigate(eventPath(event))}
+                  onSelect={() => openEvent(event)}
                 />
               ))
             )}

@@ -4,21 +4,39 @@ import { hasSupabaseCredentials } from '../lib/supabase';
 /**
  * Rail brand block — logo + title above the filters. The board auto-polls, so
  * there's no manual refresh; the connection pill shows the live/mock state.
+ *
+ * `onLogoClick` makes the brand a button — used on mobile so tapping the logo
+ * closes the drawer (it opens from the same logo in the collapsed top bar).
  */
-export function Header() {
+export function Header({ onLogoClick }: { onLogoClick?: () => void }) {
+  const brand = (
+    <>
+      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-emerald-500/15 text-emerald-400">
+        <Activity size={20} />
+      </div>
+      <div className="min-w-0 text-left">
+        <h1 className="truncate text-[15px] font-semibold leading-tight tracking-tight">
+          Arb Tracker
+        </h1>
+        <p className="text-xs text-slate-500">Next to jump</p>
+      </div>
+    </>
+  );
+
   return (
     <div className="flex items-center justify-between gap-2 border-b border-surface-border px-3 py-3">
-      <div className="flex min-w-0 items-center gap-2.5">
-        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-emerald-500/15 text-emerald-400">
-          <Activity size={20} />
-        </div>
-        <div className="min-w-0">
-          <h1 className="truncate text-[15px] font-semibold leading-tight tracking-tight">
-            Arb Tracker
-          </h1>
-          <p className="text-xs text-slate-500">Next to jump</p>
-        </div>
-      </div>
+      {onLogoClick ? (
+        <button
+          type="button"
+          onClick={onLogoClick}
+          aria-label="Close events menu"
+          className="flex min-w-0 items-center gap-2.5"
+        >
+          {brand}
+        </button>
+      ) : (
+        <div className="flex min-w-0 items-center gap-2.5">{brand}</div>
+      )}
       <ConnectionPill />
     </div>
   );
