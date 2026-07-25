@@ -95,7 +95,7 @@ function Cell({
       <div className="flex items-center justify-between">
         <LeagueBadge league={event.league} size={14} />
         <span
-          className={`flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide tabular-nums ${
+          className={`flex items-center gap-1 text-[10px] font-semibold tracking-wide tabular-nums ${
             status === 'live' ? 'text-rose-400' : 'text-slate-500'
           }`}
         >
