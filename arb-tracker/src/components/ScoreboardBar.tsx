@@ -96,13 +96,13 @@ function Cell({
         <LeagueBadge league={event.league} size={14} />
         <span
           className={`flex items-center gap-1 text-[10px] font-semibold tracking-wide tabular-nums ${
-            status === 'live' ? 'text-rose-400' : 'text-slate-500'
+            status === 'live' ? 'text-emerald-300' : 'text-slate-500'
           }`}
         >
           {status === 'live' && (
             <span className="relative flex h-1 w-1">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" />
-              <span className="relative inline-flex h-1 w-1 rounded-full bg-rose-400" />
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-300 opacity-75" />
+              <span className="relative inline-flex h-1 w-1 rounded-full bg-emerald-300" />
             </span>
           )}
           {statusLabel}
