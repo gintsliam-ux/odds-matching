@@ -47,7 +47,11 @@ const MIN_COMP_SIM = 0.4
 const MIN_VERIFY = 2
 
 const IS_CLI = !!process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
-if (IS_CLI) main({ writeSnapshot: true }).catch((e) => bail(e))
+if (IS_CLI)
+  main({ writeSnapshot: true }).catch((e) => {
+    console.error('error:', e instanceof Error ? e.stack : e)
+    process.exit(1)
+  })
 
 /** Cron entry — skips the /public snapshot (no writable fs on Vercel). */
 export async function runMybetMapping(opts = {}) {
@@ -65,17 +69,24 @@ async function main(opts = { writeSnapshot: true }) {
   console.log(`  ${opticRows.length} fixtures.`)
 
   console.log('• Loading gutsy.mybet_events from Mongo…')
-  const mongo = new MongoClient(MONGO_URI)
-  await mongo.connect()
-  const raw = await mongo
-    .db(MONGO_DB)
-    .collection(MYBET_COLL)
-    .find(
-      {},
-      { projection: { _id: 1, sport: 1, league: 1, leagueId: 1, description: 1, match: 1, suspendAt: 1, outcomeAt: 1, lastSeenAt: 1, feedLastUpdated: 1 } },
-    )
-    .toArray()
-  await mongo.close()
+  // Small pool + finally-close: one sequential read needs one connection, and
+  // Atlas is shared with the scrapers — a client leaked by a mid-run throw on a
+  // warm instance must not accumulate.
+  const mongo = new MongoClient(MONGO_URI, { maxPoolSize: 5 })
+  let raw
+  try {
+    await mongo.connect()
+    raw = await mongo
+      .db(MONGO_DB)
+      .collection(MYBET_COLL)
+      .find(
+        {},
+        { projection: { _id: 1, sport: 1, league: 1, leagueId: 1, description: 1, match: 1, suspendAt: 1, outcomeAt: 1, lastSeenAt: 1, feedLastUpdated: 1 } },
+      )
+      .toArray()
+  } finally {
+    await mongo.close().catch(() => {})
+  }
   const events = raw.map(normMybet).filter((e) => e.home && e.away)
   console.log(`  ${raw.length} mybet events (${events.length} with both teams).`)
 
@@ -379,7 +390,7 @@ async function getAllSupabase(pathAndQuery) {
   const rows = []
   const size = 1000
   for (let from = 0; ; from += size) {
-    const r = await fetch(`${REST}/${pathAndQuery}`, {
+    const r = await fetchRetry(`${REST}/${pathAndQuery}`, {
       headers: { ...HDR, Range: `${from}-${from + size - 1}`, 'Range-Unit': 'items' },
     })
     if (!r.ok) bail(`GET ${pathAndQuery} → ${r.status}: ${await r.text()}`)
@@ -392,7 +403,7 @@ async function getAllSupabase(pathAndQuery) {
 
 /** Wipe every auto+non-verified mybet competition row before re-upserting. */
 async function deleteAllAutoUnverified() {
-  const r = await fetch(`${REST}/competition_mapping?provider=eq.mybet&source=eq.auto&verified=eq.false`, {
+  const r = await fetchRetry(`${REST}/competition_mapping?provider=eq.mybet&source=eq.auto&verified=eq.false`, {
     method: 'DELETE',
     headers: { ...HDR, Prefer: 'return=minimal' },
   })
@@ -403,7 +414,7 @@ async function upsertAll(pathAndQuery, items) {
   const CHUNK = 500
   for (let i = 0; i < items.length; i += CHUNK) {
     const slice = items.slice(i, i + CHUNK)
-    const r = await fetch(`${REST}/${pathAndQuery}`, {
+    const r = await fetchRetry(`${REST}/${pathAndQuery}`, {
       method: 'POST',
       headers: { ...HDR, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
       body: JSON.stringify(slice),
@@ -425,7 +436,27 @@ function parseEnv(path) {
   }
 }
 
+// Always THROW — never process.exit(). /api/cron/build-mapping runs this inside
+// its own try/catch precisely so a mybet failure can't sink an already-succeeded
+// SwiftBet run; an exit() kills the instance and defeats that isolation.
 function bail(msg) {
-  console.error(typeof msg === 'string' ? msg : msg?.stack ?? msg)
-  process.exit(1)
+  throw msg instanceof Error ? msg : new Error(String(msg))
+}
+
+/** fetch + bounded retry on transient network / Supabase 5xx-429 failures.
+ *  Every caller is idempotent (paginated read, filtered delete, merge-duplicates
+ *  upsert), so replaying is safe. 4xx returns as-is — that's a real bug. */
+async function fetchRetry(url, init, attempts = 3) {
+  let lastErr
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 500 * 2 ** (i - 1)))
+    try {
+      const r = await fetch(url, init)
+      if (r.status < 500 && r.status !== 429) return r
+      lastErr = new Error(`${r.status}: ${await r.text()}`)
+    } catch (e) {
+      lastErr = e
+    }
+  }
+  throw lastErr
 }
