@@ -22,10 +22,22 @@ concurrency:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 7
     steps:
+      # --fail-with-body, not --fail: on a 500 we want the endpoint's JSON error
+      # in the log. Plain --fail discards the body, which is why past failure
+      # emails only ever said "error: 500".
+      #
+      # --retry rides out the transient Supabase/Mongo blips that used to fail a
+      # run outright. Retrying is safe and cheap: the endpoint is server-throttled,
+      # so a retry after a partial rebuild just returns `ran:false`, and the
+      # matcher is idempotent — the next tick finishes the job. Only a genuinely
+      # sustained outage (~all attempts over ~2 min) still fails and emails.
       - name: Trigger mapping refresh
         run: |
           echo "Pinging mapping-tick…"
-          curl -sS --fail --max-time 150 https://live-fixtures.vercel.app/api/mapping-tick
+          curl -sS --fail-with-body \
+               --max-time 120 \
+               --retry 2 --retry-delay 10 --retry-all-errors \
+               https://live-fixtures.vercel.app/api/mapping-tick
           echo
