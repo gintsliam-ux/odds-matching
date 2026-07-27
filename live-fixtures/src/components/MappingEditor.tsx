@@ -44,6 +44,30 @@ export type EditorTarget =
       currentSwiftId: string | null
     }
 
+/**
+ * Opening value for the search box.
+ *
+ * The candidate list starts from the /public catalogue snapshots, which are
+ * only rebuilt by a local `npm run build-mapping` — the Vercel cron runs with
+ * writeSnapshot:false because that runtime has no writable /public. So the
+ * snapshot goes stale, and tennis rotates its ENTIRE competition set weekly:
+ * a 5-day-old snapshot carried 10 tennis competitions, all of them last week's,
+ * with the current ones missing outright. Opening the picker on an empty query
+ * showed that stale list and nothing else, which reads as "this tournament
+ * can't be mapped" — the live search only fires once you type.
+ *
+ * Seeding the query fires that live search immediately. Seed with the LEADING
+ * segment only: OPTIC names a tennis tournament "Los Cabos, Mexico, Qualifying"
+ * where the book calls it "ATP Los Cabos", and searching the full string
+ * matches nothing while "Los Cabos" matches exactly.
+ */
+function initialQueryFor(target: EditorTarget): string {
+  if (target.kind !== 'competition') return ''
+  const head = (target.opticTournamentRaw ?? '').split(',')[0].trim()
+  // Guard the 1-char case: the live search needs >= 2 chars to fire at all.
+  return head.length >= 2 ? head : ''
+}
+
 interface Props {
   target: EditorTarget
   onClose: () => void
@@ -53,7 +77,7 @@ interface Props {
 export function MappingEditor({ target, onClose, onSaved }: Props) {
   const provider: Provider = target.provider ?? 'swift'
   const bookLabel = provider === 'mybet' ? 'MYBET' : 'SWIFT'
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(() => initialQueryFor(target))
   const [comps, setComps] = useState<SwiftCompetition[]>([])
   const [events, setEvents] = useState<SwiftEvent[]>([])
   const [loading, setLoading] = useState(true)
@@ -383,9 +407,17 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
               />
             ))
           )}
-          {!loading && !error && (isComp ? visibleComps.length : visibleEvents.length) === 0 && (
+          {!loading && !error && !liveSearching && (isComp ? visibleComps.length : visibleEvents.length) === 0 && (
             <div className="px-3 py-6 text-center text-[11px] tracking-widest text-gray-600">
               NO MATCHES
+              {/* The bundled catalogue is a periodic snapshot, so a brand-new
+                  competition only shows up via the live search. Say so, rather
+                  than letting an empty list imply the mapping is impossible. */}
+              {query.trim().length < 2 && (
+                <div className="mt-2 normal-case tracking-normal text-gray-500">
+                  Type at least 2 characters to search {bookLabel} live.
+                </div>
+              )}
             </div>
           )}
         </div>
