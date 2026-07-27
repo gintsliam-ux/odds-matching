@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchOverdueUpcomingFixtures } from '../lib/dataSource'
-import { fetchEventMappings } from '../lib/mappingData'
+import { fetchEventMappingsFor } from '../lib/mappingData'
 import { getSwiftCatalog, type SwiftEvent } from '../lib/swiftCatalog'
 import { fetchSwiftStatuses } from '../lib/swiftStatus'
 import { getMybetCatalog, type MybetEvent } from '../lib/mybetCatalog'
@@ -121,21 +121,12 @@ export function useNotifications(fixtures: Fixture[]): {
   useEffect(() => {
     let alive = true
     const load = () => {
-      Promise.all([
-        fetchEventMappings(),
-        getSwiftCatalog(),
-        fetchEventMappings('mybet'),
-        getMybetCatalog().catch(() => null),
-      ])
-        .then(([events, cat, mybetEvents, mybetCat]) => {
+      // Catalogues only — the event mappings load separately, scoped to the
+      // fixtures we actually consult (see the effect below `allFixtures`).
+      Promise.all([getSwiftCatalog(), getMybetCatalog().catch(() => null)])
+        .then(([cat, mybetCat]) => {
           if (!alive) return
-          const m = new Map<string, string>()
-          for (const e of events) if (e.swift_event_id) m.set(e.optic_fixture_id, e.swift_event_id)
-          setEventMap(m)
           setSwiftSnapshot(cat.eventById)
-          const mm = new Map<string, string>()
-          for (const e of mybetEvents) if (e.swift_event_id) mm.set(e.optic_fixture_id, e.swift_event_id)
-          setMybetMap(mm)
           if (mybetCat) setMybetSnapshot(mybetCat.eventById)
         })
         .catch(() => {/* keep previous */})
@@ -169,6 +160,39 @@ export function useNotifications(fixtures: Fixture[]): {
     const seen = new Set(fixtures.map((f) => f.id))
     return [...fixtures, ...overdueExtras.filter((f) => !seen.has(f.id))]
   }, [fixtures, overdueExtras])
+
+  // Event mappings for the fixtures this hook actually inspects. Both maps are
+  // only ever read as `eventMap.get(f.id)` over `allFixtures`, so a whole-table
+  // read was pure waste — it pulled 13.9k swift + 8.1k mybet rows across ~22
+  // sequential pages EVERY 60s on EVERY page, which is what kept the tab busy
+  // enough that the page never went idle.
+  //
+  // Keyed on the id string so the 15s board poll (new array identity, same
+  // ids) doesn't restart the interval.
+  const mappedIdKey = useMemo(() => allFixtures.map((f) => f.id).sort().join(','), [allFixtures])
+  useEffect(() => {
+    let alive = true
+    const load = () => {
+      const ids = mappedIdKey ? mappedIdKey.split(',') : []
+      Promise.all([fetchEventMappingsFor(ids, 'swift'), fetchEventMappingsFor(ids, 'mybet')])
+        .then(([events, mybetEvents]) => {
+          if (!alive) return
+          const m = new Map<string, string>()
+          for (const e of events) if (e.swift_event_id) m.set(e.optic_fixture_id, e.swift_event_id)
+          setEventMap(m)
+          const mm = new Map<string, string>()
+          for (const e of mybetEvents) if (e.swift_event_id) mm.set(e.optic_fixture_id, e.swift_event_id)
+          setMybetMap(mm)
+        })
+        .catch(() => {/* keep previous */})
+    }
+    load()
+    const id = setInterval(load, 60_000)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [mappedIdKey])
 
   // SWIFT ids we need fresh statuses for: any mapped fixture where OPTIC
   // says the game has started (live, or upcoming-but-late). Polled every

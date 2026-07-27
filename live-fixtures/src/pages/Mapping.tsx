@@ -16,7 +16,7 @@ import { displaySport, mybetSportOf, slugToSport, sportEmoji, sportGroupKey, spo
 import { kickoffLabel, melbDateTimeShort, utcDateTimeShort } from '../lib/format'
 import {
   fetchCompetitionMappings,
-  fetchEventMappings,
+  fetchEventMappingsFor,
   setCompetitionMappingsManual,
   setCompetitionVerified,
   setEventMappingManual,
@@ -69,10 +69,10 @@ export default function MappingPage() {
   // One OPTIC tournament can have multiple SWIFT mappings (e.g. cricket
   // "Test Matches" → many test series). Keep them as a list per key.
   const [compMap, setCompMap] = useState<Map<string, CompetitionMapping[]>>(new Map())
-  const [eventMap, setEventMap] = useState<Map<string, EventMapping>>(new Map())
-  // Parallel mybet maps (provider='mybet'), rendered as a third column.
+  // Parallel mybet map (provider='mybet'), rendered as a third column. Event
+  // mappings are NOT held here — DrillView loads its own, scoped to the
+  // fixtures it renders.
   const [mybetCompMap, setMybetCompMap] = useState<Map<string, CompetitionMapping[]>>(new Map())
-  const [mybetEventMap, setMybetEventMap] = useState<Map<string, EventMapping>>(new Map())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [editor, setEditor] = useState<EditorTarget | null>(null)
@@ -162,13 +162,12 @@ export default function MappingPage() {
   useEffect(() => {
     let alive = true
     setLoading(true)
-    Promise.all([
-      fetchCompetitionMappings(),
-      fetchEventMappings(),
-      fetchCompetitionMappings('mybet'),
-      fetchEventMappings('mybet'),
-    ])
-      .then(([comps, events, mybetComps, mybetEvents]) => {
+    // Competitions only. Event mappings used to be pulled whole-table here —
+    // 13.9k swift + 8.1k mybet rows over ~22 sequential pages, none of them
+    // abortable, restarted by every setReloadKey. Only the drill reads them, so
+    // it now fetches just the fixtures on screen (fetchEventMappingsFor).
+    Promise.all([fetchCompetitionMappings(), fetchCompetitionMappings('mybet')])
+      .then(([comps, mybetComps]) => {
         if (!alive) return
         const groupComps = (list: CompetitionMapping[]) => {
           const cm = new Map<string, CompetitionMapping[]>()
@@ -180,15 +179,8 @@ export default function MappingPage() {
           }
           return cm
         }
-        const indexEvents = (list: EventMapping[]) => {
-          const em = new Map<string, EventMapping>()
-          for (const e of list) em.set(e.optic_fixture_id, e)
-          return em
-        }
         setCompMap(groupComps(comps))
-        setEventMap(indexEvents(events))
         setMybetCompMap(groupComps(mybetComps))
-        setMybetEventMap(indexEvents(mybetEvents))
         setError(null)
       })
       .catch((e) => alive && setError(String(e)))
@@ -749,7 +741,7 @@ export default function MappingPage() {
         </Callout>
       ) : loading ? (
         <TableSkeleton rows={10} cols={6} />
-      ) : compMap.size === 0 && eventMap.size === 0 ? (
+      ) : compMap.size === 0 && mybetCompMap.size === 0 ? (
         <Callout tone="warn">
           Mapping tables are empty. Run <code className="text-gray-200">npm run build-mapping</code>.
         </Callout>
@@ -777,11 +769,10 @@ export default function MappingPage() {
       {selectedTournament ? (
         <DrillView
           row={selectedTournament}
-          eventMap={eventMap}
           swiftEventById={swiftEventById}
-          mybetEventMap={mybetEventMap}
           mybetEventById={mybetEventById}
           onNeedEventNames={requestEventNames}
+          reloadToken={reloadKey}
           onBack={() => navigate(`/mapping/${sportSlug ?? ''}${filterQuery()}`)}
           onEditEvent={(t) => setEditor(t)}
           onReloadMappings={() => setReloadKey((k) => k + 1)}
@@ -1071,11 +1062,10 @@ type EventStatus = 'all' | 'live' | 'upcoming' | 'completed'
 
 function DrillView({
   row,
-  eventMap,
   swiftEventById,
-  mybetEventMap,
   mybetEventById,
   onNeedEventNames,
+  reloadToken,
   onBack,
   onEditEvent,
   onReloadMappings,
@@ -1090,11 +1080,11 @@ function DrillView({
     mappings: CompetitionMapping[]
     mybetMappings: CompetitionMapping[]
   }
-  eventMap: Map<string, EventMapping>
   swiftEventById: Map<string, SwiftEvent>
-  mybetEventMap: Map<string, EventMapping>
   mybetEventById: Map<string, MybetEvent>
   onNeedEventNames: (provider: 'swift' | 'mybet', ids: string[]) => void
+  /** Page-level reload counter — bumped by editor saves and auto-map runs. */
+  reloadToken: number
   onBack: () => void
   onEditEvent: (t: EditorTarget) => void
   onReloadMappings: () => void
@@ -1108,6 +1098,37 @@ function DrillView({
   const [statusFilter, setStatusFilter] = useState<EventStatus>('all')
   const [autoRunning, setAutoRunning] = useState(false)
   const [autoStatus, setAutoStatus] = useState<string | null>(null)
+
+  // Event mappings for THIS tournament's fixtures only. The page used to hold
+  // every row for both books (13.9k + 8.1k, ~22 sequential pages) purely so the
+  // drill could read a few dozen. `bump` re-reads after a save/auto-map.
+  const [eventMap, setEventMap] = useState<Map<string, EventMapping>>(new Map())
+  const [mybetEventMap, setMybetEventMap] = useState<Map<string, EventMapping>>(new Map())
+  const fixtureIdKey = useMemo(() => fixtures.map((f) => f.id).sort().join(','), [fixtures])
+  useEffect(() => {
+    let alive = true
+    // No early-return-with-setState for the empty case: fetchEventMappingsFor
+    // short-circuits on an empty id list, so the maps still clear, but they do
+    // it in the .then rather than synchronously during the effect body.
+    const ids = fixtureIdKey ? fixtureIdKey.split(',') : []
+    const index = (list: EventMapping[]) => {
+      const m = new Map<string, EventMapping>()
+      for (const e of list) m.set(e.optic_fixture_id, e)
+      return m
+    }
+    Promise.all([fetchEventMappingsFor(ids, 'swift'), fetchEventMappingsFor(ids, 'mybet')])
+      .then(([sw, mb]) => {
+        if (!alive) return
+        setEventMap(index(sw))
+        setMybetEventMap(index(mb))
+      })
+      .catch(() => {/* rows fall back to unmapped; the page still works */})
+    return () => {
+      alive = false
+    }
+    // reloadToken is the page's reloadKey: both the editor's onSaved and this
+    // drill's auto-map bump it, so a write refreshes these maps too.
+  }, [fixtureIdKey, reloadToken])
 
   const counts = useMemo(() => {
     const c = { all: fixtures.length, live: 0, upcoming: 0, completed: 0 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { fetchEventMappings } from '../lib/mappingData'
+import { fetchEventMappingsFor } from '../lib/mappingData'
 import { fetchSwiftStatuses } from '../lib/swiftStatus'
 import type { Fixture } from '../lib/types'
 
@@ -22,14 +22,21 @@ export function useSwiftActualStartCapture(fixtures: Fixture[]): void {
   // optic_fixture_id → swift_event_id for mappings that still need stamping.
   const [unstampedMap, setUnstampedMap] = useState<Map<string, string>>(new Map())
 
-  // Refresh the unstamped set every minute. Cheap (single PostgREST call,
-  // filtered to `swift_actual_start IS NULL`), so the candidate list shrinks
-  // automatically as the endpoint writes stamps.
+  // Refresh the unstamped set every minute; the candidate list shrinks by
+  // itself as the endpoint writes stamps. Scoped to the fixtures on screen. This used to read the WHOLE
+  // event_mapping table (13.9k rows over ~14 sequential pages) every 60s on
+  // every page — the map is only ever consulted via `fixtures` below, so the
+  // rest was pure waste and kept the tab permanently busy.
+  //
+  // Keyed on the id STRING, not the array: `fixtures` gets a new identity on
+  // each 15s board poll, which would otherwise restart the interval forever.
+  const fixtureIdKey = useMemo(() => fixtures.map((f) => f.id).sort().join(','), [fixtures])
   useEffect(() => {
     let alive = true
     const load = async () => {
       try {
-        const events = await fetchEventMappings()
+        const ids = fixtureIdKey ? fixtureIdKey.split(',') : []
+        const events = await fetchEventMappingsFor(ids)
         if (!alive) return
         const m = new Map<string, string>()
         for (const e of events) {
@@ -46,7 +53,7 @@ export function useSwiftActualStartCapture(fixtures: Fixture[]): void {
       alive = false
       clearInterval(id)
     }
-  }, [])
+  }, [fixtureIdKey])
 
   // Hot list: swift event ids for mapped fixtures whose scheduled kickoff is
   // within ±15 min of now AND that haven't been stamped yet. Recomputes on
