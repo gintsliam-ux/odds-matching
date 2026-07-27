@@ -6,6 +6,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useTerminal } from '../components/Layout'
 import { useSportUniverse } from '../hooks/useSportUniverse'
 import { useTournamentFixtures } from '../hooks/useTournamentFixtures'
+import { useNow } from '../hooks/useNow'
 import { MappingEditor, type EditorTarget } from '../components/MappingEditor'
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
 import { getMybetCatalog, type MybetEvent } from '../lib/mybetCatalog'
@@ -203,6 +204,8 @@ export default function MappingPage() {
   const search = params.get('q') ?? ''
   const mappedFilter =
     (params.get('mapped') as 'all' | 'mapped' | 'unmapped' | 'verified' | 'unverified' | null) ?? 'all'
+  // Opt back in to the full backlog of finished tournaments. Default off.
+  const showAllPeriods = params.get('all') === '1'
 
   function setParam(key: string, value: string | null) {
     updateParams({ [key]: value })
@@ -213,6 +216,7 @@ export default function MappingPage() {
   function filterQuery() {
     const q = new URLSearchParams()
     if (mappedFilter !== 'all') q.set('mapped', mappedFilter)
+    if (showAllPeriods) q.set('all', '1')
     if (search) q.set('q', search)
     const s = q.toString()
     return s ? `?${s}` : ''
@@ -252,7 +256,36 @@ export default function MappingPage() {
     mybetMappings: CompetitionMapping[]
     /** User explicitly marked this tournament as unmapped — auto-map skips it. */
     stickyUnmapped: boolean
+    /** Live/upcoming, or finished within ACTIVE_WINDOW_D. Drives the default
+     *  "active only" list — see the note on ACTIVE_WINDOW_D. */
+    isActive: boolean
   }
+
+  // A tennis season_type ("Vancouver, Canada, Qualifying") is a one-week event,
+  // but the mapping list used to carry every one the feed had ever seen: 121
+  // tennis rows against 9 with an unfinished fixture. Rows now default to the
+  // current slate — anything live/upcoming, plus anything that wrapped up in
+  // the last week so a just-finished tournament is still there to reconcile.
+  // `?all=1` brings the full backlog back.
+  // Via useNow rather than a bare Date.now(): reading the clock during render
+  // is impure (the lint rule catches it) and the cutoff would freeze at mount.
+  // A minute's granularity is far finer than a 7-day window needs.
+  const ACTIVE_WINDOW_D = 7
+  const nowTick = useNow(60_000)
+  const activeCutoffMs = useMemo(
+    () => nowTick.getTime() - ACTIVE_WINDOW_D * 86_400_000,
+    [nowTick],
+  )
+  const isActiveKey = useCallback(
+    (k: string) => {
+      const act = universe.activityByTournament.get(k)
+      // No activity row at all = a competition_mapping left over for a
+      // tournament the feed no longer carries. That's exactly the stale case.
+      if (!act) return false
+      return act.active > 0 || act.lastMs >= activeCutoffMs
+    },
+    [universe, activeCutoffMs],
+  )
 
   const tournaments = useMemo<TournamentRow[]>(() => {
     const counts = new Map<string, number>()
@@ -293,6 +326,7 @@ export default function MappingPage() {
           mappings: realMappings(compMap.get(k)),
           mybetMappings: realMappings(mybetCompMap.get(k)),
           stickyUnmapped: isStickyUnmapped(compMap.get(k)),
+          isActive: isActiveKey(k),
         })
       }
     }
@@ -314,6 +348,7 @@ export default function MappingPage() {
         mappings: realMappings(compMap.get(k)),
           mybetMappings: realMappings(mybetCompMap.get(k)),
           stickyUnmapped: isStickyUnmapped(compMap.get(k)),
+          isActive: isActiveKey(k),
       })
     }
     // Tennis tournament rows derived from competition_mapping entries that
@@ -336,6 +371,7 @@ export default function MappingPage() {
           mappings: realMappings(compMap.get(k)),
           mybetMappings: realMappings(mybetCompMap.get(k)),
           stickyUnmapped: isStickyUnmapped(compMap.get(k)),
+          isActive: isActiveKey(k),
         })
       }
     }
@@ -355,6 +391,7 @@ export default function MappingPage() {
         mappings: realMappings(compMap.get(k)),
           mybetMappings: realMappings(mybetCompMap.get(k)),
           stickyUnmapped: isStickyUnmapped(compMap.get(k)),
+          isActive: isActiveKey(k),
       })
     }
     return rows
@@ -365,7 +402,7 @@ export default function MappingPage() {
         if (am !== bm) return bm - am
         return b.count - a.count || a.sport.localeCompare(b.sport) || a.league.localeCompare(b.league)
       })
-  }, [universe, fixtures, compMap, mybetCompMap])
+  }, [universe, fixtures, compMap, mybetCompMap, isActiveKey])
 
   // Sport tab list (display-grouped: `mlb` and `baseball` share "Baseball").
   // Includes SwiftBet sports too — clicking a SwiftBet-only sport tab shows
@@ -380,7 +417,10 @@ export default function MappingPage() {
       swiftComps: number // SwiftBet competition count for the same sport
     }
     const m = new Map<string, Tab>()
+    // Count only what the list will actually show, or the Tennis tab reads 121
+    // while the table under it holds 57.
     for (const t of tournaments) {
+      if (!showAllPeriods && !t.isActive) continue
       const key = sportGroupKey(t.sport)
       const e = m.get(key) ?? {
         key,
@@ -414,13 +454,14 @@ export default function MappingPage() {
       if ((a.total > 0) !== (b.total > 0)) return a.total > 0 ? -1 : 1
       return b.paired - a.paired || b.total - a.total || a.name.localeCompare(b.name)
     })
-  }, [tournaments, swiftComps])
+  }, [tournaments, swiftComps, showAllPeriods])
 
   // Apply sport-tab + mapped/unmapped/verified + search filter.
   const visibleTournaments = useMemo(() => {
     const q = search.trim().toLowerCase()
     return tournaments.filter((t) => {
       if (sportFilter !== 'all' && sportGroupKey(t.sport) !== sportFilter) return false
+      if (!showAllPeriods && !t.isActive) return false
       // Filters consider EITHER brand. "mapped" = SwiftBet or mybet has a
       // mapping; "verified" = everything mapped across both is verified;
       // "unverified" = mapped but something still needs confirming. "All" shows
@@ -442,7 +483,17 @@ export default function MappingPage() {
         return false
       return true
     })
-  }, [tournaments, sportFilter, mappedFilter, search])
+  }, [tournaments, sportFilter, mappedFilter, search, showAllPeriods])
+
+  // How many rows the active-window filter is holding back, under the CURRENT
+  // sport tab — so the toggle can say what it would reveal instead of being an
+  // unlabelled switch.
+  const hiddenOldCount = useMemo(() => {
+    if (showAllPeriods) return 0
+    return tournaments.filter(
+      (t) => !t.isActive && (sportFilter === 'all' || sportGroupKey(t.sport) === sportFilter),
+    ).length
+  }, [tournaments, sportFilter, showAllPeriods])
 
   // Selected tournament for the drill-down view (if any). Looked up from the
   // already-rendered list rather than re-parsing from the URL, which keeps the
@@ -640,6 +691,23 @@ export default function MappingPage() {
             onClick={() => setParam('mapped', 'unverified')}
             label="Unverified"
             tone="amber"
+          />
+        </div>
+        {/* Active-window toggle. Its own group so it reads as orthogonal to the
+            mapped/verified chips — those narrow by mapping state, this one by
+            recency. Labelled with the hidden count so it's obvious what's
+            being withheld rather than looking like an empty list. */}
+        <div className="flex items-center gap-1 rounded-md bg-[color:var(--panel-2)] p-1">
+          <FilterChip
+            active={!showAllPeriods}
+            onClick={() => setParam('all', null)}
+            label="Active"
+            tone="green"
+          />
+          <FilterChip
+            active={showAllPeriods}
+            onClick={() => setParam('all', '1')}
+            label={hiddenOldCount > 0 ? `All time (+${hiddenOldCount})` : 'All time'}
           />
         </div>
         <input
