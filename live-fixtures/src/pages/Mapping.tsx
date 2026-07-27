@@ -588,6 +588,10 @@ export default function MappingPage() {
             opticTournamentRaw: t.rawTournament,
             picks: [{ id: hit.competition.id, name: hit.competition.name, sport: hit.competition.sport }],
             provider,
+            // A machine guess, so mark it disposable: the offline matcher may
+            // wipe and re-derive it. Writing these as 'manual' made them sticky
+            // and hid them from every guard the matcher has.
+            source: 'auto',
           })
           // Claim it for THIS base name, so later jobs in the run see it as
           // taken unless they're siblings.
@@ -1207,7 +1211,9 @@ function DrillView({
         })
         if (!hit) continue
         try {
-          await setEventMappingManual({ opticFixtureId: f.id, swiftEventId: hit.event.id, provider })
+          // 'auto' — a machine guess the matcher is free to revisit (see
+          // MappingSource). Only the editor's hand-picks are 'manual'.
+          await setEventMappingManual({ opticFixtureId: f.id, swiftEventId: hit.event.id, provider, source: 'auto' })
           taken.add(hit.event.id)
           paired++
         } catch {
