@@ -363,7 +363,11 @@ function scoreTennis(ot, gutsyComp) {
 // including writing /public snapshots. When imported by the Vercel cron, the
 // caller flips snapshot off (the function bundle can't write to /public).
 const IS_CLI = !!process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
-if (IS_CLI) main({ writeSnapshot: true }).catch((e) => bail(e))
+if (IS_CLI)
+  main({ writeSnapshot: true }).catch((e) => {
+    console.error('error:', e instanceof Error ? e.stack : e)
+    process.exit(1)
+  })
 
 export async function runMapping(opts = {}) {
   return main({ writeSnapshot: false, ...opts })
@@ -377,17 +381,24 @@ async function main(opts = { writeSnapshot: true }) {
   console.log(`  ${opticRows.length} fixtures.`)
 
   console.log('• Loading gutsy.events from Mongo…')
-  const mongo = new MongoClient(MONGO_URI)
-  await mongo.connect()
-  const gutsy = await mongo
-    .db(MONGO_DB)
-    .collection(MONGO_COLL)
-    .find(
-      {},
-      { projection: { _id: 1, name: 1, sport: 1, competition: 1, teams: 1, start_date: 1, status: 1 } },
-    )
-    .toArray()
-  await mongo.close()
+  // Small pool + finally-close: this reads the collection once, sequentially, so
+  // one connection is plenty — and Atlas is shared with the scrapers, so a
+  // client leaked by a mid-run throw on a warm instance must not accumulate.
+  const mongo = new MongoClient(MONGO_URI, { maxPoolSize: 5 })
+  let gutsy
+  try {
+    await mongo.connect()
+    gutsy = await mongo
+      .db(MONGO_DB)
+      .collection(MONGO_COLL)
+      .find(
+        {},
+        { projection: { _id: 1, name: 1, sport: 1, competition: 1, teams: 1, start_date: 1, status: 1 } },
+      )
+      .toArray()
+  } finally {
+    await mongo.close().catch(() => {})
+  }
   console.log(`  ${gutsy.length} mongo events.`)
 
   // Drop a small JSON snapshot of SWIFT competitions + events into public/ so
@@ -771,7 +782,7 @@ async function getAllSupabase(pathAndQuery) {
   const rows = []
   const size = 1000
   for (let from = 0; ; from += size) {
-    const r = await fetch(`${REST}/${pathAndQuery}`, {
+    const r = await fetchRetry(`${REST}/${pathAndQuery}`, {
       headers: { ...HDR, Range: `${from}-${from + size - 1}`, 'Range-Unit': 'items' },
     })
     if (!r.ok) bail(`GET ${pathAndQuery} → ${r.status}: ${await r.text()}`)
@@ -790,7 +801,7 @@ async function getAllSupabase(pathAndQuery) {
  */
 async function deleteAllAutoUnverified() {
   const qs = 'provider=eq.swift&source=eq.auto&verified=eq.false'
-  const r = await fetch(`${REST}/competition_mapping?${qs}`, {
+  const r = await fetchRetry(`${REST}/competition_mapping?${qs}`, {
     method: 'DELETE',
     headers: { ...HDR, Prefer: 'return=minimal' },
   })
@@ -801,7 +812,7 @@ async function upsertAll(pathAndQuery, items) {
   const CHUNK = 500
   for (let i = 0; i < items.length; i += CHUNK) {
     const slice = items.slice(i, i + CHUNK)
-    const r = await fetch(`${REST}/${pathAndQuery}`, {
+    const r = await fetchRetry(`${REST}/${pathAndQuery}`, {
       method: 'POST',
       headers: {
         ...HDR,
@@ -882,7 +893,30 @@ function parseEnv(path) {
   }
 }
 
+// Always THROW — never process.exit(). This module is imported by the Vercel
+// functions (/api/mapping-tick, /api/cron/build-mapping), where an exit() kills
+// the whole instance: the caller's try/catch never runs, so the response is a
+// bare FUNCTION_INVOCATION_FAILED 500 with the reason visible only in Vercel's
+// runtime logs. Throwing lets the handler return the actual message.
 function bail(msg) {
-  console.error('error:', msg instanceof Error ? msg.stack : msg)
-  process.exit(1)
+  throw msg instanceof Error ? msg : new Error(String(msg))
+}
+
+/** fetch + bounded retry on the transient failures that were 500-ing the tick:
+ *  network resets and Supabase 5xx/429. Every caller here is idempotent
+ *  (paginated reads, filtered delete, merge-duplicates upsert), so a replay is
+ *  always safe. 4xx is returned as-is — that's a real bug, not a blip. */
+async function fetchRetry(url, init, attempts = 3) {
+  let lastErr
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 500 * 2 ** (i - 1)))
+    try {
+      const r = await fetch(url, init)
+      if (r.status < 500 && r.status !== 429) return r
+      lastErr = new Error(`${r.status}: ${await r.text()}`)
+    } catch (e) {
+      lastErr = e
+    }
+  }
+  throw lastErr
 }
