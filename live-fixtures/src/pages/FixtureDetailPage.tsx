@@ -15,7 +15,7 @@ import { Avatar } from '../components/Avatar'
 import { LeagueBadge } from '../components/LeagueBadge'
 import type { Fixture } from '../lib/types'
 import { agoLabel, fmtDateTime, fmtLine, melbDateTime, melbDayTime, overdueMinutes, placementOffset, startsInLabel } from '../lib/format'
-import { fetchEventMappings, fetchCompetitionMappings, type EventMapping, type CompetitionMapping } from '../lib/mappingData'
+import { fetchEventMappingsFor, fetchCompetitionMappings, type EventMapping, type CompetitionMapping } from '../lib/mappingData'
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
 import { getMybetCatalog, type MybetCompetition, type MybetEvent } from '../lib/mybetCatalog'
 import { fetchMybetEvent, mybetEventUrl, type MybetLiveEvent } from '../lib/mybetStatus'
@@ -74,11 +74,14 @@ export default function FixtureDetailPage() {
         ? { loading: true }
         : prev,
     )
+    // Scoped to THIS fixture. These were whole-table reads (13.9k + 8.1k rows,
+    // ~22 sequential pages) whose result was immediately narrowed with
+    // .find(e => e.optic_fixture_id === id) — one row out of twenty-two thousand.
     Promise.all([
-      fetchEventMappings(),
+      fetchEventMappingsFor([id], 'swift'),
       fetchCompetitionMappings(),
       getSwiftCatalog(),
-      fetchEventMappings('mybet'),
+      fetchEventMappingsFor([id], 'mybet'),
       fetchCompetitionMappings('mybet'),
       getMybetCatalog().catch(() => null),
     ])
