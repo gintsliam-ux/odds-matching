@@ -109,12 +109,28 @@ export interface SwiftPick {
  * cleared and the auto-matcher will be free to re-add on next build-mapping.
  * Use `markUnmapped` to record a sticky "no mapping" instead.
  */
+/**
+ * Who decided a mapping, and therefore whether the offline matcher may revisit
+ * it. 'manual' is STICKY: build-mapping preserves those rows and its
+ * deleteAllAutoUnverified() pass skips them, so a wrong one survives forever.
+ * 'auto' is disposable — the next matcher run wipes and re-derives it.
+ *
+ * A HUMAN pick (the pencil/editor) is 'manual'. A machine guess (the bulk
+ * auto-map buttons) must be 'auto', even though it goes through this same
+ * helper: writing those as 'manual' is how ~30 wrong rows became permanent and
+ * invisible to every guard the matcher has — one book competition claiming
+ * nine unrelated leagues across five countries.
+ */
+export type MappingSource = 'auto' | 'manual'
+
 export async function setCompetitionMappingsManual(args: {
   opticSportRaw: string
   opticLeagueRaw: string
   opticTournamentRaw: string
   picks: SwiftPick[]
   provider?: Provider
+  /** Defaults to 'manual' — the editor's case. Bulk auto-map passes 'auto'. */
+  source?: MappingSource
 }): Promise<void> {
   const provider = args.provider ?? 'swift'
   const sb = getSupabase()
@@ -157,7 +173,7 @@ export async function setCompetitionMappingsManual(args: {
         gutsy_competition: p.name,
         gutsy_competition_id: p.id,
         confidence: 1,
-        source: 'manual',
+        source: args.source ?? 'manual',
       })),
       { onConflict: 'provider,optic_sport,optic_league,optic_tournament,gutsy_competition_id' },
     )
@@ -228,6 +244,8 @@ export async function setEventMappingManual(args: {
   opticFixtureId: string
   swiftEventId: string | null
   provider?: Provider
+  /** See MappingSource — pass 'auto' from the bulk auto-map buttons. */
+  source?: MappingSource
 }): Promise<void> {
   const { error } = await getSupabase()
     .from('event_mapping')
@@ -237,7 +255,7 @@ export async function setEventMappingManual(args: {
         optic_fixture_id: args.opticFixtureId,
         gutsy_event_id: args.swiftEventId,
         confidence: args.swiftEventId ? 1 : 0,
-        source: 'manual',
+        source: args.source ?? 'manual',
       },
       { onConflict: 'provider,optic_fixture_id' },
     )
