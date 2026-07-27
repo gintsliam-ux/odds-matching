@@ -24,6 +24,25 @@ export interface SportUniverse {
   activeBySport: Map<string, number>
   /** Same, keyed by "groupKey|prettifiedLeague". */
   activeByLeague: Map<string, number>
+  /**
+   * Per-TOURNAMENT activity, keyed exactly like the Mapping page's row key:
+   * `prettifiedSport|prettifiedLeague|tournament`, where tournament is the
+   * tennis season_type and '' for every other sport.
+   *
+   * Tennis is why this exists: its "leagues" (atp/wta/atp_challenger) are
+   * permanent but each season_type is a one-week event, so the mapping list
+   * accumulated every tournament the feed had ever carried — 121 rows of which
+   * only 9 had an unfinished fixture. `lastMs` lets that list default to the
+   * current slate instead of the full backlog.
+   */
+  activityByTournament: Map<string, TournamentActivity>
+}
+
+export interface TournamentActivity {
+  /** Fixtures not yet completed (live + upcoming). */
+  active: number
+  /** Latest scheduled_start seen, epoch ms (0 if none had a date). */
+  lastMs: number
 }
 
 let cached: SportUniverse | null = null
@@ -42,13 +61,20 @@ async function load(): Promise<SportUniverse> {
   const rawLeagueByGroup = new Map<string, string>() // `${groupKey}|${prettyLeague}` -> raw league slug
   const activeBySport = new Map<string, number>()
   const activeByLeague = new Map<string, number>()
+  const activityByTournament = new Map<string, TournamentActivity>()
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await sb
       .from('live_fixtures')
-      .select('sport,league,status')
+      .select('sport,league,status,season_type,scheduled_start')
       .range(from, from + PAGE - 1)
     if (error) throw error
-    const rows = (data ?? []) as { sport: string | null; league: string | null; status: string | null }[]
+    const rows = (data ?? []) as {
+      sport: string | null
+      league: string | null
+      status: string | null
+      season_type: string | null
+      scheduled_start: string | null
+    }[]
     for (const r of rows) {
       // Reclassify generic "rugby" rows so they merge into rugby_union /
       // rugby_league based on the competition. Matches what mapRow does for
@@ -96,6 +122,18 @@ async function load(): Promise<SportUniverse> {
           activeByLeague.set(lk, (activeByLeague.get(lk) ?? 0) + 1)
         }
       }
+      // Per-tournament rollup. The key MUST mirror how Mapping.tsx builds its
+      // row key (`${sport}|${league}|${tournament}`, tournament only for
+      // tennis) or the lookup silently misses and every row reads as inactive.
+      const tourn = s === 'tennis' ? (r.season_type ?? '') : ''
+      const tk = `${s}|${l}|${tourn}`
+      let act = activityByTournament.get(tk)
+      if (!act) activityByTournament.set(tk, (act = { active: 0, lastMs: 0 }))
+      if ((r.status ?? '') !== 'completed') act.active++
+      if (r.scheduled_start) {
+        const ms = Date.parse(r.scheduled_start)
+        if (Number.isFinite(ms) && ms > act.lastMs) act.lastMs = ms
+      }
     }
     if (rows.length < PAGE) break
   }
@@ -104,7 +142,7 @@ async function load(): Promise<SportUniverse> {
   for (const [s, lset] of seen) leaguesBySport.set(s, [...lset].sort())
   const rawSportsAllOut = new Map<string, string[]>()
   for (const [s, raws] of rawSportsAll) rawSportsAllOut.set(s, [...raws])
-  return { sports, leaguesBySport, rawSport, rawSportsAll: rawSportsAllOut, rawLeague, rawLeagueByGroup, activeBySport, activeByLeague }
+  return { sports, leaguesBySport, rawSport, rawSportsAll: rawSportsAllOut, rawLeague, rawLeagueByGroup, activeBySport, activeByLeague, activityByTournament }
 }
 
 const EMPTY: SportUniverse = {
@@ -116,6 +154,7 @@ const EMPTY: SportUniverse = {
   rawLeagueByGroup: new Map(),
   activeBySport: new Map(),
   activeByLeague: new Map(),
+  activityByTournament: new Map(),
 }
 
 export function useSportUniverse(): SportUniverse {
