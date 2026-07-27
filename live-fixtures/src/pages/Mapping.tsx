@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ArrowLeftRight, Check, ChevronRight, Database, GitMerge, Loader2, Pencil, Sparkles } from 'lucide-react'
 import { TableSkeleton } from '../components/Skeleton'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
@@ -102,71 +102,61 @@ export default function MappingPage() {
   }, [])
 
   // The static catalogue is a daily snapshot, so a freshly-mapped (or aged-out)
-  // event isn't in it and the row would show a bare id. Resolve any such mapped
-  // ids live from Mongo (/api/swift-status) so the row shows team names. Each id
-  // is fetched at most once (attemptedRef) to avoid a refetch loop.
-  const resolveAttempted = useRef<Set<string>>(new Set())
-  useEffect(() => {
-    if (eventMap.size === 0) return
-    let alive = true
-    const missing: string[] = []
-    for (const m of eventMap.values()) {
-      const id = m.swift_event_id
-      if (id && !swiftEventById.has(id) && !resolveAttempted.current.has(id)) missing.push(id)
-    }
+  // event isn't in it and the row would fall back to a bare id (a UUID for
+  // SWIFT, a plain number for mybet). Those names are resolved live from Mongo.
+  //
+  // Resolution is ON DEMAND — the drill view asks for the ids it is actually
+  // rendering. It used to sweep the whole mapping table on mount instead
+  // (~5.7k SWIFT + ~1.4k mybet ids), which fired ~20 concurrent /api/*-status
+  // POSTs, saturated the browser's connection pool, and left the page pinned
+  // while every label sat on its id fallback. Event names are only ever shown
+  // in the drill, so the sweep was pure waste: one league needs a handful.
+  //
+  // Attempts are COUNTED, not just flagged: a successful id is never refetched,
+  // and a failed one gets one retry (so a transient blip doesn't strand a row on
+  // its id for the session) but no more — the effect below re-runs on every
+  // state change, so an uncapped retry would refire on each one.
+  const MAX_ATTEMPTS = 2
+  const resolveAttempts = useRef<Map<string, number>>(new Map())
+  const mybetResolveAttempts = useRef<Map<string, number>>(new Map())
+  const requestEventNames = useCallback((provider: 'swift' | 'mybet', ids: string[]) => {
+    const attempted = provider === 'mybet' ? mybetResolveAttempts : resolveAttempts
+    const missing = ids.filter((id) => id && (attempted.current.get(id) ?? 0) < MAX_ATTEMPTS)
     if (missing.length === 0) return
-    for (const id of missing) resolveAttempted.current.add(id)
-    // Resolve in chunks that each merge as they arrive, so names fill in
-    // progressively instead of after one big all-or-nothing request.
+    for (const id of missing) attempted.current.set(id, (attempted.current.get(id) ?? 0) + 1)
+    // Chunked so each batch merges as it arrives rather than all-or-nothing.
     const CHUNK = 300
     for (let i = 0; i < missing.length; i += CHUNK) {
-      fetchSwiftStatuses(missing.slice(i, i + CHUNK))
-        .then((evs) => {
-          if (!alive || evs.length === 0) return
-          setSwiftEventById((prev) => {
-            const next = new Map(prev)
-            for (const e of evs) next.set(e.id, e)
-            return next
+      const slice = missing.slice(i, i + CHUNK)
+      // A resolved id drops out of the caller's missing set on its own (it's in
+      // the byId map now), so failure needs no bookkeeping — the attempt is
+      // already counted and the row simply keeps its id fallback meanwhile.
+      const keepFallback = () => {}
+      if (provider === 'mybet') {
+        fetchMybetStatuses(slice)
+          .then((evs) => {
+            if (evs.length === 0) return
+            setMybetEventById((prev) => {
+              const next = new Map(prev)
+              for (const e of evs) next.set(e.id, { id: e.id, cid: null, sport: e.sport, competition: e.competition, name: e.name, home: e.home, away: e.away, start: e.start, suspendAt: e.suspendAt, status: e.status })
+              return next
+            })
           })
-        })
-        .catch(() => {/* keep id fallback */})
-    }
-    return () => {
-      alive = false
-    }
-  }, [eventMap, swiftEventById])
-
-  // Same live-resolve for mybet: the mybet snapshot is a daily file, so a mapped
-  // mybet event that isn't in it would show a bare numeric id. Resolve names from
-  // /api/mybet-status. Each id fetched at most once.
-  const mybetResolveAttempted = useRef<Set<string>>(new Set())
-  useEffect(() => {
-    if (mybetEventMap.size === 0) return
-    let alive = true
-    const missing: string[] = []
-    for (const m of mybetEventMap.values()) {
-      const id = m.swift_event_id
-      if (id && !mybetEventById.has(id) && !mybetResolveAttempted.current.has(id)) missing.push(id)
-    }
-    if (missing.length === 0) return
-    for (const id of missing) mybetResolveAttempted.current.add(id)
-    const CHUNK = 300
-    for (let i = 0; i < missing.length; i += CHUNK) {
-      fetchMybetStatuses(missing.slice(i, i + CHUNK))
-        .then((evs) => {
-          if (!alive || evs.length === 0) return
-          setMybetEventById((prev) => {
-            const next = new Map(prev)
-            for (const e of evs) next.set(e.id, { id: e.id, cid: null, sport: e.sport, competition: e.competition, name: e.name, home: e.home, away: e.away, start: e.start, suspendAt: e.suspendAt, status: e.status })
-            return next
+          .catch(keepFallback)
+      } else {
+        fetchSwiftStatuses(slice)
+          .then((evs) => {
+            if (evs.length === 0) return
+            setSwiftEventById((prev) => {
+              const next = new Map(prev)
+              for (const e of evs) next.set(e.id, e)
+              return next
+            })
           })
-        })
-        .catch(() => {/* keep id fallback */})
+          .catch(keepFallback)
+      }
     }
-    return () => {
-      alive = false
-    }
-  }, [mybetEventMap, mybetEventById])
+  }, [])
 
   useEffect(() => {
     let alive = true
@@ -700,6 +690,7 @@ export default function MappingPage() {
           swiftEventById={swiftEventById}
           mybetEventMap={mybetEventMap}
           mybetEventById={mybetEventById}
+          onNeedEventNames={requestEventNames}
           onBack={() => navigate(`/mapping/${sportSlug ?? ''}${filterQuery()}`)}
           onEditEvent={(t) => setEditor(t)}
           onReloadMappings={() => setReloadKey((k) => k + 1)}
@@ -993,6 +984,7 @@ function DrillView({
   swiftEventById,
   mybetEventMap,
   mybetEventById,
+  onNeedEventNames,
   onBack,
   onEditEvent,
   onReloadMappings,
@@ -1011,6 +1003,7 @@ function DrillView({
   swiftEventById: Map<string, SwiftEvent>
   mybetEventMap: Map<string, EventMapping>
   mybetEventById: Map<string, MybetEvent>
+  onNeedEventNames: (provider: 'swift' | 'mybet', ids: string[]) => void
   onBack: () => void
   onEditEvent: (t: EditorTarget) => void
   onReloadMappings: () => void
@@ -1030,6 +1023,23 @@ function DrillView({
     for (const f of fixtures) c[f.status]++
     return c
   }, [fixtures])
+
+  // Ask for the SWIFT/mybet names this drill actually needs — the ones the daily
+  // catalogue snapshot doesn't already have. Keyed off `fixtures` rather than the
+  // status-filtered `visible` so toggling a filter doesn't kick off fresh
+  // requests; one tournament is a single small batch either way.
+  useEffect(() => {
+    const swiftIds: string[] = []
+    const mybetIds: string[] = []
+    for (const f of fixtures) {
+      const s = eventMap.get(f.id)?.swift_event_id
+      if (s && !swiftEventById.has(s)) swiftIds.push(s)
+      const mb = mybetEventMap.get(f.id)?.swift_event_id
+      if (mb && !mybetEventById.has(mb)) mybetIds.push(mb)
+    }
+    if (swiftIds.length) onNeedEventNames('swift', swiftIds)
+    if (mybetIds.length) onNeedEventNames('mybet', mybetIds)
+  }, [fixtures, eventMap, mybetEventMap, swiftEventById, mybetEventById, onNeedEventNames])
 
   const visible = useMemo(() => {
     const filtered = statusFilter === 'all' ? fixtures : fixtures.filter((f) => f.status === statusFilter)
