@@ -537,11 +537,23 @@ export default function MappingPage() {
         setAutoRunning(false)
         return
       }
-      const used = new Set(
-        tournaments.flatMap((t) =>
-          (provider === 'mybet' ? t.mybetMappings : t.mappings).map((m) => m.swift_competition_id).filter(Boolean),
-        ),
-      )
+      // competition id → the tournament base names already using it. A book
+      // competition legitimately spans SIBLING tournaments — OPTIC splits a
+      // tennis event into "Los Cabos, Mexico" and "Los Cabos, Mexico,
+      // Qualifying" where the book has one "ATP Los Cabos" (SwiftBet is already
+      // mapped to both). So 1:1 is enforced per BASE NAME (text before the
+      // first comma) rather than outright: siblings may share, unrelated
+      // tournaments still may not.
+      const usedBy = new Map<string, Set<string>>()
+      for (const t of tournaments) {
+        for (const m of provider === 'mybet' ? t.mybetMappings : t.mappings) {
+          const id = m.swift_competition_id
+          if (!id) continue
+          let bases = usedBy.get(id)
+          if (!bases) usedBy.set(id, (bases = new Set()))
+          bases.add(tournamentBase(t))
+        }
+      }
       const jobs = visibleTournaments.filter((t) =>
         provider === 'swift'
           ? t.mappings.length === 0 && !t.stickyUnmapped
@@ -564,8 +576,11 @@ export default function MappingPage() {
           catalog: cat.competitions,
         })
         if (!hit) continue
-        // 1:1 — don't attach a competition already mapped to another tournament.
-        if (used.has(hit.competition.id)) continue
+        // 1:1, relaxed for siblings — reuse is allowed only when every other
+        // tournament holding this competition shares our base name.
+        const base = tournamentBase(t)
+        const holders = usedBy.get(hit.competition.id)
+        if (holders && [...holders].some((b) => b !== base)) continue
         try {
           await setCompetitionMappingsManual({
             opticSportRaw: t.rawSport,
@@ -574,7 +589,11 @@ export default function MappingPage() {
             picks: [{ id: hit.competition.id, name: hit.competition.name, sport: hit.competition.sport }],
             provider,
           })
-          used.add(hit.competition.id) // claim it so nothing else in this run reuses it
+          // Claim it for THIS base name, so later jobs in the run see it as
+          // taken unless they're siblings.
+          const claimed = usedBy.get(hit.competition.id) ?? new Set<string>()
+          claimed.add(base)
+          usedBy.set(hit.competition.id, claimed)
           paired++
         } catch {
           /* per-row failure shouldn't kill the whole run */
@@ -1438,6 +1457,18 @@ function swiftEventLabel(id: string, byId: Map<string, SwiftEvent>): string {
   if (e.home && e.away) return `${e.home} v ${e.away}`
   if (e.name) return e.name
   return id.slice(0, 8) + '…'
+}
+
+/**
+ * Identity a book competition is allowed to span. OPTIC splits one real tennis
+ * event into sibling tournaments — "Los Cabos, Mexico" and "Los Cabos, Mexico,
+ * Qualifying" — that the books carry as a single competition, so both siblings
+ * collapse to the base "Los Cabos". Non-tennis rows have no tournament and fall
+ * back to sport|league, which keeps them strictly 1:1 as before.
+ */
+function tournamentBase(t: { sport: string; league: string; rawTournament: string }): string {
+  const head = (t.rawTournament ?? '').split(',')[0].trim().toLowerCase()
+  return head || `${t.sport}|${t.league}`.toLowerCase()
 }
 
 /** Readable label for a mybet event by id — "Home v Away", else name, else id. */
