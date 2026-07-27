@@ -11,5 +11,10 @@
     "iso2": "kz",
     "country_qid": "Q232",
     "note": "Wikidata carries bare Russia + Kazakhstan claims, undated. Has represented Kazakhstan since 2016; ATP lists him as KAZ."
+  },
+  "Alex De Minaur": {
+    "iso2": "au",
+    "country_qid": "Q408",
+    "note": "Dual AU/ES on Wikidata with no tie-break. Represents Australia; ATP lists him as AUS."
   }
 }
