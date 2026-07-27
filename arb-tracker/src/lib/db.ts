@@ -59,11 +59,15 @@ function leagueFor(cfg: SportConfig): League {
 
 const FINAL = new Set(['final', 'completed', 'complete', 'ended', 'finished', 'result']);
 const LIVE = new Set(['live', 'in_play', 'inplay', 'playing', 'started']);
+// Off — the game isn't happening. Must be caught here, otherwise a cancelled
+// fixture whose start time has passed gets treated as live (see effectiveStatus).
+const CANCELLED = new Set(['cancelled', 'canceled', 'postponed', 'abandoned', 'walkover']);
 
 function mapStatus(raw: string | null): EventStatus {
   const t = (raw ?? '').toLowerCase();
   if (FINAL.has(t)) return 'final';
   if (LIVE.has(t)) return 'live';
+  if (CANCELLED.has(t)) return 'cancelled';
   return 'upcoming';
 }
 

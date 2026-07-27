@@ -11,7 +11,12 @@ import { eventPath } from './lib/routing';
 import type { EventStatus, SportEvent } from './lib/types';
 import type { LayoutContext } from './EventView';
 
-const STATUS_ORDER: Record<EventStatus, number> = { live: 0, upcoming: 1, final: 2 };
+const STATUS_ORDER: Record<EventStatus, number> = {
+  live: 0,
+  upcoming: 1,
+  final: 2,
+  cancelled: 3,
+};
 
 // The ticker is a next-to-jump strip: live now plus anything starting within a
 // day. Live games always qualify (they started in the past); this only bounds
@@ -140,11 +145,15 @@ export default function App() {
   const tickerEvents = useMemo(
     () =>
       events
-        .filter(
-          (e) =>
-            effectiveStatus(e, now) !== 'final' &&
-            new Date(e.startsAt).getTime() < now + TICKER_HORIZON_MS,
-        )
+        .filter((e) => {
+          const s = effectiveStatus(e, now);
+          // Only live/upcoming belong on the ticker — no finals, no cancelled.
+          return (
+            s !== 'final' &&
+            s !== 'cancelled' &&
+            new Date(e.startsAt).getTime() < now + TICKER_HORIZON_MS
+          );
+        })
         .sort((a, b) => {
           const sa = STATUS_ORDER[effectiveStatus(a, now)];
           const sb = STATUS_ORDER[effectiveStatus(b, now)];

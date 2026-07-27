@@ -221,7 +221,11 @@ export function EventDetail({ event, now, markets, loading }: Props) {
       </div>
 
       {/* Markets × bookmakers price grid — scrolls under the pinned info */}
-      {loading ? (
+      {status === 'cancelled' ? (
+        <div className="flex flex-1 items-center justify-center text-sm text-rose-300">
+          This fixture was cancelled.
+        </div>
+      ) : loading ? (
         <div className="flex flex-1 items-center justify-center text-sm text-slate-500">
           Loading odds…
         </div>

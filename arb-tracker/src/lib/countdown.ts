@@ -3,6 +3,7 @@ import type { EventStatus, SportEvent } from './types';
 export type CountdownTone =
   | 'live' // started, in play
   | 'final' // completed
+  | 'cancelled' // called off
   | 'imminent' // <= 5 min
   | 'soon' // <= 10 min
   | 'near' // <= 30 min
@@ -21,6 +22,8 @@ const MIN = 60_000;
 /** Effective status: a scheduled event whose start has passed reads as live. */
 export function effectiveStatus(event: SportEvent, now: number): EventStatus {
   if (event.status === 'final') return 'final';
+  // Off states stay off — never let the time check below promote them to live.
+  if (event.status === 'cancelled') return 'cancelled';
   if (event.status === 'live') return 'live';
   return now >= new Date(event.startsAt).getTime() ? 'live' : 'upcoming';
 }
@@ -49,6 +52,7 @@ function relativeLabel(ms: number): string {
 export function countdownFor(event: SportEvent, now: number): Countdown {
   const status = effectiveStatus(event, now);
   if (status === 'final') return { tone: 'final', label: 'Final', pulse: false };
+  if (status === 'cancelled') return { tone: 'cancelled', label: 'Cancelled', pulse: false };
   if (status === 'live') return { tone: 'live', label: 'LIVE', pulse: true };
 
   const ms = new Date(event.startsAt).getTime() - now;
@@ -89,6 +93,7 @@ export function livePositionLabel(event: SportEvent): string {
 export const TONE_CLASSES: Record<CountdownTone, string> = {
   live: 'bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30',
   final: 'bg-slate-500/10 text-slate-400 ring-1 ring-slate-500/20',
+  cancelled: 'bg-rose-500/10 text-rose-300 ring-1 ring-rose-500/25',
   imminent: 'bg-red-500/15 text-red-300 ring-1 ring-red-500/40',
   soon: 'bg-orange-500/15 text-orange-300 ring-1 ring-orange-500/30',
   near: 'bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30',

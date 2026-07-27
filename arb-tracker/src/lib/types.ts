@@ -2,7 +2,7 @@
 // contract — when the real Supabase tables are wired in, map their rows into
 // this shape (or replace it with generated database.types).
 
-export type EventStatus = 'upcoming' | 'live' | 'final';
+export type EventStatus = 'upcoming' | 'live' | 'final' | 'cancelled';
 
 export interface PeriodScore {
   period: number;
