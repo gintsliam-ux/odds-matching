@@ -248,10 +248,24 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
     setError(null)
     try {
       if (target.kind === 'competition') {
+        // Resolve against the snapshot AND the live-search results. Using
+        // `comps` alone silently dropped every pick the snapshot didn't carry —
+        // and the live search is the ONLY way a newly-added competition appears
+        // (the /public catalogue is rebuilt just by a local build-mapping run).
+        // Ticking one and saving therefore produced picks=[], which mapped
+        // nothing AND deleted whatever the tournament already had, with no
+        // error shown. That was "mybet won't map".
+        const byId = new Map<string, SwiftCompetition>()
+        for (const c of comps) byId.set(c.id, c)
+        for (const c of liveComps) byId.set(c.id, c)
         const picks = [...picked]
-          .map((id) => comps.find((c) => c.id === id))
+          .map((id) => byId.get(id))
           .filter((c): c is SwiftCompetition => !!c)
           .map((c) => ({ id: c.id, name: c.name, sport: c.sport }))
+        // Never silently save a subset: a dropped pick here deletes rows.
+        if (picks.length !== picked.size) {
+          throw new Error('Some picks could not be resolved — reopen the editor and try again.')
+        }
         await setCompetitionMappingsManual({
           opticSportRaw: target.opticSportRaw,
           opticLeagueRaw: target.opticLeagueRaw,
