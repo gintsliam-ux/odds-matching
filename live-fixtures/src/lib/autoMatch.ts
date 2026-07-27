@@ -101,7 +101,10 @@ function extractTiers(s: string): Set<number> {
   // split on its own. Standalone digits and digit-suffix tokens ("k2", "d2",
   // "u20" → 20) and number words both feed `out`.
   const lc = (s ?? '').toLowerCase().replace(/[_\-./]+/g, ' ')
-  for (const m of lc.matchAll(/(?:^|[^a-z0-9])([a-z]?(\d{1,2}))(?![a-z])/gi)) {
+  // Trailing (?![a-z0-9]) — not just (?![a-z]) — so a YEAR can't masquerade as
+  // a tier. "Serena Wines 1881" used to yield 18 from the leading "18", which
+  // now that the gate is a hard reject would wrongly kill real matches.
+  for (const m of lc.matchAll(/(?:^|[^a-z0-9])([a-z]?(\d{1,2}))(?![a-z0-9])/gi)) {
     const n = parseInt(m[2], 10)
     if (Number.isFinite(n) && n >= 1 && n <= 30) out.add(n)
   }
@@ -225,14 +228,21 @@ function sim(aName: string, bName: string): number {
   } else if ((ca.size > 0) !== (cb.size > 0)) {
     s -= 0.15
   }
-  // Tier gate: if both sides mention a tier number (digit or word) and they
-  // don't intersect, the leagues are different divisions despite shared names.
+  // Tier gate — HARD reject, not a penalty. tokens() drops sub-2-char tokens
+  // and "league" is a stop word, so "England League 2" and "England League 3"
+  // both reduce to {england} and score a perfect 1.0 on name similarity. A
+  // -0.35 nudge left that at 0.65, clearing the 0.55 soccer threshold and
+  // mapping League 2 onto League 3. The tier is the ONLY thing distinguishing
+  // two divisions of the same competition, so a mismatch has to be decisive.
+  // One-sided tiers stay unpenalised — plenty of legitimate pairs name the
+  // tier on one side only ("T20 Blast" ↔ "Vitality Blast").
+  // Keep in lockstep with sim() in scripts/build-mapping.mjs.
   const ta = extractTiers(aName)
   const tb = extractTiers(bName)
   if (ta.size > 0 && tb.size > 0) {
     let overlap = false
     for (const n of ta) if (tb.has(n)) { overlap = true; break }
-    if (!overlap) s -= 0.35
+    if (!overlap) return 0
   }
   return Math.max(0, s)
 }
