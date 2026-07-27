@@ -262,6 +262,62 @@ export async function setEventMappingManual(args: {
   if (error) throw error
 }
 
+/**
+ * Event mappings for a KNOWN set of OPTIC fixtures.
+ *
+ * The whole-table `fetchEventMappings` below pulls 13.9k swift + 8.1k mybet
+ * rows — ~22 sequential 1000-row pages before the mapping page can render, and
+ * nothing aborts them when the effect re-runs. Only the drill view reads event
+ * mappings, and it needs the handful of fixtures on screen, so it asks for
+ * exactly those instead.
+ *
+ * Ids go in the URL, so they're chunked well under PostgREST's limit; chunks
+ * run in parallel since there's no ordering between them.
+ */
+export async function fetchEventMappingsFor(
+  opticFixtureIds: string[],
+  provider: Provider = 'swift',
+): Promise<EventMapping[]> {
+  const ids = [...new Set(opticFixtureIds)].filter(Boolean)
+  if (ids.length === 0) return []
+  const CHUNK = 150
+  const chunks: string[][] = []
+  for (let i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK))
+  const results = await Promise.all(
+    chunks.map(async (slice) => {
+      const { data, error } = await getSupabase()
+        .from('event_mapping')
+        .select('optic_fixture_id,gutsy_event_id,confidence,source,swift_actual_start')
+        .eq('provider', provider)
+        .in('optic_fixture_id', slice)
+      if (error) throw error
+      return (data as EventMappingRow[]) ?? []
+    }),
+  )
+  return results.flat().map((r) => toEventMapping(r, provider))
+}
+
+type EventMappingRow = {
+  optic_fixture_id: string
+  gutsy_event_id: string | null
+  confidence: number
+  source: 'auto' | 'manual'
+  swift_actual_start: string | null
+}
+
+function toEventMapping(r: EventMappingRow, provider: Provider): EventMapping {
+  return {
+    provider,
+    optic_fixture_id: r.optic_fixture_id,
+    swift_event_id: r.gutsy_event_id,
+    confidence: r.confidence ?? 0,
+    source: r.source ?? 'auto',
+    swift_actual_start: r.swift_actual_start ?? null,
+  }
+}
+
+/** Whole-table read. Kept for callers that genuinely need every row — the
+ *  mapping page does NOT; use fetchEventMappingsFor. */
 export async function fetchEventMappings(provider: Provider = 'swift'): Promise<EventMapping[]> {
   const out: EventMapping[] = []
   const PAGE = 1000
