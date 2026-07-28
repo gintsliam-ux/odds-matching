@@ -40,6 +40,29 @@ import type { SwiftCompetition } from './swiftCatalog'
  * as the cached snapshot (`SwiftEvent` / `SwiftCompetition`) so the
  * MappingEditor can merge live results in without translation.
  */
+/**
+ * Every SWIFT event in a competition, straight from Mongo.
+ *
+ * The drill's auto-map used to pool candidates from the /public catalogue
+ * snapshot, which only a local `npm run build-mapping` rebuilds — it held ZERO
+ * events for Argentina Liga Profesional while Mongo had 8, so auto-map reported
+ * "No SwiftBet events available for this tournament" and matched nothing.
+ */
+export async function listSwiftEventsByCompetition(
+  competitionId: string,
+  limit = 200,
+): Promise<SwiftEvent[]> {
+  const res = await fetch('/api/swift-search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    // Empty q + competitionId is the endpoint's list mode.
+    body: JSON.stringify({ q: '', kind: 'events', competitionId, limit }),
+  })
+  if (!res.ok) throw new Error(`swift-search ${res.status}`)
+  const json = (await res.json()) as { events: SwiftEvent[] }
+  return json.events ?? []
+}
+
 export async function searchSwiftEvents(args: {
   q: string
   sport?: string | null // SWIFT-style ("Basketball")

@@ -22,7 +22,8 @@ concurrency:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 7
+    # Budget for 3 attempts at --max-time 200 plus the retry delays (~10.5 min).
+    timeout-minutes: 12
     steps:
       # --fail-with-body, not --fail: on a 500 we want the endpoint's JSON error
       # in the log. Plain --fail discards the body, which is why past failure
@@ -36,8 +37,13 @@ jobs:
       - name: Trigger mapping refresh
         run: |
           echo "Pinging mapping-tick…"
+          # 200s, not 120: the tick now rebuilds BOTH books in one invocation
+          # and was measured at 64s on prod (13s locally — the gap is cold start
+          # plus Vercel→Atlas latency). A cold start on a big delta could have
+          # blown a 120s budget and produced exactly the timeout emails this
+          # workflow was fixed to stop sending.
           curl -sS --fail-with-body \
-               --max-time 120 \
+               --max-time 200 \
                --retry 2 --retry-delay 10 --retry-all-errors \
                https://live-fixtures.vercel.app/api/mapping-tick
           echo
