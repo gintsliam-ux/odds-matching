@@ -53,12 +53,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // for e.g. Argentina Liga Profesional while Mongo had 8. Auto-map then
     // matched nothing at all. Without a scoping filter an empty q would mean
     // "scan the whole collection", so that stays rejected.
-    const listMode = q.length < 2 && !!body.competitionId && body.kind !== 'competitions'
+    // Competitions also list with an empty q: the tournament-level auto-map
+    // needs the FULL competition set to match against, and was matching against
+    // the /public snapshot instead — 237 competitions where Mongo has 313, so
+    // 76 were invisible to it. The aggregate is grouped and limited, so an
+    // empty q here is bounded work, not a collection scan.
+    const listMode =
+      q.length < 2 && (!!body.competitionId || body.kind === 'competitions')
     if (q.length < 2 && !listMode) {
       res.status(200).json({ events: [], competitions: [] })
       return
     }
-    const limit = Math.min(Math.max(body.limit ?? 50, 1), 200)
+    const limit = Math.min(Math.max(body.limit ?? 50, 1), 500)
     const re = listMode ? null : new RegExp(escapeRegex(q), 'i')
     const client = await getClient()
     const coll = client.db(MONGO_DB).collection(MONGO_COLL)
@@ -70,10 +76,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Distinct competitions whose name (or sport) matches the query. We mine
       // gutsy.events because that's where the user-facing names live; group to
       // dedupe and count how many events back each competition.
-      const compFilter: Record<string, unknown> = {
-        ...sportFilter,
-        $or: [{ 'competition.name': re }, { 'sport.name': re }],
-      }
+      const compFilter: Record<string, unknown> = { ...sportFilter }
+      // No text in list mode — the group/limit below bounds the work.
+      if (re) compFilter.$or = [{ 'competition.name': re }, { 'sport.name': re }]
       const rows = await coll
         .aggregate([
           { $match: compFilter },

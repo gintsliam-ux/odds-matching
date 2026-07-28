@@ -170,16 +170,16 @@ export function swiftApiPlugin(): Plugin {
           // List mode — mirror api/swift-search.ts: empty q is allowed when a
           // competitionId scopes the query, so the drill's auto-map can pull
           // every event in a competition instead of text-searching.
-          const listMode = q.length < 2 && !!body.competitionId && body.kind !== 'competitions'
+          const listMode = q.length < 2 && (!!body.competitionId || body.kind === 'competitions')
           if (q.length < 2 && !listMode) return send(res, 200, { events: [], competitions: [] })
-          const limit = Math.min(Math.max(body.limit ?? 50, 1), 200)
+          const limit = Math.min(Math.max(body.limit ?? 50, 1), 500)
           const re = listMode ? null : new RegExp(escapeRegex(q), 'i')
           const client = await getClient()
           const coll = client.db(MONGO_DB).collection(MONGO_COLL)
           const sportFilter = body.sport ? { 'sport.name': body.sport } : {}
           if (body.kind === 'competitions') {
             const rows = await coll.aggregate([
-              { $match: { ...sportFilter, $or: [{ 'competition.name': re }, { 'sport.name': re }] } },
+              { $match: re ? { ...sportFilter, $or: [{ 'competition.name': re }, { 'sport.name': re }] } : { ...sportFilter } },
               { $group: { _id: '$competition.id', name: { $first: '$competition.name' }, sport: { $first: '$sport.name' }, n: { $sum: 1 } } },
               { $sort: { n: -1 } },
               { $limit: limit },

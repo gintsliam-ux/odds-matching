@@ -11,8 +11,8 @@ import { useMainScrollMemory } from '../hooks/useMainScrollMemory'
 import { MappingEditor, type EditorTarget } from '../components/MappingEditor'
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
 import { getMybetCatalog, type MybetEvent } from '../lib/mybetCatalog'
-import { fetchSwiftStatuses, listSwiftEventsByCompetition } from '../lib/swiftStatus'
-import { fetchMybetStatuses, listMybetEventsBySport } from '../lib/mybetStatus'
+import { fetchSwiftStatuses, listSwiftEventsByCompetition, listSwiftCompetitions } from '../lib/swiftStatus'
+import { fetchMybetStatuses, listMybetEventsBySport, listMybetCompetitions } from '../lib/mybetStatus'
 import { displaySport, mybetSportOf, slugToSport, sportEmoji, sportGroupKey, sportLabel, sportToSlug } from '../lib/sports'
 import { kickoffLabel, melbDateTimeShort, utcDateTimeShort } from '../lib/format'
 import {
@@ -531,10 +531,20 @@ export default function MappingPage() {
     setAutoStatus('Loading catalogue…')
     const brand = provider === 'mybet' ? 'mybet' : 'SwiftBet'
     try {
-      const cat = provider === 'mybet' ? await getMybetCatalog().catch(() => null) : await getSwiftCatalog()
-      if (!cat) {
-        setAutoStatus('mybet catalogue unavailable.')
+      // LIVE competition list. This matched against the /public snapshot, which
+      // only a local build-mapping run rebuilds: 237 SwiftBet competitions where
+      // Mongo has 313, and 83 mybet where Mongo has 166 — so 76 and 83
+      // respectively were invisible, and any tournament whose counterpart was
+      // among them could never be paired however often you pressed the button.
+      // Falls back to the snapshot if the endpoint fails.
+      const competitions =
+        provider === 'mybet'
+          ? await listMybetCompetitions().catch(async () => (await getMybetCatalog().catch(() => null))?.competitions ?? [])
+          : await listSwiftCompetitions().catch(async () => (await getSwiftCatalog().catch(() => null))?.competitions ?? [])
+      if (competitions.length === 0) {
+        setAutoStatus(`${brand} catalogue unavailable.`)
         setAutoRunning(false)
+        setTimeout(() => setAutoStatus(null), 3500)
         return
       }
       // competition id → the tournament base names already using it. A book
@@ -573,7 +583,7 @@ export default function MappingPage() {
           opticSportRaw: t.rawSport,
           opticLeagueRaw: t.rawLeague,
           opticTournamentRaw: t.rawTournament,
-          catalog: cat.competitions,
+          catalog: competitions,
         })
         if (!hit) continue
         // 1:1, relaxed for siblings — reuse is allowed only when every other
