@@ -121,6 +121,19 @@ export async function listMybetEventsBySport(sport: string, limit = 500): Promis
   return json.events ?? []
 }
 
+/** Every mybet competition, live. The snapshot carried 83 where Mongo has 166 —
+ *  half were invisible to the tournament-level auto-map. */
+export async function listMybetCompetitions(limit = 500): Promise<MybetCompetition[]> {
+  const res = await fetch('/api/mybet-search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: '', kind: 'competitions', limit }),
+  })
+  if (!res.ok) throw new Error(`mybet-search ${res.status}`)
+  const json = (await res.json()) as { competitions: MybetCompetition[] }
+  return json.competitions ?? []
+}
+
 export async function searchMybetCompetitions(args: {
   q: string
   limit?: number
