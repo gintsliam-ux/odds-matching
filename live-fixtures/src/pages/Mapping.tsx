@@ -26,6 +26,7 @@ import {
 } from '../lib/mappingData'
 import { bestSwiftEventMatch, bestSwiftMatch } from '../lib/autoMatch'
 import { BRAND_PILL, BRAND_CHIP, type Brand } from '../lib/brand'
+import { backOr } from '../lib/nav'
 
 // Mapping tab: OPTIC (Supabase `live_fixtures`) ↔ SWIFT (Mongo `gutsy.events`).
 //
@@ -780,7 +781,11 @@ export default function MappingPage() {
           mybetEventById={mybetEventById}
           onNeedEventNames={requestEventNames}
           reloadToken={reloadKey}
-          onBack={() => navigate(`/mapping/${sportSlug ?? ''}${filterQuery()}`)}
+          // Go back the way the browser's back button does. This used to
+          // navigate() to a rebuilt list URL, which PUSHED a new entry — the
+          // history stack grew and you never actually returned to the entry
+          // you came from. Falls back to the rebuilt URL on a deep link.
+          onBack={() => backOr(navigate, `/mapping/${sportSlug ?? ''}${filterQuery()}`)}
           onEditEvent={(t) => setEditor(t)}
           onReloadMappings={() => setReloadKey((k) => k + 1)}
         />
