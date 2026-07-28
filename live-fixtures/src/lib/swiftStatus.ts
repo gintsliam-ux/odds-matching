@@ -88,6 +88,20 @@ export async function searchSwiftEvents(args: {
   return json.events ?? []
 }
 
+/** Every SWIFT competition, live. The tournament-level auto-map matched against
+ *  the /public snapshot (237 competitions) while Mongo has 313, so 76 were
+ *  invisible to it and their tournaments could never be paired. */
+export async function listSwiftCompetitions(limit = 500): Promise<SwiftCompetition[]> {
+  const res = await fetch('/api/swift-search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: '', kind: 'competitions', limit }),
+  })
+  if (!res.ok) throw new Error(`swift-search ${res.status}`)
+  const json = (await res.json()) as { competitions: SwiftCompetition[] }
+  return json.competitions ?? []
+}
+
 export async function searchSwiftCompetitions(args: {
   q: string
   sport?: string | null

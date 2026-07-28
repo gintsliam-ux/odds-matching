@@ -54,7 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // auto-map matched nothing. Without a scoping filter an empty q would mean
     // "scan the whole collection", so that stays rejected.
     const listMode =
-      q.length < 2 && !!(body.sport || body.competitionId) && body.kind !== 'competitions'
+      q.length < 2 && (!!(body.sport || body.competitionId) || body.kind === 'competitions')
     if (q.length < 2 && !listMode) {
       res.status(200).json({ events: [], competitions: [] })
       return
@@ -70,7 +70,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .aggregate([
           // Only count head-to-head events, so pure outright/futures leagues
           // don't surface as competition candidates.
-          { $match: { league: { $ne: null, $regex: re }, 'match.teamA': { $ne: null }, 'match.teamB': { $ne: null } } },
+          {
+            $match: {
+              league: re ? { $ne: null, $regex: re } : { $ne: null },
+              ...(body.sport ? { sport: body.sport } : {}),
+              'match.teamA': { $ne: null },
+              'match.teamB': { $ne: null },
+            },
+          },
           { $group: { _id: '$leagueId', name: { $first: '$league' }, sport: { $first: '$sport' }, n: { $sum: 1 } } },
           { $sort: { n: -1 } },
           { $limit: limit },
