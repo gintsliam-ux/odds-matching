@@ -113,7 +113,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // still fill `limit` with head-to-head matches.
     const docs = await coll
       .find(eventFilter, {
-        projection: { _id: 1, name: 1, sport: 1, competition: 1, teams: 1, start_date: 1, status: 1 },
+        projection: { _id: 1, name: 1, sport: 1, competition: 1, teams: 1, start_date: 1, status: 1, event_view_status: 1 },
       })
       .sort({ start_date: -1 })
       .limit(limit * 3)
@@ -154,7 +154,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           home,
           away,
           start: (d.start_date as string | null) ?? null,
-          status: (d.status as string | null) ?? null,
+          // Null-only fallback — see the note in api/swift-status.ts.
+          status: ((d.status as string | null) ?? (d.event_view_status as string | null)) ?? null,
         }
       })
       // Drop outrights/futures — no two competitors, never a head-to-head target.
