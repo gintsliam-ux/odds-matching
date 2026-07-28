@@ -155,6 +155,25 @@ function melbWallToUtc(raw: string | Date): Date | null {
   return new Date(`${wall}+11:00`)
 }
 
+/** Mirror of participantsOf() in api/swift-status.ts — individual sports
+ *  (tennis/MMA/boxing) carry ONE "Competitors" team whose players[] holds the
+ *  real names, so Home/Away alone resolves to null/null for all of them. */
+function participantsOf(
+  teams: Array<{ name?: string; team_position?: string; players?: Array<{ name?: string }> }>,
+  name: string | null,
+): [string | null, string | null] {
+  const home = teams.find((t) => t.team_position === 'Home')?.name ?? null
+  const away = teams.find((t) => t.team_position === 'Away')?.name ?? null
+  if (home && away) return [home, away]
+  const players = teams.flatMap((t) => (t.players ?? []).map((p) => p.name).filter(Boolean))
+  if (players.length >= 2) return [players[0] as string, players[1] as string]
+  const named = teams.map((t) => t.name).filter((n): n is string => !!n && n !== 'Competitors')
+  if (named.length >= 2) return [named[0], named[1]]
+  const parts = String(name ?? '').split(/\s+vs\.?\s+/i)
+  if (parts.length === 2) return [parts[0].trim(), parts[1].trim()]
+  return [home, away]
+}
+
 export function swiftApiPlugin(): Plugin {
   return {
     name: 'swift-api',
@@ -196,9 +215,8 @@ export function swiftApiPlugin(): Plugin {
             .find(eventFilter, { projection: { _id: 1, name: 1, sport: 1, competition: 1, teams: 1, start_date: 1, status: 1 } })
             .sort({ start_date: -1 }).limit(limit).toArray()
           const events = docs.map((d) => {
-            const teams = (d.teams as Array<{ name?: string; team_position?: string }> | undefined) ?? []
-            const home = teams.find((t) => t.team_position === 'Home')?.name ?? null
-            const away = teams.find((t) => t.team_position === 'Away')?.name ?? null
+            const teams = (d.teams as Array<{ name?: string; team_position?: string; players?: Array<{ name?: string }> }> | undefined) ?? []
+            const [home, away] = participantsOf(teams, d.name as string | null)
             const competition = d.competition as { id?: string; name?: string } | undefined
             const sport = d.sport as { name?: string } | undefined
             return {
@@ -331,9 +349,8 @@ export function swiftApiPlugin(): Plugin {
               )
               .toArray()
             for (const d of docs) {
-              const teams = (d.teams as Array<{ name?: string; team_position?: string }> | undefined) ?? []
-              const home = teams.find((t) => t.team_position === 'Home')?.name ?? null
-              const away = teams.find((t) => t.team_position === 'Away')?.name ?? null
+              const teams = (d.teams as Array<{ name?: string; team_position?: string; players?: Array<{ name?: string }> }> | undefined) ?? []
+              const [home, away] = participantsOf(teams, d.name as string | null)
               const competition = d.competition as { id?: string; name?: string } | undefined
               const sport = d.sport as { name?: string } | undefined
               events.push({
