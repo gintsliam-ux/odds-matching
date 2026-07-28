@@ -7,6 +7,7 @@ import { useTerminal } from '../components/Layout'
 import { useSportUniverse } from '../hooks/useSportUniverse'
 import { useTournamentFixtures } from '../hooks/useTournamentFixtures'
 import { useNow } from '../hooks/useNow'
+import { useMainScrollMemory } from '../hooks/useMainScrollMemory'
 import { MappingEditor, type EditorTarget } from '../components/MappingEditor'
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
 import { getMybetCatalog, type MybetEvent } from '../lib/mybetCatalog'
@@ -501,6 +502,12 @@ export default function MappingPage() {
       ) ?? null
     )
   }, [leagueSlug, sportFilter, tournamentTennis, tournaments])
+
+  // Remembers where the tournament table was scrolled to, so returning from a
+  // drill doesn't dump you at the top. Keyed by sport tab + filters so one tab
+  // can't inherit another's offset.
+  const listKey = `mapping|${sportSlug ?? 'all'}|${mappedFilter}|${showAllPeriods ? 'all' : 'active'}|${search}`
+  useMainScrollMemory(listKey, !selectedTournament)
 
   // -----------------------------------------------------------------
 
@@ -1095,7 +1102,20 @@ function DrillView({
     row.rawLeague,
     row.rawTournament || null,
   )
-  const [statusFilter, setStatusFilter] = useState<EventStatus>('all')
+  // Status filter lives in the URL (`?st=`), not component state. As state it
+  // reset to ALL on every entry into a drill, so going back and forward lost
+  // it, and a drill view couldn't be linked or reloaded in the filter you were
+  // actually using.
+  const [drillParams, setDrillParams] = useSearchParams()
+  const statusFilter = (drillParams.get('st') as EventStatus | null) ?? 'all'
+  const setStatusFilter = (v: EventStatus) => {
+    const next = new URLSearchParams(drillParams)
+    if (v === 'all') next.delete('st')
+    else next.set('st', v)
+    // replace, not push: flipping a filter shouldn't stack history entries that
+    // the Back button then has to walk through one at a time.
+    setDrillParams(next, { replace: true })
+  }
   const [autoRunning, setAutoRunning] = useState(false)
   const [autoStatus, setAutoStatus] = useState<string | null>(null)
 
