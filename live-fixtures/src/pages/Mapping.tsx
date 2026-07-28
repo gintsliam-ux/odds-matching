@@ -10,7 +10,7 @@ import { useNow } from '../hooks/useNow'
 import { MappingEditor, type EditorTarget } from '../components/MappingEditor'
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
 import { getMybetCatalog, type MybetEvent } from '../lib/mybetCatalog'
-import { fetchSwiftStatuses } from '../lib/swiftStatus'
+import { fetchSwiftStatuses, listSwiftEventsByCompetition } from '../lib/swiftStatus'
 import { fetchMybetStatuses } from '../lib/mybetStatus'
 import { displaySport, mybetSportOf, slugToSport, sportEmoji, sportGroupKey, sportLabel, sportToSlug } from '../lib/sports'
 import { kickoffLabel, melbDateTimeShort, utcDateTimeShort } from '../lib/format'
@@ -1182,16 +1182,26 @@ function DrillView({
       const emap = provider === 'mybet' ? mybetEventMap : eventMap
       let candidates: SwiftEvent[] = []
       if (provider === 'swift') {
-        const cat = await getSwiftCatalog()
+        // LIVE, not the /public snapshot. That file is rebuilt only by a local
+        // `npm run build-mapping`, so it held zero events for e.g. Argentina
+        // Liga Profesional while Mongo had 8 — auto-map reported "No SwiftBet
+        // events available for this tournament" and matched nothing. Falls back
+        // to the snapshot if the endpoint fails, so a blip degrades rather than
+        // breaks.
         const seen = new Set<string>()
-        for (const m of row.mappings) {
-          if (!m.swift_competition_id) continue
-          for (const e of cat.eventsByCompId.get(m.swift_competition_id) ?? []) {
-            if (!seen.has(e.id)) {
-              seen.add(e.id)
-              candidates.push(e)
-            }
-          }
+        const compIds = row.mappings.map((m) => m.swift_competition_id).filter((x): x is string => !!x)
+        const lists = await Promise.all(
+          compIds.map((id) =>
+            listSwiftEventsByCompetition(id).catch(async () => {
+              const cat = await getSwiftCatalog().catch(() => null)
+              return cat?.eventsByCompId.get(id) ?? []
+            }),
+          ),
+        )
+        for (const e of lists.flat()) {
+          if (seen.has(e.id)) continue
+          seen.add(e.id)
+          candidates.push(e)
         }
       } else {
         const cat = await getMybetCatalog().catch(() => null)

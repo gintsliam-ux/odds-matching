@@ -167,9 +167,13 @@ export function swiftApiPlugin(): Plugin {
             competitionId?: string | null; limit?: number
           }
           const q = (body.q ?? '').trim()
-          if (q.length < 2) return send(res, 200, { events: [], competitions: [] })
+          // List mode — mirror api/swift-search.ts: empty q is allowed when a
+          // competitionId scopes the query, so the drill's auto-map can pull
+          // every event in a competition instead of text-searching.
+          const listMode = q.length < 2 && !!body.competitionId && body.kind !== 'competitions'
+          if (q.length < 2 && !listMode) return send(res, 200, { events: [], competitions: [] })
           const limit = Math.min(Math.max(body.limit ?? 50, 1), 200)
-          const re = new RegExp(escapeRegex(q), 'i')
+          const re = listMode ? null : new RegExp(escapeRegex(q), 'i')
           const client = await getClient()
           const coll = client.db(MONGO_DB).collection(MONGO_COLL)
           const sportFilter = body.sport ? { 'sport.name': body.sport } : {}
@@ -185,7 +189,8 @@ export function swiftApiPlugin(): Plugin {
             }))
             return send(res, 200, { competitions })
           }
-          const eventFilter: Record<string, unknown> = { ...sportFilter, $or: [{ name: re }, { 'teams.name': re }] }
+          const eventFilter: Record<string, unknown> = { ...sportFilter }
+          if (re) eventFilter.$or = [{ name: re }, { 'teams.name': re }]
           if (body.competitionId) eventFilter['competition.id'] = body.competitionId
           const docs = await coll
             .find(eventFilter, { projection: { _id: 1, name: 1, sport: 1, competition: 1, teams: 1, start_date: 1, status: 1 } })
