@@ -1,7 +1,13 @@
-// In-app catalogue of mybet (Mongo gutsy.mybet_events) competitions + events,
-// loaded once from JSON snapshots in /public/ that build-mybet-mapping writes.
-// Mirror of swiftCatalog.ts; used by the mapping editor's mybet picker and as a
-// static fallback on the detail page before the live /api/mybet-status responds.
+// In-app catalogue of mybet (Mongo gutsy.mybet_events) COMPETITIONS, read live
+// from /api/mybet-search. Mirror of swiftCatalog.ts — see the note there for why
+// the /public snapshots were dropped (they carried 83 competitions where Mongo
+// has 166, so half were invisible to auto-map, and their basketball events were
+// a week stale).
+//
+// Events are not bulk-loaded; callers ask for the slice they need via
+// listMybetEventsBySport() or fetchMybetStatuses().
+
+import { listMybetCompetitions } from './mybetStatus'
 
 export interface MybetCompetition {
   id: string
@@ -38,30 +44,15 @@ let cache: Catalog | null = null
 let inflight: Promise<Catalog> | null = null
 
 async function load(): Promise<Catalog> {
-  const [cRes, eRes] = await Promise.all([
-    fetch('/mybet-competitions.json'),
-    fetch('/mybet-events.json'),
-  ])
-  if (!cRes.ok || !eRes.ok) {
-    throw new Error(
-      'mybet catalogue missing — run "node scripts/build-mybet-mapping.mjs" to generate /mybet-competitions.json + /mybet-events.json',
-    )
-  }
-  const competitions: MybetCompetition[] = await cRes.json()
-  const events: MybetEvent[] = await eRes.json()
+  const competitions = await listMybetCompetitions()
   const byCompId = new Map(competitions.map((c) => [c.id, c]))
-  const eventById = new Map(events.map((e) => [e.id, e]))
-  const eventsByCompId = new Map<string, MybetEvent[]>()
-  for (const e of events) {
-    if (!e.cid) continue
-    let list = eventsByCompId.get(e.cid)
-    if (!list) eventsByCompId.set(e.cid, (list = []))
-    list.push(e)
+  return {
+    competitions,
+    events: [],
+    byCompId,
+    eventById: new Map(),
+    eventsByCompId: new Map(),
   }
-  for (const list of eventsByCompId.values()) {
-    list.sort((a, b) => (a.start ?? '').localeCompare(b.start ?? ''))
-  }
-  return { competitions, events, byCompId, eventById, eventsByCompId }
 }
 
 export async function getMybetCatalog(): Promise<Catalog> {
