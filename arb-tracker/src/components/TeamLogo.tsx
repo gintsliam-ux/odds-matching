@@ -21,7 +21,12 @@ export function TeamLogo({
   /** ISO-3166 alpha-2, lowercased. Flies a flag instead of looking for a crest. */
   country?: string | null;
 }) {
-  const [broken, setBroken] = useState(false);
+  const src = country ? `https://flagcdn.com/w80/${country}.png` : teamLogoUrl(name);
+  // Track *which* src failed, not a bare boolean — otherwise navigating to a new
+  // event reuses this instance with its stale "broken" still set, hiding the new
+  // team's good logo behind initials.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const broken = failedSrc === src;
 
   if (broken || (!country && !name)) {
     return (
@@ -39,12 +44,12 @@ export function TeamLogo({
   // uses — keeping rows aligned whether a competitor is a club or a person.
   return (
     <img
-      src={country ? `https://flagcdn.com/w80/${country}.png` : teamLogoUrl(name)}
+      src={src}
       alt={name}
       title={name}
       width={size}
       height={size}
-      onError={() => setBroken(true)}
+      onError={() => setFailedSrc(src)}
       className={`inline-block shrink-0 object-contain ${country ? 'rounded-[2px]' : ''}`}
       style={{ width: size, height: size }}
     />

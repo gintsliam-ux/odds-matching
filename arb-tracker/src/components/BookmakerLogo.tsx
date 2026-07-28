@@ -13,16 +13,18 @@ export function BookmakerLogo({
   brand: Bookmaker;
   size?: number;
 }) {
-  const [broken, setBroken] = useState(false);
+  // Keyed to the URL so reusing this instance for a different brand doesn't
+  // inherit the previous one's stale error and fall back to the mark chip.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
 
-  if (brand.logoUrl && !broken) {
+  if (brand.logoUrl && failedUrl !== brand.logoUrl) {
     return (
       <img
         src={brand.logoUrl}
         alt={brand.name}
         title={brand.name}
         height={size}
-        onError={() => setBroken(true)}
+        onError={() => setFailedUrl(brand.logoUrl ?? null)}
         className="inline-block rounded object-contain"
         style={{ height: size, maxWidth: size * 2.4 }}
       />

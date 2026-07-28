@@ -20,8 +20,10 @@ function colorFor(id: string): string {
 }
 
 export function LeagueBadge({ league, size = 36 }: { league: League; size?: number }) {
-  const [broken, setBroken] = useState(false);
-  const showImage = league.logoUrl && !broken;
+  // Key the failure to the URL so a new league's badge isn't hidden by the
+  // previous one's stale error when this instance is reused across events.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const showImage = league.logoUrl && failedUrl !== league.logoUrl;
 
   if (showImage) {
     // Every badge is the same square so the rail stays aligned. Wordmarks are
@@ -39,7 +41,7 @@ export function LeagueBadge({ league, size = 36 }: { league: League; size?: numb
         <img
           src={league.logoUrl}
           alt={league.name}
-          onError={() => setBroken(true)}
+          onError={() => setFailedUrl(league.logoUrl ?? null)}
           className="max-h-full max-w-full object-contain"
         />
       </span>
