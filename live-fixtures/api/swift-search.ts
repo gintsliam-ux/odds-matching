@@ -46,12 +46,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       limit?: number
     }
     const q = (body.q ?? '').trim()
-    if (q.length < 2) {
+    // LIST MODE: an empty query is allowed when a competitionId scopes the
+    // result set. The drill's auto-map needs every event in a competition, not
+    // a text search — it used to pool candidates from the /public snapshot,
+    // which is rebuilt only by a local build-mapping run and so had ZERO events
+    // for e.g. Argentina Liga Profesional while Mongo had 8. Auto-map then
+    // matched nothing at all. Without a scoping filter an empty q would mean
+    // "scan the whole collection", so that stays rejected.
+    const listMode = q.length < 2 && !!body.competitionId && body.kind !== 'competitions'
+    if (q.length < 2 && !listMode) {
       res.status(200).json({ events: [], competitions: [] })
       return
     }
     const limit = Math.min(Math.max(body.limit ?? 50, 1), 200)
-    const re = new RegExp(escapeRegex(q), 'i')
+    const re = listMode ? null : new RegExp(escapeRegex(q), 'i')
     const client = await getClient()
     const coll = client.db(MONGO_DB).collection(MONGO_COLL)
 
@@ -90,10 +98,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Default: search events. Name field is the primary signal; team names
     // appear inside `teams.name` (an array).
-    const eventFilter: Record<string, unknown> = {
-      ...sportFilter,
-      $or: [{ name: re }, { 'teams.name': re }],
-    }
+    const eventFilter: Record<string, unknown> = { ...sportFilter }
+    // In list mode there's no text to match on — the competition filter below
+    // is the whole query.
+    if (re) eventFilter.$or = [{ name: re }, { 'teams.name': re }]
     if (body.competitionId) eventFilter['competition.id'] = body.competitionId
 
     // Over-fetch: outrights/futures are filtered out below, so pull extra to
