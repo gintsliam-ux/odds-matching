@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Check, ChevronDown, ChevronRight, Copy, ExternalLink } from 'lucide-react'
 import { useTerminal } from '../components/Layout'
 import { DetailSkeleton, PanelSkeleton } from '../components/Skeleton'
@@ -21,6 +21,7 @@ import { getMybetCatalog, type MybetCompetition, type MybetEvent } from '../lib/
 import { fetchMybetEvent, mybetEventUrl, type MybetLiveEvent } from '../lib/mybetStatus'
 
 export default function FixtureDetailPage() {
+  const navigate = useNavigate()
   const { id } = useParams()
   const { fixtures, now } = useTerminal()
 
@@ -166,13 +167,23 @@ export default function FixtureDetailPage() {
 
   return (
     <div className="mx-auto max-w-[1700px] px-5 py-5">
-      <Link
-        to="/"
+      {/* History back, not a hard link to "/". Linking to the root threw away
+          whichever sport/league/date/filter you were browsing and sent you to
+          the top of the default board — going back restores the exact view,
+          and useMainScrollMemory puts the scroll position back with it. Falls
+          back to "/" when there's no in-app history (a deep link or a fresh
+          tab), which react-router marks with history.state.idx === 0. */}
+      <button
+        onClick={() => {
+          const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0
+          if (idx > 0) navigate(-1)
+          else navigate('/')
+        }}
         className="mb-5 inline-flex items-center gap-1.5 text-[12.5px] text-[color:var(--muted)] transition-colors hover:text-gray-200"
       >
         <ArrowLeft className="h-3.5 w-3.5" />
         Back to terminal
-      </Link>
+      </button>
 
       {!f ? (
         <div className="flex h-48 items-center justify-center text-[13px] text-[color:var(--muted-2)]">

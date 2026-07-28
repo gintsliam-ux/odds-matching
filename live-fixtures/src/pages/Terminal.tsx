@@ -9,6 +9,7 @@ import { favouriteMatches, useFavourites } from '../lib/favourites'
 import { sportGroupKey, slugToSport } from '../lib/sports'
 import { useSportUniverse } from '../hooks/useSportUniverse'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
+import { useMainScrollMemory } from '../hooks/useMainScrollMemory'
 import { fetchFixturesBySport } from '../lib/dataSource'
 import type { Fixture, FixtureStatus } from '../lib/types'
 
@@ -47,6 +48,10 @@ export default function Terminal() {
   // `/sport/:sport` pins a sport group (URL slug → group key, "rugby-league" →
   // "rugby league"); `/sport/:sport/:league` also pins a raw league slug.
   const sport = sportSlug ? slugToSport(sportSlug) : undefined
+
+  // Keep the board's scroll position across a trip into a fixture page. The
+  // scroller is Layout's <main>, so the browser never restores it on its own.
+  useMainScrollMemory(`terminal|${location.pathname}|${location.search}`, true)
   const [params, setParams] = useSearchParams()
   const favourites = useFavourites()
   const universe = useSportUniverse()
