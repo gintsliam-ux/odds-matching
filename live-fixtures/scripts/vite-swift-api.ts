@@ -212,7 +212,7 @@ export function swiftApiPlugin(): Plugin {
           if (re) eventFilter.$or = [{ name: re }, { 'teams.name': re }]
           if (body.competitionId) eventFilter['competition.id'] = body.competitionId
           const docs = await coll
-            .find(eventFilter, { projection: { _id: 1, name: 1, sport: 1, competition: 1, teams: 1, start_date: 1, status: 1 } })
+            .find(eventFilter, { projection: { _id: 1, name: 1, sport: 1, competition: 1, teams: 1, start_date: 1, status: 1, event_view_status: 1 } })
             .sort({ start_date: -1 }).limit(limit).toArray()
           const events = docs.map((d) => {
             const teams = (d.teams as Array<{ name?: string; team_position?: string; players?: Array<{ name?: string }> }> | undefined) ?? []
@@ -222,7 +222,8 @@ export function swiftApiPlugin(): Plugin {
             return {
               id: String(d._id), cid: competition?.id ?? null, sport: sport?.name ?? null,
               competition: competition?.name ?? null, name: (d.name as string | null) ?? null,
-              home, away, start: (d.start_date as string | null) ?? null, status: (d.status as string | null) ?? null,
+              home, away, start: (d.start_date as string | null) ?? null, // Null-only fallback — see api/swift-status.ts for why it must not be preferred.
+              status: ((d.status as string | null) ?? (d.event_view_status as string | null)) ?? null,
             }
           })
           return send(res, 200, { events })
@@ -345,7 +346,7 @@ export function swiftApiPlugin(): Plugin {
             const docs = await coll
               .find(
                 { _id: { $in: chunk } },
-                { projection: { _id: 1, status: 1, name: 1, start_date: 1, teams: 1, sport: 1, competition: 1 } },
+                { projection: { _id: 1, status: 1, event_view_status: 1, name: 1, start_date: 1, teams: 1, sport: 1, competition: 1 } },
               )
               .toArray()
             for (const d of docs) {
@@ -362,7 +363,8 @@ export function swiftApiPlugin(): Plugin {
                 home,
                 away,
                 start: (d.start_date as string | null) ?? null,
-                status: (d.status as string | null) ?? null,
+                // Null-only fallback — see api/swift-status.ts for why it must not be preferred.
+              status: ((d.status as string | null) ?? (d.event_view_status as string | null)) ?? null,
                 actualStart: null,
               })
             }

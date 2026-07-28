@@ -96,7 +96,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const docs = await coll
         .find(
           { _id: { $in: chunk } },
-          { projection: { _id: 1, status: 1, name: 1, start_date: 1, teams: 1, sport: 1, competition: 1 } },
+          { projection: { _id: 1, status: 1, event_view_status: 1, name: 1, start_date: 1, teams: 1, sport: 1, competition: 1 } },
         )
         .toArray()
       for (const d of docs) {
@@ -116,7 +116,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           home,
           away,
           start: (d.start_date as string | null) ?? null,
-          status: (d.status as string | null) ?? null,
+        // SwiftBet leaves `status` null on a small slice of events (55 of 10286
+        // today). `event_view_status` still carries a value there — "prematch"
+        // for 54 of them and "suspended" for the rest — so the detail page can
+        // show something truthful instead of a dash.
+        //
+        // Deliberately ONLY a null-fallback: event_view_status is NOT a mirror
+        // of status. 2424 events read status="postmatch" while
+        // event_view_status="inprogress", so preferring it, or using it to fill
+        // gaps more broadly, would report finished games as live.
+          status: ((d.status as string | null) ?? (d.event_view_status as string | null)) ?? null,
           actualStart: null,
         })
       }
