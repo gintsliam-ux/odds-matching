@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { backOr } from '../lib/nav'
 import { ArrowLeft, Check, ChevronDown, ChevronRight, Copy, ExternalLink } from 'lucide-react'
 import { useTerminal } from '../components/Layout'
 import { DetailSkeleton, PanelSkeleton } from '../components/Skeleton'
@@ -174,11 +175,7 @@ export default function FixtureDetailPage() {
           back to "/" when there's no in-app history (a deep link or a fresh
           tab), which react-router marks with history.state.idx === 0. */}
       <button
-        onClick={() => {
-          const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0
-          if (idx > 0) navigate(-1)
-          else navigate('/')
-        }}
+        onClick={() => backOr(navigate, '/')}
         className="mb-5 inline-flex items-center gap-1.5 text-[12.5px] text-[color:var(--muted)] transition-colors hover:text-gray-200"
       >
         <ArrowLeft className="h-3.5 w-3.5" />
