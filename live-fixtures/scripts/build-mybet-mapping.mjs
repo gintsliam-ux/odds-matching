@@ -21,7 +21,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MongoClient } from 'mongodb'
-import { canonSport, sim, prettyOpticLeague, aliasExpand, EXCLUDE_LEAGUES } from './build-mapping.mjs'
+import { canonSport, sim, prettyOpticLeague, aliasExpand, EXCLUDE_LEAGUES, eventPairSim } from './build-mapping.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const env = parseEnv(join(HERE, '..', '.env'))
@@ -40,6 +40,12 @@ const HDR = { apikey: SUP_KEY, Authorization: `Bearer ${SUP_KEY}` }
 // spread across sports without letting a different day's rematch through.
 const MIN_EVENT_SIM = 0.4
 const MAX_START_SKEW_MS = 120 * 60 * 1000
+// Beyond the tight window, out to WIDE, only a near-exact name is accepted.
+// Same joint gate as the SwiftBet matcher: boxing undercards, UFC prelims and
+// tennis "not before" slots drift hours, and a flat gate discards exact-name
+// candidates outright.
+const MAX_START_SKEW_WIDE_MS = 6 * 60 * 60 * 1000
+const MIN_EVENT_SIM_WIDE = 0.9
 const MIN_COMP_SIM = 0.4
 // Event-evidence competition derivation (Stage 3): this many mapped events must
 // land on the same mybet league before we trust it as the tournament mapping.
@@ -233,17 +239,21 @@ async function main(opts = { writeSnapshot: true }) {
     inWindow++
     let best = null
     let bestScore = 0
+    let bestSkew = Infinity
     for (const e of cands) {
       const estart = e.start ? Date.parse(e.start) : NaN
       if (!Number.isFinite(estart)) continue
-      if (Math.abs(opticStart - estart) > MAX_START_SKEW_MS) continue
+      const skew = Math.abs(opticStart - estart)
+      if (skew > MAX_START_SKEW_WIDE_MS) continue
       // Per-team match, not pooled tokens: score home↔home/away↔away and the
       // crossed orientation, and require BOTH teams to clear the bar. Pooled
       // token overlap let "Brewers v NY Mets" match "Pirates v NY Yankees" on
       // the shared "New York"; requiring the weaker team to match too kills it.
       const s = teamScore(r.home_team, r.away_team, e.home, e.away)
-      if (s < MIN_EVENT_SIM) continue
-      if (s > bestScore) { bestScore = s; best = e }
+      const floor = skew <= MAX_START_SKEW_MS ? MIN_EVENT_SIM : MIN_EVENT_SIM_WIDE
+      if (s < floor) continue
+      // Tie-break on time so identical names resolve to the nearest candidate.
+      if (s > bestScore || (s === bestScore && skew < bestSkew)) { bestScore = s; best = e; bestSkew = skew }
     }
     eventResults.push({
       optic_fixture_id: r.optic_fixture_id,
@@ -323,9 +333,12 @@ async function main(opts = { writeSnapshot: true }) {
  * on this being ≥ MIN_EVENT_SIM.
  */
 function teamScore(oHome, oAway, eHome, eAway) {
-  const straight = Math.min(sim(oHome ?? '', eHome ?? ''), sim(oAway ?? '', eAway ?? ''))
-  const crossed = Math.min(sim(oHome ?? '', eAway ?? ''), sim(oAway ?? '', eHome ?? ''))
-  return +Math.max(straight, crossed).toFixed(3)
+  // Scores each participant with participantSim, NOT sim(). sim() carries the
+  // country and tier gates, which exist for COMPETITION names and misfire on
+  // team names — the tier gate is a hard reject, so "Sydney FC 2" vs "Sydney FC
+  // Youth" would score 0 outright. participantSim also brings the acronym rule
+  // (GWS ↔ Greater Western Sydney) that pure token overlap scores at zero.
+  return +eventPairSim(oHome ?? '', oAway ?? '', eHome ?? '', eAway ?? '').toFixed(3)
 }
 
 /** Mongo hands back BSON Date objects for the time fields; coerce to an ISO
