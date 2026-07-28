@@ -41,15 +41,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       q?: string
       kind?: 'events' | 'competitions'
       competitionId?: string | null
+      /** mybet sport name ("Basketball") — see mybetSportOf. */
+      sport?: string | null
       limit?: number
     }
     const q = (body.q ?? '').trim()
-    if (q.length < 2) {
+    // LIST MODE: an empty query is allowed when a sport or competitionId scopes
+    // the result set. The drill's auto-map needs every mybet event of a sport,
+    // not a text search — it used to pool candidates from the /public snapshot,
+    // whose basketball events were a week stale (all dated Jul 21 while the
+    // WNBA fixtures were Aug 9), so nothing fell inside the time window and
+    // auto-map matched nothing. Without a scoping filter an empty q would mean
+    // "scan the whole collection", so that stays rejected.
+    const listMode =
+      q.length < 2 && !!(body.sport || body.competitionId) && body.kind !== 'competitions'
+    if (q.length < 2 && !listMode) {
       res.status(200).json({ events: [], competitions: [] })
       return
     }
-    const limit = Math.min(Math.max(body.limit ?? 50, 1), 200)
-    const re = new RegExp(escapeRegex(q), 'i')
+    const limit = Math.min(Math.max(body.limit ?? 50, 1), 500)
+    const re = listMode ? null : new RegExp(escapeRegex(q), 'i')
     const client = await getClient()
     const coll = client.db(MONGO_DB).collection(MYBET_COLL)
     res.setHeader('Cache-Control', 'no-store')
@@ -81,8 +92,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const eventFilter: Record<string, unknown> = {
       'match.teamA': { $ne: null },
       'match.teamB': { $ne: null },
-      $or: [{ 'match.teamA': re }, { 'match.teamB': re }, { league: re }],
     }
+    // In list mode the sport/competition filter IS the query.
+    if (re) eventFilter.$or = [{ 'match.teamA': re }, { 'match.teamB': re }, { league: re }]
+    if (body.sport) eventFilter.sport = body.sport
     if (body.competitionId) eventFilter.leagueId = isNaN(Number(body.competitionId))
       ? body.competitionId
       : Number(body.competitionId)

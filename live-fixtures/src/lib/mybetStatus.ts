@@ -101,6 +101,26 @@ export async function searchMybetEvents(args: {
   return json.events ?? []
 }
 
+/**
+ * Every mybet event for a sport, straight from Mongo.
+ *
+ * The drill's auto-map used to pool candidates from the /public catalogue
+ * snapshot, which only a local `npm run build-mapping` rebuilds. Its basketball
+ * events were all dated Jul 21 while the WNBA fixtures were Aug 9, so nothing
+ * landed inside the time window and auto-map matched nothing.
+ */
+export async function listMybetEventsBySport(sport: string, limit = 500): Promise<MybetEvent[]> {
+  const res = await fetch('/api/mybet-search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    // Empty q + sport is the endpoint's list mode.
+    body: JSON.stringify({ q: '', kind: 'events', sport, limit }),
+  })
+  if (!res.ok) throw new Error(`mybet-search ${res.status}`)
+  const json = (await res.json()) as { events: MybetEvent[] }
+  return json.events ?? []
+}
+
 export async function searchMybetCompetitions(args: {
   q: string
   limit?: number

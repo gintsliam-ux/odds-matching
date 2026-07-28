@@ -12,7 +12,7 @@ import { MappingEditor, type EditorTarget } from '../components/MappingEditor'
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
 import { getMybetCatalog, type MybetEvent } from '../lib/mybetCatalog'
 import { fetchSwiftStatuses, listSwiftEventsByCompetition } from '../lib/swiftStatus'
-import { fetchMybetStatuses } from '../lib/mybetStatus'
+import { fetchMybetStatuses, listMybetEventsBySport } from '../lib/mybetStatus'
 import { displaySport, mybetSportOf, slugToSport, sportEmoji, sportGroupKey, sportLabel, sportToSlug } from '../lib/sports'
 import { kickoffLabel, melbDateTimeShort, utcDateTimeShort } from '../lib/format'
 import {
@@ -1229,14 +1229,22 @@ function DrillView({
           candidates.push(e)
         }
       } else {
-        const cat = await getMybetCatalog().catch(() => null)
-        if (!cat) {
-          setAutoStatus('mybet catalogue unavailable.')
+        // LIVE, same reason as SwiftBet above: the /public mybet snapshot is
+        // rebuilt only by a local build-mapping run, and its basketball events
+        // were a week stale (all Jul 21 while the WNBA fixtures were Aug 9), so
+        // nothing fell inside the time window and auto-map matched nothing.
+        const wantSport = mybetSportOf(row.rawSport)
+        if (!wantSport) {
+          setAutoStatus('No mybet sport mapping for this tournament.')
           setAutoRunning(false)
+          setTimeout(() => setAutoStatus(null), 3500)
           return
         }
-        const wantSport = (mybetSportOf(row.rawSport) ?? '').toLowerCase()
-        candidates = cat.events.filter((e) => (e.sport ?? '').toLowerCase() === wantSport)
+        candidates = await listMybetEventsBySport(wantSport).catch(async () => {
+          const cat = await getMybetCatalog().catch(() => null)
+          const want = wantSport.toLowerCase()
+          return cat?.events.filter((e) => (e.sport ?? '').toLowerCase() === want) ?? []
+        })
       }
       if (candidates.length === 0) {
         setAutoStatus(`No ${brand} events available for this tournament.`)
