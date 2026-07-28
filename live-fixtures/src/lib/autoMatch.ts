@@ -121,6 +121,61 @@ function extractTiers(s: string): Set<number> {
 // short of a day so consecutive-day matchups never collide.
 const MIN_EVENT_SIM = 0.4
 const MAX_START_SKEW_MS = 90 * 60 * 1000
+// Beyond the tight window, out to WIDE, only a near-exact name is accepted.
+// Boxing undercards, UFC prelims and tennis "not before" slots drift 2-4h, so a
+// flat 90-min gate discarded exact-name candidates. Keep in lockstep with
+// scripts/build-mapping.mjs.
+const MAX_START_SKEW_WIDE_MS = 6 * 60 * 60 * 1000
+const MIN_EVENT_SIM_WIDE = 0.9
+
+/** Short token on one side == initials of the other: "GWS" ↔ Greater Western
+ *  Sydney, "CRB" ↔ Clube de Regatas Brasil. Token similarity scores these 0. */
+function acronymMatch(a: string, b: string): boolean {
+  // tokens() returns a Set here (it returns an array in build-mapping.mjs), and
+  // initials need positional order — Sets preserve insertion order, so spread.
+  const A = [...tokens(a)]
+  const B = [...tokens(b)]
+  for (const [x, y] of [
+    [A, B],
+    [B, A],
+  ] as const) {
+    if (y.length < 2) continue
+    const ini = y.map((t) => t[0]).join('')
+    for (const t of x) if (t.length >= 2 && t.length <= 5 && t === ini) return true
+  }
+  return false
+}
+
+/** Similarity for ONE participant. Skips sim()'s country/tier gates — they're
+ *  for competitions and misfire on team names. */
+function participantSim(a: string, b: string): number {
+  const A = new Set(tokens(a))
+  const B = new Set(tokens(b))
+  if (A.size === 0 || B.size === 0) return 0
+  let s = Math.max(jaccard(A, B), fuzzyCoverage(A, B))
+  const al = (a ?? '').toLowerCase()
+  const bl = (b ?? '').toLowerCase()
+  if (al && bl && (al === bl || al.includes(bl) || bl.includes(al))) s = Math.max(s, 0.95)
+  if (acronymMatch(a, b)) s = Math.max(s, 0.9)
+  return s
+}
+
+/** Both participants must match, in either orientation. min() stops one strong
+ *  side carrying a mismatched other side — which is how "Rays v Yankees" used
+ *  to score the same as a real match against "Royals v Mets" on "New York". */
+function eventPairSim(oHome: string, oAway: string, eHome: string, eAway: string): number {
+  return Math.max(
+    Math.min(participantSim(oHome, eHome), participantSim(oAway, eAway)),
+    Math.min(participantSim(oHome, eAway), participantSim(oAway, eHome)),
+  )
+}
+
+/** Split a candidate into its two participants. */
+function eventParticipants(e: SwiftEvent): [string, string] {
+  if (e.home && e.away) return [e.home, e.away]
+  const parts = String(e.name ?? '').split(/\s+vs\.?\s+/i)
+  return parts.length >= 2 ? [parts[0], parts[1]] : [String(e.name ?? ''), '']
+}
 
 // OPTIC abbreviations → expanded names that match SWIFT's full names.
 // Mirrors LEAGUE_ALIASES in build-mapping.mjs.
@@ -378,19 +433,26 @@ export function bestSwiftEventMatch(args: {
   if (!Number.isFinite(opticStart)) return null // no start → can't confirm day
   let best: SwiftEvent | null = null
   let bestScore = 0
+  let bestSkew = Infinity
   for (const e of args.candidates) {
     const estart = e.start ? Date.parse(e.start) : NaN
     if (!Number.isFinite(estart)) continue
-    if (Math.abs(opticStart - estart) > MAX_START_SKEW_MS) continue
-    // Mirror the matcher: prefer real Home/Away team names; otherwise parse
-    // the SWIFT event name ("Fighter A vs Fighter B") for placeholder-team rows.
-    let eteams = ''
-    if (e.home && e.away) eteams = `${e.home} ${e.away}`
-    else if (e.name) eteams = e.name.replace(/\s+vs\.?\s+/i, ' ')
-    const tsim = sim(opticTeams, eteams)
-    if (tsim < MIN_EVENT_SIM) continue
-    if (tsim > bestScore) {
+    const skew = Math.abs(opticStart - estart)
+    if (skew > MAX_START_SKEW_WIDE_MS) continue
+    const [eHome, eAway] = eventParticipants(e)
+    // Max of the bag-of-words score and the pairwise one — the bag still wins
+    // on some shapes, so add to it rather than replacing it.
+    const tsim = Math.max(
+      sim(opticTeams, `${eHome} ${eAway}`),
+      eventPairSim(args.opticHome, args.opticAway, eHome, eAway),
+    )
+    // Joint gate: a tight window accepts a loose name; further out the name
+    // must be near-exact.
+    const floor = skew <= MAX_START_SKEW_MS ? MIN_EVENT_SIM : MIN_EVENT_SIM_WIDE
+    if (tsim < floor) continue
+    if (tsim > bestScore || (tsim === bestScore && skew < bestSkew)) {
       bestScore = tsim
+      bestSkew = skew
       best = e
     }
   }

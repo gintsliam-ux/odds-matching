@@ -302,6 +302,69 @@ export function sim(aName, bName) {
   return Math.max(0, s)
 }
 
+// --- event (participant) matching ----------------------------------------
+//
+// Competition names and PARTICIPANT names need different scoring. sim() treats
+// both sides as one bag of words, which for events throws away the pairing:
+// "Tampa Bay Rays + New York Yankees" vs "Kansas City Royals + New York Mets"
+// scores the same 0.333 as "Essendon + GWS GIANTS" vs "Essendon + Greater
+// Western Sydney" — one shares an incidental "New York", the other is a real
+// match. Scoring the two participants pairwise separates them.
+
+/** True when a short token on one side is the initials of the other side —
+ *  "GWS" ↔ Greater Western Sydney, "CRB" ↔ Clube de Regatas Brasil, "HB" ↔
+ *  Havnar Bóltfelag. Pure token similarity scores these ZERO, and they were a
+ *  large share of the misses that had to be mapped by hand. */
+export function acronymMatch(a, b) {
+  const A = tokens(a)
+  const B = tokens(b)
+  for (const [x, y] of [
+    [A, B],
+    [B, A],
+  ]) {
+    if (y.length < 2) continue
+    const ini = y.map((t) => t[0]).join('')
+    for (const t of x) if (t.length >= 2 && t.length <= 5 && t === ini) return true
+  }
+  return false
+}
+
+/** Similarity for ONE participant name. Deliberately skips sim()'s country and
+ *  tier gates: those exist for competitions and misfire on team names (a tier
+ *  gate would hard-reject "Bayern II" vs "Bayern 2"). */
+export function participantSim(a, b) {
+  const A = new Set(tokens(a))
+  const B = new Set(tokens(b))
+  if (A.size === 0 || B.size === 0) return 0
+  let s = Math.max(jaccard(A, B), fuzzyCoverage(A, B))
+  const al = (a ?? '').toLowerCase()
+  const bl = (b ?? '').toLowerCase()
+  if (al && bl && (al === bl || al.includes(bl) || bl.includes(al))) s = Math.max(s, 0.95)
+  if (acronymMatch(a, b)) s = Math.max(s, 0.9)
+  return s
+}
+
+/** Pairwise score for a fixture: both participants must match, in either
+ *  orientation (feeds disagree on home/away often enough). min() is the point —
+ *  one strong side can't carry a mismatched other side. */
+export function eventPairSim(oHome, oAway, eHome, eAway) {
+  const direct = Math.min(participantSim(oHome, eHome), participantSim(oAway, eAway))
+  const swapped = Math.min(participantSim(oHome, eAway), participantSim(oAway, eHome))
+  return Math.max(direct, swapped)
+}
+
+/** Split a candidate into its two participants. */
+export function eventParticipants(e) {
+  const named = (e.teams ?? []).filter(
+    (t) => t.name && (t.team_position === 'Home' || t.team_position === 'Away'),
+  )
+  if (named.length >= 2) return [named[0].name, named[1].name]
+  const all = (e.teams ?? []).map((t) => t.name).filter(Boolean)
+  if (all.length >= 2) return [all[0], all[1]]
+  const parts = String(e.name ?? '').split(/\s+vs\.?\s+/i)
+  return parts.length >= 2 ? [parts[0], parts[1]] : [String(e.name ?? ''), '']
+}
+
 // --- tennis tournament parsing ------------------------------------------
 //
 // OPTIC season_type shapes:
@@ -632,6 +695,11 @@ async function main(opts = { writeSnapshot: true }) {
   // names — without the time gate, day 1 collides with day 2.
   const MIN_EVENT_SIM = 0.4
   const MAX_START_SKEW_MS = 90 * 60 * 1000
+  // Beyond the tight window, out to WIDE, only a near-exact name is accepted.
+  // Measured on live data: 68 additional correct matches, 2 pre-existing WRONG
+  // mappings corrected, 0 regressions across ~3000 known-good pairs.
+  const MAX_START_SKEW_WIDE_MS = 6 * 60 * 60 * 1000
+  const MIN_EVENT_SIM_WIDE = 0.9
   const eventResults = []
   let opticPairedComp = 0
   for (const r of opticRows) {
@@ -661,30 +729,33 @@ async function main(opts = { writeSnapshot: true }) {
     const opticTeams = `${r.home_team ?? ''} ${r.away_team ?? ''}`
     let best = null
     let bestScore = 0
-    // Both gates must pass: name similarity ≥ MIN_EVENT_SIM AND start-time skew
-    // ≤ MAX_START_SKEW_MS (with both sides having a real start). Final score
-    // is name similarity alone, so the closest-name in-window candidate wins.
+    let bestSkew = Infinity
+    // Time and name are gated JOINTLY. A tight window needs only a loose name
+    // match; beyond it the name must be near-exact. Scheduled times for boxing
+    // undercards, UFC prelims and tennis "not before" slots routinely drift 2-4
+    // hours, and a flat 90-min gate silently discarded exact-name candidates —
+    // it even mapped "Mattia Bellucci v Zachary Svajda" onto "Pablo Llamas Ruiz
+    // v Zachary Svajda" because the real event sat 130 min out.
     if (Number.isFinite(opticStart)) {
       for (const e of cands) {
         const estart = e.start_date ? Date.parse(e.start_date) : NaN
         if (!Number.isFinite(estart)) continue
-        if (Math.abs(opticStart - estart) > MAX_START_SKEW_MS) continue
-        // Build the candidate participant string. Prefer named Home/Away teams;
-        // otherwise fall back to parsing the event name ("Fighter A vs Fighter B").
-        // UFC and similar individual-combatant sports leave a single placeholder
-        // entry in teams[] (`{name:"Competitors"}`), so checking length alone
-        // wasn't enough.
-        const named = (e.teams ?? []).filter(
-          (t) => t.name && (t.team_position === 'Home' || t.team_position === 'Away'),
+        const skew = Math.abs(opticStart - estart)
+        if (skew > MAX_START_SKEW_WIDE_MS) continue
+        const [eHome, eAway] = eventParticipants(e)
+        // Best of the old bag-of-words score and the pairwise one: the bag
+        // still wins on some shapes, so take the max rather than replacing it.
+        const tsim = Math.max(
+          sim(opticTeams, `${eHome} ${eAway}`),
+          eventPairSim(r.home_team, r.away_team, eHome, eAway),
         )
-        const eteams =
-          named.length > 0
-            ? named.map((t) => t.name).join(' ')
-            : (e.name ?? '').replace(/\s+vs\.?\s+/i, ' ')
-        const tsim = sim(opticTeams, eteams)
-        if (tsim < MIN_EVENT_SIM) continue
-        if (tsim > bestScore) {
+        const floor = skew <= MAX_START_SKEW_MS ? MIN_EVENT_SIM : MIN_EVENT_SIM_WIDE
+        if (tsim < floor) continue
+        // Tie-break on time: identical names (common for a rescheduled slot)
+        // should resolve to the nearest candidate.
+        if (tsim > bestScore || (tsim === bestScore && skew < bestSkew)) {
           bestScore = tsim
+          bestSkew = skew
           best = e
         }
       }
