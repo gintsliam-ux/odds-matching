@@ -10,8 +10,39 @@ function fmt(n: number): string {
   return n.toFixed(2);
 }
 
+// Timestamps in the DB are UTC; the board's home timezone is Melbourne (where
+// the daily 9am snapshot is taken), so the card shows times in Melbourne.
+const MEL = 'Australia/Melbourne';
+
 function clockAt(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: MEL,
+  });
+}
+
+/** Compact Melbourne date, e.g. "28 Jul" — so the open's day isn't ambiguous. */
+function dayLabel(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    timeZone: MEL,
+  });
+}
+
+/**
+ * Label a `daily_prices` key ("YYYY-MM-DD"). It's already a Melbourne calendar
+ * date, so format it WITHOUT a timezone shift — parsing it as a UTC midnight and
+ * rendering in UTC keeps the day exactly as the scraper stored it.
+ */
+function dailyDateLabel(ymd: string): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(y, (m ?? 1) - 1, d ?? 1)).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+  });
 }
 
 /** "4m ago" / "2h ago" — how stale the price we're showing is. */
@@ -184,11 +215,23 @@ export function PriceCard({ target, now }: { target: HoverTarget; now: number })
         {detail.open != null && (
           <div className="flex justify-between">
             <dt className="text-slate-500">
-              Open{detail.openAt && <span className="text-slate-600"> · {clockAt(detail.openAt)}</span>}
+              Open
+              {detail.openAt && (
+                <span className="text-slate-600">
+                  {' '}· {dayLabel(detail.openAt)} {clockAt(detail.openAt)}
+                </span>
+              )}
             </dt>
             <dd className="tabular-nums text-slate-300">{fmt(detail.open)}</dd>
           </div>
         )}
+        {/* The scraper's 9am (Melbourne) price for each day the market's open. */}
+        {detail.daily.map((d) => (
+          <div key={d.date} className="flex justify-between">
+            <dt className="text-slate-500">9am {dailyDateLabel(d.date)}</dt>
+            <dd className="tabular-nums text-slate-300">{fmt(d.price)}</dd>
+          </div>
+        ))}
         {detail.snapshots.map((s) => (
           <div key={s.label} className="flex justify-between">
             <dt className="text-slate-500">{s.label}</dt>

@@ -74,6 +74,13 @@ export interface Snapshot {
   price: number;
 }
 
+/** One entry from the scraper's `daily_prices` — the 9am (Melbourne) snapshot. */
+export interface DailyPrice {
+  /** "YYYY-MM-DD", a Melbourne-local calendar date (the scraper's key). */
+  date: string;
+  price: number;
+}
+
 /** Everything the hover card shows about one book's price for one selection. */
 export interface PriceDetail {
   bookId: string;
@@ -84,6 +91,8 @@ export interface PriceDetail {
   flucs: Fluc[];
   /** Pre-jump snapshots that exist for this row, in time order. */
   snapshots: Snapshot[];
+  /** The 9am (Melbourne) price for each day the market's been open, oldest first. */
+  daily: DailyPrice[];
   updatedAt: string | null;
   status: string | null;
 }
@@ -134,9 +143,12 @@ export interface OddsRow {
   open_at: string | null;
   price_3h: number | null;
   price_1h: number | null;
+  price_30m: number | null;
   price_10m: number | null;
   close_price: number | null;
   current_at: string | null;
+  /** Melbourne-date -> 9am snapshot price. */
+  daily_prices: Record<string, number> | null;
 }
 
 // market_id -> display, in the order the grid shows them. `kind` drives the
@@ -198,8 +210,14 @@ function detailFrom(r: OddsRow, price: number): PriceDetail {
   };
   add('3h', r.price_3h);
   add('1h', r.price_1h);
+  add('30m', r.price_30m);
   add('10m', r.price_10m);
   add('Close', r.close_price);
+
+  const daily: DailyPrice[] = Object.entries(r.daily_prices ?? {})
+    .map(([date, p]) => ({ date, price: Number(p) }))
+    .filter((d) => Number.isFinite(d.price))
+    .sort((a, b) => a.date.localeCompare(b.date));
 
   return {
     bookId: r.sportsbook,
@@ -208,6 +226,7 @@ function detailFrom(r: OddsRow, price: number): PriceDetail {
     openAt: r.open_at,
     flucs: (r.flucs ?? []).filter((f) => f && typeof f.p === 'number' && f.t),
     snapshots,
+    daily,
     updatedAt: r.current_at,
     status: r.status,
   };
