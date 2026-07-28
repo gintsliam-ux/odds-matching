@@ -48,6 +48,18 @@ async function runMapping(): Promise<void> {
   await mod.runMapping()
 }
 
+// mybet rides the same tick as SwiftBet. It used to run ONLY in the daily
+// /api/cron/build-mapping, so mybet mappings could sit 24h stale while the
+// SwiftBet side refreshed every ~10 min — a mybet fixture added after 04:00 UTC
+// stayed unmapped all day and had to be mapped by hand. Both providers now
+// refresh on the same cadence, bounded by the same throttle.
+async function runMybetMapping(): Promise<void> {
+  const mod = (await import('../scripts/build-mybet-mapping.mjs')) as {
+    runMybetMapping: () => Promise<void>
+  }
+  await mod.runMybetMapping()
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET' && req.method !== 'POST') {
     res.status(405).json({ ok: false, error: 'GET only' })
@@ -74,17 +86,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     running = true
     const t0 = Date.now()
+    let mybetError: string | null = null
     try {
       await runMapping()
+      // mybet runs AFTER SwiftBet and in its own catch: the two write disjoint
+      // rows (provider column), so a mybet failure must not discard a SwiftBet
+      // pass that already succeeded, nor 500 the tick and trip the workflow.
+      try {
+        await runMybetMapping()
+      } catch (e) {
+        mybetError = String((e as { message?: unknown })?.message ?? e)
+      }
     } finally {
       running = false
     }
-    res.status(200).json({ ok: true, ran: true, ms: Date.now() - t0 })
+    res.status(200).json({ ok: true, ran: true, ms: Date.now() - t0, mybetError })
   } catch (e) {
     running = false
     res.status(500).json({ ok: false, error: String((e as { message?: unknown })?.message ?? e) })
   }
 }
 
-// The rebuild (Mongo aggregate + ~1.5k Supabase upserts) can take 30-60s.
+// Both rebuilds run in one invocation. Measured ~13s combined (7s SwiftBet +
+// 6s mybet), well inside the workflow curl's 120s budget, but keep the
+// generous ceiling for cold starts and larger deltas.
 export const config = { maxDuration: 300 }
