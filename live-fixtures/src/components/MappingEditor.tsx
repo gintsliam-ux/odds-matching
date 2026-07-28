@@ -10,8 +10,8 @@ import {
 } from '../lib/mappingData'
 import { mybetSportOf, swiftSportOf } from '../lib/sports'
 import { ListSkeleton } from './Skeleton'
-import { searchSwiftCompetitions, searchSwiftEvents } from '../lib/swiftStatus'
-import { searchMybetCompetitions, searchMybetEvents } from '../lib/mybetStatus'
+import { searchSwiftCompetitions, searchSwiftEvents, listSwiftEventsByCompetition } from '../lib/swiftStatus'
+import { searchMybetCompetitions, searchMybetEvents, listMybetEventsByCompetition } from '../lib/mybetStatus'
 
 // The editor is provider-agnostic: SwiftBet and mybet catalogues share the same
 // competition/event shape, so we type against the SwiftBet interfaces and the
@@ -112,14 +112,32 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
       .then((cat) => {
         if (!alive) return
         setComps(cat.competitions)
-        if (target.kind === 'event') {
-          // limit events to those in the paired competition when known, else all.
-          const cid = target.swiftCompetitionId
-          setEvents(cid ? (cat.eventsByCompId.get(cid) ?? []) : cat.events)
-        }
       })
       .catch((e) => alive && setError(String(e)))
       .finally(() => alive && setLoading(false))
+    return () => {
+      alive = false
+    }
+  }, [target, provider])
+
+  // Events for the paired competition, LIVE. These used to come from the
+  // /public snapshot via cat.eventsByCompId, which is exactly what left the
+  // picker unable to offer newly-added events. With no paired competition
+  // there's nothing to scope a list to, so the box stays empty until the user
+  // types and the live search takes over.
+  useEffect(() => {
+    if (target.kind !== 'event') return
+    const cid = target.swiftCompetitionId
+    if (!cid) {
+      setEvents([])
+      return
+    }
+    let alive = true
+    const p =
+      provider === 'mybet'
+        ? listMybetEventsByCompetition(cid)
+        : listSwiftEventsByCompetition(cid)
+    p.then((evs) => alive && setEvents(evs)).catch(() => alive && setEvents([]))
     return () => {
       alive = false
     }

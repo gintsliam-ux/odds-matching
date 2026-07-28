@@ -1,6 +1,21 @@
-// In-app catalogue of SWIFT (Mongo gutsy.events) competitions + events,
-// loaded once from JSON snapshots in /public/ that `npm run build-mapping`
-// writes. Used by the EditMappingModal to let the user pick a manual mapping.
+// In-app catalogue of SWIFT (Mongo gutsy.events) COMPETITIONS, read live from
+// /api/swift-search.
+//
+// This used to load two JSON snapshots from /public that only a local
+// `npm run build-mapping` rebuilt. That was the single root cause behind four
+// separate mapping bugs — the editor picker couldn't find new competitions, and
+// both auto-map buttons silently matched against a week-old world (237
+// competitions where Mongo had 313; ZERO events for leagues Mongo had). It also
+// meant downloading a 2.3 MB swift-events.json on every page load.
+//
+// Events are NOT bulk-loaded any more: nothing needs all of them at once, and
+// fetching them was what made the file huge. Callers ask for the slice they
+// need — listSwiftEventsByCompetition() for a competition, fetchSwiftStatuses()
+// for specific ids. `events`/`eventById`/`eventsByCompId` stay on the shape as
+// empty collections so existing lookups degrade to a miss rather than a crash;
+// every one of them already has a live path or an id fallback.
+
+import { listSwiftCompetitions } from './swiftStatus'
 
 export interface SwiftCompetition {
   id: string
@@ -39,30 +54,15 @@ let cache: Catalog | null = null
 let inflight: Promise<Catalog> | null = null
 
 async function load(): Promise<Catalog> {
-  const [cRes, eRes] = await Promise.all([
-    fetch('/swift-competitions.json'),
-    fetch('/swift-events.json'),
-  ])
-  if (!cRes.ok || !eRes.ok) {
-    throw new Error(
-      `SWIFT catalogue missing — run "npm run build-mapping" to generate /swift-competitions.json + /swift-events.json`,
-    )
-  }
-  const competitions: SwiftCompetition[] = await cRes.json()
-  const events: SwiftEvent[] = await eRes.json()
+  const competitions = await listSwiftCompetitions()
   const byCompId = new Map(competitions.map((c) => [c.id, c]))
-  const eventById = new Map(events.map((e) => [e.id, e]))
-  const eventsByCompId = new Map<string, SwiftEvent[]>()
-  for (const e of events) {
-    if (!e.cid) continue
-    let list = eventsByCompId.get(e.cid)
-    if (!list) eventsByCompId.set(e.cid, (list = []))
-    list.push(e)
+  return {
+    competitions,
+    events: [],
+    byCompId,
+    eventById: new Map(),
+    eventsByCompId: new Map(),
   }
-  for (const list of eventsByCompId.values()) {
-    list.sort((a, b) => (a.start ?? '').localeCompare(b.start ?? ''))
-  }
-  return { competitions, events, byCompId, eventById, eventsByCompId }
 }
 
 export async function getSwiftCatalog(): Promise<Catalog> {
