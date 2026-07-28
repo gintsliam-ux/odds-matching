@@ -121,15 +121,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const events = docs
       .map((d) => {
-        const teams = (d.teams as Array<{ name?: string; team_position?: string }> | undefined) ?? []
+        const teams =
+          (d.teams as
+            | Array<{ name?: string; team_position?: string; players?: Array<{ name?: string }> }>
+            | undefined) ?? []
         let home = teams.find((t) => t.team_position === 'Home')?.name ?? null
         let away = teams.find((t) => t.team_position === 'Away')?.name ?? null
-        // MMA/UFC store the matchup only in the name when teams[] is empty.
-        if (!home && !away && d.name) {
-          const parts = String(d.name).split(/\s+vs\.?\s+/i)
-          if (parts.length === 2) {
-            home = parts[0].trim()
-            away = parts[1].trim()
+        if (!home || !away) {
+          // Individual sports (tennis/MMA/boxing) carry ONE "Competitors" team
+          // whose players[] holds the real names — preferred over parsing the
+          // event name, which is only a last resort.
+          const players = teams.flatMap((t) => (t.players ?? []).map((p) => p.name).filter(Boolean))
+          if (players.length >= 2) {
+            home = players[0] as string
+            away = players[1] as string
+          } else if (d.name) {
+            const parts = String(d.name).split(/\s+vs\.?\s+/i)
+            if (parts.length === 2) {
+              home = parts[0].trim()
+              away = parts[1].trim()
+            }
           }
         }
         const competition = d.competition as { id?: string; name?: string } | undefined

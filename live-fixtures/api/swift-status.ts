@@ -32,6 +32,41 @@ function getClient(): Promise<MongoClient> {
   return (clientPromise = new MongoClient(MONGO_URI, { maxPoolSize: 4 }).connect())
 }
 
+/**
+ * Resolve an event's two participants.
+ *
+ * Team sports carry team_position Home/Away. INDIVIDUAL sports (tennis, MMA,
+ * boxing) do not: they store ONE placeholder team called "Competitors" whose
+ * players[] holds the real names, e.g.
+ *
+ *   teams: [{ name: "Competitors", team_position: "Competitors",
+ *             players: [{name:"Coleman Wong"}, {name:"Darwin Blanch"}] }]
+ *
+ * Reading only Home/Away returned null/null for every one of those, which is
+ * why a live tennis fixture showed a blank SwiftBet home/away on the detail
+ * page. players[] is preferred over splitting the name because it gives the
+ * names exactly as SwiftBet has them, with no " vs " parsing to get wrong.
+ */
+function participantsOf(
+  teams: Array<{ name?: string; team_position?: string; players?: Array<{ name?: string }> }>,
+  name: string | null,
+): [string | null, string | null] {
+  const home = teams.find((t) => t.team_position === 'Home')?.name ?? null
+  const away = teams.find((t) => t.team_position === 'Away')?.name ?? null
+  if (home && away) return [home, away]
+
+  const players = teams.flatMap((t) => (t.players ?? []).map((p) => p.name).filter(Boolean))
+  if (players.length >= 2) return [players[0] as string, players[1] as string]
+
+  const named = teams.map((t) => t.name).filter((n): n is string => !!n && n !== 'Competitors')
+  if (named.length >= 2) return [named[0], named[1]]
+
+  const parts = String(name ?? '').split(/\s+vs\.?\s+/i)
+  if (parts.length === 2) return [parts[0].trim(), parts[1].trim()]
+
+  return [home, away]
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'POST only' })
@@ -65,9 +100,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         )
         .toArray()
       for (const d of docs) {
-        const teams = (d.teams as Array<{ name?: string; team_position?: string }> | undefined) ?? []
-        const home = teams.find((t) => t.team_position === 'Home')?.name ?? null
-        const away = teams.find((t) => t.team_position === 'Away')?.name ?? null
+        const teams =
+          (d.teams as
+            | Array<{ name?: string; team_position?: string; players?: Array<{ name?: string }> }>
+            | undefined) ?? []
+        const [home, away] = participantsOf(teams, d.name as string | null)
         const competition = d.competition as { id?: string; name?: string } | undefined
         const sport = d.sport as { name?: string } | undefined
         events.push({
