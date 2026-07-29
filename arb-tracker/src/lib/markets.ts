@@ -14,6 +14,7 @@ export const BOOKMAKERS: Bookmaker[] = [
   { id: 'bet365', name: 'Bet365', color: '#059669', mark: '365', logoUrl: '/logos/brands/bet365.png' },
   { id: 'sportsbet', name: 'Sportsbet', color: '#2563eb', mark: 'SP', logoUrl: '/logos/brands/sportsbet.png' },
   { id: 'ladbrokes_australia', name: 'Ladbrokes', color: '#dc2626', mark: 'LAD', logoUrl: '/logos/brands/ladbrokes_australia.png' },
+  { id: 'tabtouch', name: 'TABtouch', color: '#5b2d8e', mark: 'TAB', logoUrl: '/logos/brands/tabtouch.png' },
   { id: 'pinnacle', name: 'Pinnacle', color: '#c81e1e', mark: 'PIN', logoUrl: '/logos/brands/pinnacle.png' },
 ];
 
