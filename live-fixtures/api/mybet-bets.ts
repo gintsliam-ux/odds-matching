@@ -60,10 +60,32 @@ function melbWallToUtc(raw: string | Date | null | undefined): Date | null {
   return new Date(`${wall}+11:00`)
 }
 
+/**
+ * Inverse of melbWallToUtc: given a true-UTC instant, return a Date whose UTC
+ * components ARE the Melbourne wall-clock reading. Needed because
+ * `multileg_outcomedate` is stored the same misleading way as
+ * `transaction_date` — Melbourne wall-clock tagged `Z` — so a true-UTC bound
+ * would be 10-11 h out and match nothing.
+ */
+function utcToMelbWall(ms: number): Date {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Australia/Sydney',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(ms))
+  const g = (t: string) => parts.find((p) => p.type === t)?.value ?? '00'
+  return new Date(`${g('year')}-${g('month')}-${g('day')}T${g('hour')}:${g('minute')}:${g('second')}Z`)
+}
+
 // Bets on an event land mostly in the days before it. Window the indexed
 // transaction_date to bound the scan (no index on event_identifier).
 const WINDOW_BEFORE_MS = 10 * 86_400_000
 const WINDOW_AFTER_MS = 1 * 86_400_000
+/** How far a multi leg's own event time may sit from this event's close time and
+ *  still be considered the same game. Well inside the ~24 h gap between
+ *  consecutive games of a series. */
+const LEG_DATE_SLACK_MS = 6 * 60 * 60 * 1000
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
@@ -98,16 +120,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // (different games) doesn't false-match.
     const joins: Record<string, unknown>[] = [{ event_identifier: eventId }]
     if (body.home && body.away) {
-      joins.push({
-        legs: {
-          $elemMatch: {
-            $and: [
-              { multileg_evetdescription: { $regex: esc(body.home), $options: 'i' } },
-              { multileg_evetdescription: { $regex: esc(body.away), $options: 'i' } },
-            ],
+      const legConds: Record<string, unknown>[] = [
+        { multileg_evetdescription: { $regex: esc(body.home), $options: 'i' } },
+        { multileg_evetdescription: { $regex: esc(body.away), $options: 'i' } },
+      ]
+      // Pin the leg to THIS game, not just this matchup.
+      //
+      // Team names alone can't tell one game of a series from another. A
+      // baseball series has the same two teams on three consecutive days, so
+      // every multi on any of them matched every one of them — and because the
+      // transaction window is ±10 days, bets placed legitimately before game 2
+      // got attached to game 1 and then flagged "placed after live" against
+      // game 1's start. On Twins v Royals 2026-07-29 that was 9 false
+      // late-bet flags out of 9, every leg actually dated 07-30 or 07-31.
+      //
+      // multileg_outcomedate is the leg's own event time and is present on 100%
+      // of mybet multis. It must be compared as a DATE — it's a BSON Date, and
+      // string bounds silently match nothing (same trap as transaction_date).
+      // ±6 h absorbs start-time drift while staying well inside the ~24 h
+      // spacing of consecutive series games.
+      if (Number.isFinite(centreMs) && body.suspendAt) {
+        // Compare in MELBOURNE WALL-CLOCK, not true UTC: the stored value is
+        // wall-clock tagged Z, so a true-UTC bound sits 10-11 h off and matches
+        // nothing. Verified against this series — leg 2026-07-30T09:40Z is the
+        // game whose real start is 2026-07-29T23:40Z.
+        const wallMs = utcToMelbWall(centreMs).getTime()
+        legConds.push({
+          multileg_outcomedate: {
+            $gte: new Date(wallMs - LEG_DATE_SLACK_MS),
+            $lte: new Date(wallMs + LEG_DATE_SLACK_MS),
           },
-        },
-      })
+        })
+      }
+      joins.push({ legs: { $elemMatch: { $and: legConds } } })
     }
 
     const client = await getClient()
