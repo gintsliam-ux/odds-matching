@@ -14,7 +14,8 @@ export const BOOKMAKERS: Bookmaker[] = [
   { id: 'bet365', name: 'Bet365', color: '#059669', mark: '365', logoUrl: '/logos/brands/bet365.png' },
   { id: 'sportsbet', name: 'Sportsbet', color: '#2563eb', mark: 'SP', logoUrl: '/logos/brands/sportsbet.png' },
   { id: 'ladbrokes_australia', name: 'Ladbrokes', color: '#dc2626', mark: 'LAD', logoUrl: '/logos/brands/ladbrokes_australia.png' },
-  { id: 'tabtouch', name: 'TABtouch', color: '#5b2d8e', mark: 'TAB', logoUrl: '/logos/brands/tabtouch.png' },
+  { id: 'tab', name: 'TAB', color: '#009845', mark: 'TAB', logoUrl: '/logos/brands/tab.png' },
+  { id: 'tabtouch', name: 'TABtouch', color: '#5b2d8e', mark: 'TT', logoUrl: '/logos/brands/tabtouch.png' },
   { id: 'pinnacle', name: 'Pinnacle', color: '#c81e1e', mark: 'PIN', logoUrl: '/logos/brands/pinnacle.png' },
 ];
 
@@ -437,10 +438,14 @@ export function buildMarkets(
         ];
       });
     } else {
-      // Moneyline: canonical [home, away], plus any extra selection (e.g. Draw).
+      // Moneyline: canonical [home, away], plus any extra outcome (e.g. Draw).
+      // Guard against feeds that mislabel a goalscorer market as moneyline
+      // (TAB does this) — those selections read "Name (TEAM)", which aren't H2H
+      // outcomes and would otherwise pollute the grid with a row per player.
+      const isPlayer = (s: string) => /\([A-Za-z]{2,4}\)\s*$/.test(s);
       const rowsFor = (sel: string) => marketRows.filter((r) => r.selection === sel);
       const extras = [...new Set(marketRows.map((r) => r.selection))].filter(
-        (s) => s !== home && s !== away,
+        (s) => s !== home && s !== away && !isPlayer(s),
       );
       selections = [
         makeSelectionRow(books, home, home, rowsFor(home), home),
