@@ -29,7 +29,12 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const UA = 'arb-tracker/1.0 (player-country resolver)';
+// Occupations we accept a match under — tennis player or MMA fighter, since the
+// same table now carries both tennis players and UFC fighters.
 const TENNIS_PLAYER = 'Q10833314';
+const MMA_FIGHTER = 'Q11607585';
+const OCCUPATIONS = [TENNIS_PLAYER, MMA_FIGHTER];
+const OCC_VALUES = OCCUPATIONS.map((q) => `wd:${q}`).join(' ');
 const SPARQL = 'https://query.wikidata.org/sparql';
 const WD_API = 'https://www.wikidata.org/w/api.php';
 
@@ -122,13 +127,15 @@ async function wdApi(params) {
   return r.json();
 }
 
-/** Every distinct player currently on the tennis board. */
+/** Every distinct competitor on the tennis and UFC boards (both fly flags). */
 async function boardPlayers() {
-  const rows = await rest('tennis_events?select=home_team,away_team&limit=5000');
   const names = new Set();
-  for (const r of rows) {
-    if (r.home_team) names.add(r.home_team);
-    if (r.away_team) names.add(r.away_team);
+  for (const table of ['tennis_events', 'ufc_events']) {
+    const rows = await rest(`${table}?select=home_team,away_team&limit=5000`);
+    for (const r of rows) {
+      if (r.home_team) names.add(r.home_team);
+      if (r.away_team) names.add(r.away_team);
+    }
   }
   return [...names].sort();
 }
@@ -154,7 +161,8 @@ async function byExactLabel(names) {
     const rows = await sparql(
       `SELECT ?name ?p WHERE {
          VALUES ?name { ${values} }
-         ?p rdfs:label ?name ; wdt:P106 wd:${TENNIS_PLAYER} .
+         VALUES ?occ { ${OCC_VALUES} }
+         ?p rdfs:label ?name ; wdt:P106 ?occ .
        }`,
     );
     for (const b of rows) found.set(b.name.value, b.p.value.split('/').pop());
@@ -185,7 +193,8 @@ async function bySearch(names) {
         const rows = await sparql(
           `SELECT ?p WHERE {
              VALUES ?p { ${ids.map((i) => `wd:${i}`).join(' ')} }
-             ?p wdt:P106 wd:${TENNIS_PLAYER} .
+             VALUES ?occ { ${OCC_VALUES} }
+             ?p wdt:P106 ?occ .
            }`,
         );
         if (rows.length) found.set(name, rows[0].p.value.split('/').pop());

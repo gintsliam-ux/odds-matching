@@ -16,5 +16,20 @@
     "iso2": "au",
     "country_qid": "Q408",
     "note": "Dual AU/ES on Wikidata with no tie-break. Represents Australia; ATP lists him as AUS."
+  },
+  "YeXin Ma": {
+    "iso2": "cn",
+    "country_qid": "Q148",
+    "note": "Chinese tennis player; the search fallback grabbed a wrong entity (resolved to Chad). Overriding to CN."
+  },
+  "Mackenzie Dern": {
+    "iso2": "us",
+    "country_qid": "Q30",
+    "note": "Dual US/Brazil on Wikidata. Born and fights out of the USA; UFC lists her as USA."
+  },
+  "Aleksandar Rakic": {
+    "iso2": "at",
+    "country_qid": "Q40",
+    "note": "Serbian-Austrian; competes for Austria. UFC lists him as AUT."
   }
 }
