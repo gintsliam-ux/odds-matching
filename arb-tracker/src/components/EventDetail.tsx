@@ -331,9 +331,20 @@ function MarketRows({
           >
             <td className={`sticky left-0 z-10 px-3 py-2 text-slate-200 ${cellBg}`}>
               <span className="flex items-center gap-2">
-                {row.team && (
+                {row.team ? (
                   <TeamLogo name={row.team} size={18} country={countryFor(row.team)} />
-                )}
+                ) : row.label === 'Draw' ? (
+                  // The draw outcome has no team — a soccer ball stands in, sized
+                  // to match the team crests either side of it.
+                  <img
+                    src="/logos/leagues/soccer.png"
+                    alt="Draw"
+                    width={18}
+                    height={18}
+                    className="inline-block shrink-0 object-contain"
+                    style={{ width: 18, height: 18 }}
+                  />
+                ) : null}
                 {row.label}
                 {row.isMain && row.groupStart && (
                   <span className="rounded bg-emerald-500/20 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-300">
