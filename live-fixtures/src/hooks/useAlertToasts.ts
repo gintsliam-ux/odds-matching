@@ -62,6 +62,9 @@ export function useAlertToasts(notifications: Notification[]): {
   const [toasts, setToasts] = useState<AlertToast[]>([])
   const [dismissed, setDismissed] = useState<Set<string>>(new Set())
   const audioCtxRef = useRef<AudioContext | null>(null)
+  /** Ids already queued. Authoritative and updated synchronously below, so
+   *  freshness can be decided OUTSIDE the state updater. */
+  const queuedRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     const open = notifications.filter(
@@ -72,17 +75,24 @@ export function useAlertToasts(notifications: Notification[]): {
         n.kind === 'mybet_late_bet',
     )
     const openIds = new Set(open.map((n) => n.id))
+
+    // Decide what's new BEFORE touching state. The chime used to be played
+    // inside the setToasts updater, which React may invoke more than once —
+    // StrictMode double-invokes updaters in dev, and concurrent rendering can
+    // re-run them — so the alert could sound twice, or sound on a render that
+    // was then discarded. Updaters must stay pure.
+    const fresh: AlertToast[] = []
+    for (const n of open) {
+      if (queuedRef.current.has(n.id) || dismissed.has(n.id)) continue
+      queuedRef.current.add(n.id)
+      fresh.push({ id: n.id, notification: n, firedAt: Date.now(), resolvedAt: null })
+    }
+
     setToasts((prev) => {
-      const seen = new Set(prev.map((t) => t.id))
-      const fresh: AlertToast[] = []
-      for (const n of open) {
-        if (seen.has(n.id) || dismissed.has(n.id)) continue
-        fresh.push({ id: n.id, notification: n, firedAt: Date.now(), resolvedAt: null })
-      }
       // Mark previously-firing toasts as resolved when they leave the open
-      // set, but keep them in the array so the operator sees what happened
-      // until they hit X. Once a toast is resolved its row stays static —
-      // toggling back if SWIFT briefly re-flaps to prematch isn't reflected.
+      // set, but keep them so the operator sees what happened until they hit
+      // X. Once resolved a row stays static — a brief re-flap back to prematch
+      // isn't reflected.
       let changed = fresh.length > 0
       const updated = prev.map((t) => {
         if (t.resolvedAt) return t
@@ -92,15 +102,18 @@ export function useAlertToasts(notifications: Notification[]): {
         }
         return t
       })
-      // Critical: return existing ref when nothing changed — otherwise the
-      // hook caused an infinite-render loop that locked all routing.
+      // Return the existing ref when nothing changed — otherwise this hook
+      // caused an infinite-render loop that locked all routing.
       if (!changed) return prev
-      if (fresh.length > 0) playChime(audioCtxRef)
       return [...updated, ...fresh]
     })
+
+    // Side effect, now outside the updater: one chime per batch of new alerts.
+    if (fresh.length > 0) playChime(audioCtxRef)
   }, [notifications, dismissed])
 
   const dismiss = (id: string) => {
+    queuedRef.current.delete(id)
     setDismissed((prev) => {
       const next = new Set(prev)
       next.add(id)
@@ -110,6 +123,7 @@ export function useAlertToasts(notifications: Notification[]): {
   }
 
   const dismissAll = () => {
+    for (const t of toasts) queuedRef.current.delete(t.id)
     setDismissed((prev) => {
       const next = new Set(prev)
       for (const t of toasts) next.add(t.id)
