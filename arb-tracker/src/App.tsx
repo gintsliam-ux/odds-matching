@@ -31,6 +31,41 @@ function localDay(value: string | number | Date): string {
   ).padStart(2, '0')}`;
 }
 
+// Filters survive a page refresh via localStorage. `dateTouched` distinguishes
+// "still on the auto-today default" (rolls forward to today on a new day) from
+// a date the user actually picked or cleared (restored exactly).
+const FILTERS_KEY = 'arb-tracker.filters.v1';
+interface StoredFilters {
+  sport: string[];
+  league: string[];
+  date: string;
+  dateTouched: boolean;
+}
+
+let cachedFilters: StoredFilters | null = null;
+function initialFilters(): StoredFilters {
+  if (cachedFilters) return cachedFilters;
+  const today = localDay(Date.now());
+  const fallback: StoredFilters = { sport: [], league: [], date: today, dateTouched: false };
+  try {
+    const raw = localStorage.getItem(FILTERS_KEY);
+    if (raw) {
+      const s = JSON.parse(raw) as Partial<StoredFilters>;
+      cachedFilters = {
+        sport: Array.isArray(s.sport) ? s.sport : [],
+        league: Array.isArray(s.league) ? s.league : [],
+        date: s.dateTouched ? (s.date ?? '') : today,
+        dateTouched: !!s.dateTouched,
+      };
+      return cachedFilters;
+    }
+  } catch {
+    // corrupt/unavailable storage — fall through to defaults
+  }
+  cachedFilters = fallback;
+  return fallback;
+}
+
 export default function App() {
   const navigate = useNavigate();
   const match = useMatch('/event/:slug/:fixtureId');
@@ -82,12 +117,30 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  // --- filters ---
-  const [sportSel, setSportSel] = useState<string[]>([]);
-  const [leagueSel, setLeagueSel] = useState<string[]>([]);
+  // --- filters (restored from localStorage so they survive a refresh) ---
+  const [sportSel, setSportSel] = useState<string[]>(() => initialFilters().sport);
+  const [leagueSel, setLeagueSel] = useState<string[]>(() => initialFilters().league);
   // The rail is a single day's board — default to today. Clearing the pill
   // widens it back to every fixture we hold.
-  const [date, setDate] = useState(() => localDay(Date.now()));
+  const [date, setDate] = useState(() => initialFilters().date);
+  const [dateTouched, setDateTouched] = useState(() => initialFilters().dateTouched);
+
+  // Persist filters whenever they change.
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        FILTERS_KEY,
+        JSON.stringify({ sport: sportSel, league: leagueSel, date, dateTouched }),
+      );
+    } catch {
+      // storage unavailable — filters just won't persist
+    }
+  }, [sportSel, leagueSel, date, dateTouched]);
+
+  function handleDate(v: string) {
+    setDate(v);
+    setDateTouched(true);
+  }
 
   // Below md the rail is a drawer, hidden until the logo opens it; from md up
   // it's always in-flow and this flag is inert (md: styles override it).
@@ -270,7 +323,7 @@ export default function App() {
           <div className="shrink-0 border-b border-surface-border p-3">
             <FilterBar
               date={date}
-              onDate={setDate}
+              onDate={handleDate}
               sportSel={sportSel}
               sportOptions={sportOptions}
               onSport={handleSport}
