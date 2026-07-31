@@ -79,6 +79,12 @@ function configForLeagueId(leagueId: string): SportConfig | undefined {
   return SPORTS.find((s) => s.key === leagueId);
 }
 
+// Words to fully uppercase rather than title-case in league/competition names.
+const ACRONYMS = new Set(['usa', 'uae', 'uk', 'uefa', 'conmebol', 'efl', 'mls', 'dc', 'fc']);
+const capWord = (w: string) =>
+  !w ? w : ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1);
+const capWords = (s: string) => s.split('_').map(capWord).join(' ');
+
 /**
  * Human-readable subtitle. Slug-style values (soccer's "england_-_premier_league")
  * become "England · Premier League"; already-readable ones (tennis tournaments)
@@ -86,14 +92,33 @@ function configForLeagueId(leagueId: string): SportConfig | undefined {
  */
 function prettySubtitle(raw: string): string {
   if (!raw.includes('_')) return raw;
-  const cap = (w: string) => (w ? w[0].toUpperCase() + w.slice(1) : w);
-  return raw
-    .split('_-_')
-    .map((part) => part.split('_').map(cap).join(' '))
-    .join(' · ');
+  return raw.split('_-_').map(capWords).join(' · ');
 }
 
-function leagueFor(cfg: SportConfig): League {
+/** Split a soccer competition slug into its country and competition names. */
+function competitionParts(slug: string): { country: string; competition: string } {
+  const parts = slug.split('_-_');
+  return parts.length >= 2
+    ? { country: capWords(parts[0]), competition: capWords(parts.slice(1).join('_-_')) }
+    : { country: '', competition: capWords(slug) };
+}
+
+/**
+ * The league shown on the badge. Soccer is special: `id` stays 'soccer' (so
+ * markets/books still resolve), but the name and logo come from the specific
+ * competition, so an EPL game shows the Premier League crest, not a generic ball.
+ */
+function leagueFor(cfg: SportConfig, competition?: string | null): League {
+  if (cfg.key === 'soccer' && competition) {
+    const { competition: name } = competitionParts(competition);
+    return {
+      id: 'soccer',
+      name,
+      code: 'SOC',
+      sport: 'Soccer',
+      logoUrl: `/logos/soccer/${competition}.png`,
+    };
+  }
   return {
     id: cfg.key,
     name: cfg.league,
@@ -201,14 +226,19 @@ export async function fetchAllEvents(): Promise<SportEvent[]> {
         return {
           id: r.fixture_id,
           sport: sp.sport,
-          league: leagueFor(sp),
+          league: leagueFor(sp, r.league),
           name: `${r.home_team} vs ${r.away_team}`,
-          subtitle: (() => {
-            const raw = sp.subtitleColumn
-              ? (r as unknown as Record<string, unknown>)[sp.subtitleColumn]
-              : null;
-            return raw ? prettySubtitle(String(raw)) : undefined;
-          })(),
+          // Soccer's competition is now the badge/name, so its subtitle is just
+          // the country (disambiguates e.g. Italy vs Brazil "Serie A").
+          subtitle:
+            sp.key === 'soccer'
+              ? competitionParts(String(r.league ?? '')).country || undefined
+              : (() => {
+                  const raw = sp.subtitleColumn
+                    ? (r as unknown as Record<string, unknown>)[sp.subtitleColumn]
+                    : null;
+                  return raw ? prettySubtitle(String(raw)) : undefined;
+                })(),
           home: r.home_team,
           away: r.away_team,
           homeCountry: countries.get(r.home_team) ?? null,
