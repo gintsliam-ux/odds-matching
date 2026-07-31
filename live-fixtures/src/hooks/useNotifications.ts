@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchOverdueUpcomingFixtures } from '../lib/dataSource'
 import { fetchEventMappingsFor } from '../lib/mappingData'
-import { getSwiftCatalog, type SwiftEvent } from '../lib/swiftCatalog'
 import { fetchSwiftStatuses } from '../lib/swiftStatus'
-import { getMybetCatalog, type MybetEvent } from '../lib/mybetCatalog'
 import { fetchMybetStatuses } from '../lib/mybetStatus'
 import { fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
 import { fetchMybetBets } from '../lib/mybetBets'
@@ -105,36 +103,28 @@ export function useNotifications(fixtures: Fixture[]): {
   loading: boolean
 } {
   const [eventMap, setEventMap] = useState<Map<string, string>>(new Map())
-  const [swiftSnapshot, setSwiftSnapshot] = useState<Map<string, SwiftEvent>>(new Map())
+  /** id → live name, from the same poll that fetches status. Replaces the old
+   *  /public snapshot, which no longer carries events at all. */
+  const [swiftNames, setSwiftNames] = useState<Map<string, string | null>>(new Map())
   const [liveStatus, setLiveStatus] = useState<Map<string, string | null>>(new Map())
   const [overdueExtras, setOverdueExtras] = useState<Fixture[]>([])
   const [loading, setLoading] = useState(true)
   // mybet parallel state: optic→mybet id map, snapshot (suspendAt fallback),
   // and a live open/suspend map polled for started fixtures.
   const [mybetMap, setMybetMap] = useState<Map<string, string>>(new Map())
-  const [mybetSnapshot, setMybetSnapshot] = useState<Map<string, MybetEvent>>(new Map())
-  const [mybetLive, setMybetLive] = useState<Map<string, { open: boolean; suspendAt: string | null }>>(new Map())
+  const [mybetLive, setMybetLive] = useState<
+    Map<string, { open: boolean; suspendAt: string | null; name: string | null }>
+  >(new Map())
   // Late bets: fixtures where a bet landed AFTER OPTIC went live, per brand.
   const [lateBets, setLateBets] = useState<Map<string, LateAgg>>(new Map())
 
-  // Mapping + SWIFT/mybet snapshots — refresh once a minute.
+  // The catalogues used to be polled here once a minute for their eventById
+  // snapshots. They no longer carry events at all — names and suspend times now
+  // come from the live status polls below, which are per-fixture and current.
+  // Keeping the call would have been two API requests a minute for two maps
+  // that are always empty.
   useEffect(() => {
-    let alive = true
-    const load = () => {
-      // Catalogues only — the event mappings load separately, scoped to the
-      // fixtures we actually consult (see the effect below `allFixtures`).
-      Promise.all([getSwiftCatalog(), getMybetCatalog().catch(() => null)])
-        .then(([cat, mybetCat]) => {
-          if (!alive) return
-          setSwiftSnapshot(cat.eventById)
-          if (mybetCat) setMybetSnapshot(mybetCat.eventById)
-        })
-        .catch(() => {/* keep previous */})
-        .finally(() => alive && setLoading(false))
-    }
-    load()
-    const id = setInterval(load, 60_000)
-    return () => { alive = false; clearInterval(id) }
+    setLoading(false)
   }, [])
 
   // Overdue upcoming OPTIC fixtures — single PostgREST call, every minute.
@@ -229,6 +219,11 @@ export function useNotifications(fixtures: Fixture[]): {
           for (const r of rows) next.set(r.id, r.status)
           return next
         })
+        setSwiftNames((prev) => {
+          const next = new Map(prev)
+          for (const r of rows) next.set(r.id, r.name ?? null)
+          return next
+        })
       } catch {/* keep previous */}
       finally { pollingRef.current = false }
     }
@@ -271,7 +266,7 @@ export function useNotifications(fixtures: Fixture[]): {
         const rows = await fetchMybetStatuses(mybetPollIds)
         setMybetLive((prev) => {
           const next = new Map(prev)
-          for (const r of rows) next.set(r.id, { open: r.open, suspendAt: r.suspendAt })
+          for (const r of rows) next.set(r.id, { open: r.open, suspendAt: r.suspendAt, name: r.name ?? null })
           return next
         })
       } catch {/* keep previous */}
@@ -343,7 +338,7 @@ export function useNotifications(fixtures: Fixture[]): {
           const mid = mybetMap.get(f.id)
           if (mid) {
             try {
-              const suspendAt = mybetSnapshot.get(mid)?.suspendAt ?? mybetLive.get(mid)?.suspendAt ?? null
+              const suspendAt = mybetLive.get(mid)?.suspendAt ?? null
               const mbets = await fetchMybetBets({ eventId: mid, suspendAt, home: f.homeName, away: f.awayName, liveAt })
               const late = mbets.filter((b) => b.placed_after_live)
               if (late.length) {
@@ -386,13 +381,13 @@ export function useNotifications(fixtures: Fixture[]): {
 
     for (const f of allFixtures) {
       const sid = eventMap.get(f.id) ?? null
-      const swiftEvent = sid ? swiftSnapshot.get(sid) : null
+      const swiftEventName = sid ? swiftNames.get(sid) ?? null : null
       const swiftStatus = sid
         ? liveStatus.has(sid)
           ? liveStatus.get(sid) ?? null
           : pollIdsSet.has(sid)
             ? null // pending first poll — don't fall back to stale snapshot
-            : swiftEvent?.status ?? null
+            : null
         : null
 
       const base = {
@@ -406,7 +401,7 @@ export function useNotifications(fixtures: Fixture[]): {
         opticActualStart: f.actualStart,
         opticStatus: f.status,
         swiftStatus,
-        swiftEventName: swiftEvent?.name ?? null,
+        swiftEventName,
       }
 
       // The trigger is OPTIC turning LIVE (the truth signal) — not merely the
@@ -430,8 +425,7 @@ export function useNotifications(fixtures: Fixture[]): {
       const mid = mybetMap.get(f.id) ?? null
       if (mid) {
         const live = mybetLive.get(mid)
-        const snap = mybetSnapshot.get(mid)
-        const suspendAt = live?.suspendAt ?? snap?.suspendAt ?? null
+        const suspendAt = live?.suspendAt ?? null
         const mybetOpen = live ? live.open : suspendAt ? Date.parse(suspendAt) > nowMs : false
         if (mybetOpen && opticLive && pastGrace) {
           out.push({
@@ -439,7 +433,7 @@ export function useNotifications(fixtures: Fixture[]): {
             kind: 'mybet_still_open',
             ...base,
             mybetEventId: mid,
-            mybetEventName: snap?.name ?? null,
+            mybetEventName: live?.name ?? null,
             mybetSuspendAt: suspendAt,
           })
         }
@@ -456,7 +450,7 @@ export function useNotifications(fixtures: Fixture[]): {
           kind: 'mybet_late_bet',
           ...base,
           mybetEventId: mid,
-          mybetEventName: mybetSnapshot.get(mid ?? '')?.name ?? null,
+          mybetEventName: mid ? mybetLive.get(mid)?.name ?? null : null,
           lateBetCount: late.mybet.count,
           lateBetStake: late.mybet.stake,
           lateBets: late.mybet.bets,
@@ -471,7 +465,7 @@ export function useNotifications(fixtures: Fixture[]): {
       }
     }
     return out
-  }, [allFixtures, eventMap, swiftSnapshot, liveStatus, pollIdsSet, mybetMap, mybetSnapshot, mybetLive, lateBets])
+  }, [allFixtures, eventMap, swiftNames, liveStatus, pollIdsSet, mybetMap, mybetLive, lateBets])
 
   return { notifications, loading }
 }
