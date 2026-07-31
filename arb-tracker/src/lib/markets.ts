@@ -29,8 +29,15 @@ const FANDUEL: Bookmaker = {
 
 // Columns are per-league so a brand that never prices a competition doesn't
 // leave a dead column behind (FanDuel prices MLB, not the AU footy codes).
+const BOOK = Object.fromEntries(BOOKMAKERS.map((b) => [b.id, b]));
 const LEAGUE_BOOKS: Record<string, Bookmaker[]> = {
   mlb: [...BOOKMAKERS, FANDUEL],
+  soccer: [...BOOKMAKERS, FANDUEL],
+  wnba: [...BOOKMAKERS, FANDUEL],
+  // US books only price these; the AU corporates don't cover them yet.
+  nfl: [BOOK.sportsbet, BOOK.tab, BOOK.tabtouch, FANDUEL],
+  ncaaf: [BOOK.sportsbet, BOOK.tab, BOOK.tabtouch, FANDUEL],
+  ufc: [BOOK.bet365, BOOK.sportsbet, BOOK.tab, BOOK.tabtouch, FANDUEL],
 };
 
 export function booksFor(leagueId: string): Bookmaker[] {
@@ -194,10 +201,30 @@ const TENNIS_MARKETS: MarketDef[] = [
   { id: '1st_set_total_games', label: '1st Set — Total Games', kind: 'total' },
 ];
 
+// Soccer: 3-way result (the Draw rides through the h2h builder as an extra),
+// asian handicap, and goals lines.
+const SOCCER_MARKETS: MarketDef[] = [
+  { id: 'moneyline', label: 'Result', kind: 'h2h' },
+  { id: 'asian_handicap', label: 'Handicap', kind: 'spread' },
+  { id: 'total_goals', label: 'Total Goals', kind: 'total' },
+  { id: '1st_half_moneyline', label: '1st Half — Result', kind: 'h2h' },
+  { id: '1st_half_asian_handicap', label: '1st Half — Handicap', kind: 'spread' },
+  { id: '1st_half_total_goals', label: '1st Half — Total Goals', kind: 'total' },
+];
+
+// A UFC fight: who wins, and the rounds line.
+const UFC_MARKETS: MarketDef[] = [
+  { id: 'moneyline', label: 'Winner', kind: 'h2h' },
+  { id: 'total_rounds', label: 'Total Rounds', kind: 'total' },
+];
+
 const LEAGUE_MARKETS: Record<string, MarketDef[]> = {
   mlb: MLB_MARKETS,
   atp: TENNIS_MARKETS,
   wta: TENNIS_MARKETS,
+  soccer: SOCCER_MARKETS,
+  ufc: UFC_MARKETS,
+  // nfl / ncaaf / wnba use DEFAULT_MARKETS (h2h / point_spread / total_points).
 };
 
 const signed = (n: number) => (n > 0 ? `+${n}` : `${n}`);

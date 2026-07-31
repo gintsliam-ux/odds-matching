@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { SportEvent } from '../lib/types';
-import { countdownFor, effectiveStatus, TONE_CLASSES } from '../lib/countdown';
+import { countdownFor, effectiveStatus, PERIOD_PREFIX, TONE_CLASSES } from '../lib/countdown';
 import {
   BETFAIR,
   booksFor,
@@ -97,12 +97,9 @@ function ordinal(n: number): string {
 
 const isBaseball = (sport: string) => sport === 'Baseball';
 
-/** Period abbreviation per sport (Q for quarters, H for halves, S for sets). */
+/** Period abbreviation per sport (Q quarters, H halves, S sets, R rounds). */
 function periodPrefix(sport: string): string {
-  if (sport === 'Aussie Rules') return 'Q';
-  if (sport === 'Rugby League') return 'H';
-  if (sport === 'Tennis') return 'S';
-  return 'P';
+  return PERIOD_PREFIX[sport] ?? 'P';
 }
 
 /** Short label for a completed/current period: "Q3", "6th" for innings. */

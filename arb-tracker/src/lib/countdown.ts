@@ -70,6 +70,17 @@ export function countdownFor(event: SportEvent, now: number): Countdown {
  * "S2" (tennis sets), and baseball's half-inning as "Top 5" / "Mid 5" /
  * "Bot 5" / "End 5". Falls back to "LIVE" when no period is reported yet.
  */
+/** Period abbreviation per sport (Q quarters, H halves, S sets, R rounds). */
+export const PERIOD_PREFIX: Record<string, string> = {
+  'Aussie Rules': 'Q',
+  'Rugby League': 'H',
+  'American Football': 'Q',
+  Basketball: 'Q',
+  Soccer: 'H',
+  MMA: 'R',
+  Tennis: 'S',
+};
+
 export function livePositionLabel(event: SportEvent): string {
   const { sport, period, clock } = event;
   if (period == null) return 'LIVE';
@@ -79,15 +90,7 @@ export function livePositionLabel(event: SportEvent): string {
     const half = abbr ? abbr.charAt(0).toUpperCase() + abbr.slice(1).toLowerCase() : '';
     return half ? `${half} ${period}` : `${period}`;
   }
-  const prefix =
-    sport === 'Aussie Rules'
-      ? 'Q'
-      : sport === 'Rugby League'
-        ? 'H'
-        : sport === 'Tennis'
-          ? 'S'
-          : 'P';
-  return `${prefix}${period}`;
+  return `${PERIOD_PREFIX[sport] ?? 'P'}${period}`;
 }
 
 export const TONE_CLASSES: Record<CountdownTone, string> = {

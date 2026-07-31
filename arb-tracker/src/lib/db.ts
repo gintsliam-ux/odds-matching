@@ -16,12 +16,43 @@ export interface SportConfig {
   where?: { column: string; value: string };
   /** Extra events columns this table carries, e.g. tennis's `tournament`. */
   extraColumns?: string;
+  /** Column whose value becomes the event's subtitle (tournament, competition). */
+  subtitleColumn?: string;
 }
 
 export const SPORTS: SportConfig[] = [
   { key: 'afl', league: 'AFL', sport: 'Aussie Rules', eventsTable: 'afl_events', oddsTable: 'afl_odds' },
   { key: 'nrl', league: 'NRL', sport: 'Rugby League', eventsTable: 'nrl_events', oddsTable: 'nrl_odds' },
   { key: 'mlb', league: 'MLB', sport: 'Baseball', eventsTable: 'mlb_events', oddsTable: 'mlb_odds' },
+  { key: 'wnba', league: 'WNBA', sport: 'Basketball', eventsTable: 'wnba_events', oddsTable: 'wnba_odds' },
+  { key: 'ufc', league: 'UFC', sport: 'MMA', eventsTable: 'ufc_events', oddsTable: 'ufc_odds' },
+  // American football shares football_events across NFL + college, split by league.
+  {
+    key: 'nfl',
+    league: 'NFL',
+    sport: 'American Football',
+    eventsTable: 'football_events',
+    oddsTable: 'football_odds',
+    where: { column: 'league', value: 'nfl' },
+  },
+  {
+    key: 'ncaaf',
+    league: 'NCAAF',
+    sport: 'American Football',
+    eventsTable: 'football_events',
+    oddsTable: 'football_odds',
+    where: { column: 'league', value: 'ncaaf' },
+  },
+  // Soccer is one umbrella; the specific competition rides in the subtitle.
+  {
+    key: 'soccer',
+    league: 'Soccer',
+    sport: 'Soccer',
+    eventsTable: 'soccer_events',
+    oddsTable: 'soccer_odds',
+    extraColumns: 'league',
+    subtitleColumn: 'league',
+  },
   {
     key: 'atp',
     league: 'ATP',
@@ -30,6 +61,7 @@ export const SPORTS: SportConfig[] = [
     oddsTable: 'tennis_odds',
     where: { column: 'category', value: 'ATP' },
     extraColumns: 'tournament',
+    subtitleColumn: 'tournament',
   },
   {
     key: 'wta',
@@ -39,11 +71,26 @@ export const SPORTS: SportConfig[] = [
     oddsTable: 'tennis_odds',
     where: { column: 'category', value: 'WTA' },
     extraColumns: 'tournament',
+    subtitleColumn: 'tournament',
   },
 ];
 
 function configForLeagueId(leagueId: string): SportConfig | undefined {
   return SPORTS.find((s) => s.key === leagueId);
+}
+
+/**
+ * Human-readable subtitle. Slug-style values (soccer's "england_-_premier_league")
+ * become "England · Premier League"; already-readable ones (tennis tournaments)
+ * pass through untouched.
+ */
+function prettySubtitle(raw: string): string {
+  if (!raw.includes('_')) return raw;
+  const cap = (w: string) => (w ? w[0].toUpperCase() + w.slice(1) : w);
+  return raw
+    .split('_-_')
+    .map((part) => part.split('_').map(cap).join(' '))
+    .join(' · ');
 }
 
 function leagueFor(cfg: SportConfig): League {
@@ -83,8 +130,9 @@ interface EventRowDB {
   home_team: string;
   away_team: string;
   status: string | null;
-  /** Tennis only — the event the match belongs to. */
+  /** Optional subtitle sources: tennis's tournament, soccer's competition. */
   tournament?: string | null;
+  league?: string | null;
   home_score: number | null;
   away_score: number | null;
   scores: { home?: PeriodBag | null; away?: PeriodBag | null } | null;
@@ -155,7 +203,12 @@ export async function fetchAllEvents(): Promise<SportEvent[]> {
           sport: sp.sport,
           league: leagueFor(sp),
           name: `${r.home_team} vs ${r.away_team}`,
-          subtitle: r.tournament ?? undefined,
+          subtitle: (() => {
+            const raw = sp.subtitleColumn
+              ? (r as unknown as Record<string, unknown>)[sp.subtitleColumn]
+              : null;
+            return raw ? prettySubtitle(String(raw)) : undefined;
+          })(),
           home: r.home_team,
           away: r.away_team,
           homeCountry: countries.get(r.home_team) ?? null,
