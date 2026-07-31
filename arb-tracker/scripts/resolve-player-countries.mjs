@@ -58,17 +58,72 @@ function env() {
   return { url, anon, service };
 }
 
+/**
+ * Fetch returning parsed JSON, resilient enough for an unattended scheduled run.
+ * Retries with backoff on network errors, 429/5xx, AND on an empty or unparseable
+ * body from a call that should return one (a transient upstream hiccup can answer
+ * a 200 with no body). A write (non-GET) that comes back 2xx-with-no-body is a
+ * success, not a retry — upserts reply `return=minimal`.
+ */
+async function fetchJson(url, { headers, method, body, label } = {}) {
+  const expectBody = !method || method === 'GET';
+  let wait = 2000;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const last = attempt === 5;
+    const retry = async (why) => {
+      if (last) throw new Error(`${label}: ${why} after ${attempt} attempts`);
+      await sleep(wait);
+      wait *= 2;
+    };
+    let r;
+    try {
+      r = await fetch(url, { method, headers, body });
+    } catch (e) {
+      await retry(`network error (${e.message})`);
+      continue;
+    }
+    if (r.status === 204) return null;
+    const text = await r.text();
+    if (r.ok) {
+      if (!text) {
+        if (!expectBody) return null; // write succeeded, no body expected
+        await retry('empty body');
+        continue;
+      }
+      try {
+        return JSON.parse(text);
+      } catch {
+        await retry('unparseable body');
+        continue;
+      }
+    }
+    if (r.status !== 429 && r.status < 500) {
+      let msg = text.slice(0, 160);
+      try {
+        msg = JSON.parse(text).message ?? msg;
+      } catch {
+        // non-JSON error body — use the raw text
+      }
+      throw new Error(`${label} ${r.status}: ${msg}`);
+    }
+    const retryAfter = Number(r.headers.get('retry-after')) * 1000;
+    if (last) throw new Error(`${label} ${r.status} after ${attempt} attempts`);
+    await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : wait);
+    wait *= 2;
+  }
+  throw new Error(`${label}: unreachable`);
+}
+
 async function rest(path, init) {
   const { url, anon, service } = env();
-  const key = init?.method && init.method !== 'GET' ? (service ?? anon) : anon;
-  const r = await fetch(`${url}/rest/v1/${path}`, {
-    ...init,
+  const method = init?.method ?? 'GET';
+  const key = method !== 'GET' ? (service ?? anon) : anon;
+  return fetchJson(`${url}/rest/v1/${path}`, {
+    method,
     headers: { apikey: key, Authorization: `Bearer ${key}`, ...init?.headers },
+    body: init?.body,
+    label: path,
   });
-  if (r.status === 204) return null;
-  const body = await r.json();
-  if (!r.ok) throw new Error(`${path}: ${body.message ?? r.status}`);
-  return body;
 }
 
 /**
@@ -92,39 +147,19 @@ async function upsert(rows) {
   return true;
 }
 
-/**
- * Wikidata throttles hard (429) if you re-run this a few times in a row, so
- * every call backs off and retries rather than losing a half-finished batch.
- */
-async function fetchRetry(url, headers, label) {
-  let wait = 2000;
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    const r = await fetch(url, { headers });
-    if (r.ok) return r;
-    if (r.status !== 429 && r.status < 500) {
-      throw new Error(`${label} ${r.status}: ${(await r.text()).slice(0, 160)}`);
-    }
-    if (attempt === 5) throw new Error(`${label} ${r.status} after ${attempt} attempts`);
-    const retryAfter = Number(r.headers.get('retry-after')) * 1000;
-    await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : wait);
-    wait *= 2;
-  }
-  throw new Error(`${label}: unreachable`);
-}
-
+// Wikidata throttles hard (429) if you re-run this a few times in a row — the
+// backoff in fetchJson rather than losing a half-finished batch.
 async function sparql(query) {
-  const r = await fetchRetry(
-    `${SPARQL}?format=json&query=${encodeURIComponent(query)}`,
-    { 'User-Agent': UA, Accept: 'application/sparql-results+json' },
-    'SPARQL',
-  );
-  return (await r.json()).results.bindings;
+  const j = await fetchJson(`${SPARQL}?format=json&query=${encodeURIComponent(query)}`, {
+    headers: { 'User-Agent': UA, Accept: 'application/sparql-results+json' },
+    label: 'SPARQL',
+  });
+  return j.results.bindings;
 }
 
 async function wdApi(params) {
   const qs = new URLSearchParams({ format: 'json', origin: '*', ...params });
-  const r = await fetchRetry(`${WD_API}?${qs}`, { 'User-Agent': UA }, 'wikidata api');
-  return r.json();
+  return fetchJson(`${WD_API}?${qs}`, { headers: { 'User-Agent': UA }, label: 'wikidata api' });
 }
 
 /** Every distinct competitor on the tennis and UFC boards (both fly flags). */
