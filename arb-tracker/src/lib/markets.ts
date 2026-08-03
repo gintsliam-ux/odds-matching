@@ -9,39 +9,45 @@ export interface Bookmaker {
   logoUrl?: string;
 }
 
-// Fixed-odds bookmaker columns. `id` matches the odds table `sportsbook`.
+// The core fixed-odds columns, shown for every sport in this order. `id`
+// matches the odds table `sportsbook`.
 export const BOOKMAKERS: Bookmaker[] = [
-  { id: 'bet365', name: 'Bet365', color: '#059669', mark: '365', logoUrl: '/logos/brands/bet365.png' },
-  { id: 'sportsbet', name: 'Sportsbet', color: '#2563eb', mark: 'SP', logoUrl: '/logos/brands/sportsbet.png' },
-  { id: 'ladbrokes_australia', name: 'Ladbrokes', color: '#dc2626', mark: 'LAD', logoUrl: '/logos/brands/ladbrokes_australia.png' },
-  { id: 'tab', name: 'TAB', color: '#009845', mark: 'TAB', logoUrl: '/logos/brands/tab.png' },
-  { id: 'tabtouch', name: 'TABtouch', color: '#5b2d8e', mark: 'TT', logoUrl: '/logos/brands/tabtouch.png' },
   { id: 'pinnacle', name: 'Pinnacle', color: '#c81e1e', mark: 'PIN', logoUrl: '/logos/brands/pinnacle.png' },
+  { id: 'tab', name: 'TAB', color: '#009845', mark: 'TAB', logoUrl: '/logos/brands/tab.png' },
+  { id: 'sportsbet', name: 'Sportsbet', color: '#2563eb', mark: 'SP', logoUrl: '/logos/brands/sportsbet.png' },
+  { id: 'bet365', name: 'Bet365', color: '#059669', mark: '365', logoUrl: '/logos/brands/bet365.png' },
+  { id: 'tabtouch', name: 'TABtouch', color: '#5b2d8e', mark: 'TT', logoUrl: '/logos/brands/tabtouch.png' },
+  { id: 'ladbrokes_australia', name: 'Ladbrokes', color: '#dc2626', mark: 'LAD', logoUrl: '/logos/brands/ladbrokes_australia.png' },
 ];
 
-const FANDUEL: Bookmaker = {
-  id: 'fanduel',
-  name: 'FanDuel',
-  color: '#1493ff',
-  mark: 'FD',
-  logoUrl: '/logos/brands/fanduel.png',
-};
+// Optional books that only some sports fetch — shown as a column only when the
+// event actually prices them, so a sport that never fetches one has no dead
+// column. Appended after the core books, in this order.
+const OPTIONAL_BOOKS: Bookmaker[] = [
+  { id: 'fanduel', name: 'FanDuel', color: '#1493ff', mark: 'FD', logoUrl: '/logos/brands/fanduel.png' },
+];
 
-// Columns are per-league so a brand that never prices a competition doesn't
-// leave a dead column behind (FanDuel prices MLB, not the AU footy codes).
-const BOOK = Object.fromEntries(BOOKMAKERS.map((b) => [b.id, b]));
-const LEAGUE_BOOKS: Record<string, Bookmaker[]> = {
-  mlb: [...BOOKMAKERS, FANDUEL],
-  soccer: [...BOOKMAKERS, FANDUEL],
-  wnba: [...BOOKMAKERS, FANDUEL],
-  // US books only price these; the AU corporates don't cover them yet.
-  nfl: [BOOK.sportsbet, BOOK.tab, BOOK.tabtouch, FANDUEL],
-  ncaaf: [BOOK.sportsbet, BOOK.tab, BOOK.tabtouch, FANDUEL],
-  ufc: [BOOK.bet365, BOOK.sportsbet, BOOK.tab, BOOK.tabtouch, FANDUEL],
-};
+/** Book ids that have a takeable (non-lay) price somewhere in these rows. */
+function booksWithOdds(rows: OddsRow[]): Set<string> {
+  const present = new Set<string>();
+  for (const r of rows) {
+    if (!r.is_lay && (r.current_price ?? r.open_price) != null) present.add(r.sportsbook);
+  }
+  return present;
+}
 
-export function booksFor(leagueId: string): Bookmaker[] {
-  return LEAGUE_BOOKS[leagueId] ?? BOOKMAKERS;
+/**
+ * The book columns for one event, in display order. Core books always appear;
+ * optional books only when this event prices them. Then within that set, books
+ * that have no odds for this event are pushed to the far right, so the columns
+ * that actually priced the game group together on the left.
+ */
+export function eventBooks(rows: OddsRow[]): Bookmaker[] {
+  const present = booksWithOdds(rows);
+  const eligible = [...BOOKMAKERS, ...OPTIONAL_BOOKS.filter((b) => present.has(b.id))];
+  const has = eligible.filter((b) => present.has(b.id));
+  const missing = eligible.filter((b) => !present.has(b.id));
+  return [...has, ...missing];
 }
 
 // Betfair is the exchange. Back = `betfair_exchange_australia` (is_lay false),
@@ -56,7 +62,7 @@ export const BETFAIR: Bookmaker = {
 const BETFAIR_LAY_ID = 'betfair_exchange_australia_lay';
 
 const BY_ID: Record<string, Bookmaker> = Object.fromEntries(
-  [...BOOKMAKERS, FANDUEL, BETFAIR].map((b) => [b.id, b]),
+  [...BOOKMAKERS, ...OPTIONAL_BOOKS, BETFAIR].map((b) => [b.id, b]),
 );
 
 export function brandById(id: string): Bookmaker | undefined {
@@ -408,14 +414,20 @@ function ladderWindow(values: number[], main: number | null, radius: number): nu
  * H2H shows both teams; Spread/Total show the pick-'em main line plus five
  * lines either side, each with both outcomes (missing side => "–").
  */
+export interface BuiltMarkets {
+  groups: MarketGroup[];
+  /** Book columns in display order (no-odds books pushed to the far right). */
+  books: Bookmaker[];
+}
+
 export function buildMarkets(
   rows: OddsRow[],
   home: string,
   away: string,
   leagueId: string,
-): MarketGroup[] {
+): BuiltMarkets {
   const groups: MarketGroup[] = [];
-  const books = booksFor(leagueId);
+  const books = eventBooks(rows);
 
   for (const def of LEAGUE_MARKETS[leagueId] ?? DEFAULT_MARKETS) {
     const marketRows = rows.filter((r) => r.market_id === def.id);
@@ -484,5 +496,5 @@ export function buildMarkets(
     groups.push({ key: def.id, label: def.label, selections });
   }
 
-  return groups;
+  return { groups, books };
 }

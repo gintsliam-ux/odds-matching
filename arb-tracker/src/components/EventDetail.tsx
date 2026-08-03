@@ -3,9 +3,9 @@ import type { SportEvent } from '../lib/types';
 import { countdownFor, effectiveStatus, PERIOD_PREFIX, TONE_CLASSES } from '../lib/countdown';
 import {
   BETFAIR,
-  booksFor,
   brandById,
   isSuspended,
+  type Bookmaker,
   type MarketGroup,
   type PriceCell,
   type PriceDetail,
@@ -125,15 +125,16 @@ interface Props {
   event: SportEvent;
   now: number;
   markets: MarketGroup[];
+  /** Book columns in display order — computed per event by buildMarkets. */
+  books: Bookmaker[];
   loading: boolean;
 }
 
-export function EventDetail({ event, now, markets, loading }: Props) {
+export function EventDetail({ event, now, markets, books, loading }: Props) {
   const cd = countdownFor(event, now);
   const { home, away, homeScore, awayScore, periodScores } = event;
   const status = effectiveStatus(event, now);
   const hasScore = homeScore != null && awayScore != null;
-  const books = booksFor(event.league.id);
   const totalCols = FIXED_COLS + books.length;
   const [hover, setHover] = useState<HoverTarget | null>(null);
   // Selection labels carry a competitor name; map it back to its flag.

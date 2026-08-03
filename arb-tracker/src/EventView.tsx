@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { EventDetail } from './components/EventDetail';
 import { fetchOdds } from './lib/db';
-import { buildMarkets, type MarketGroup } from './lib/markets';
+import { buildMarkets, type Bookmaker, type MarketGroup } from './lib/markets';
 import { eventPath, eventSlug } from './lib/routing';
 import type { SportEvent } from './lib/types';
 
@@ -31,6 +31,7 @@ export default function EventView() {
   const selected = events.find((e) => e.id === fixtureId) ?? null;
 
   const [markets, setMarkets] = useState<MarketGroup[]>([]);
+  const [books, setBooks] = useState<Bookmaker[]>([]);
   const [oddsLoading, setOddsLoading] = useState(false);
 
   // Initial load for a newly selected event — the only time we show the loading
@@ -38,14 +39,17 @@ export default function EventView() {
   useEffect(() => {
     if (!selected) {
       setMarkets([]);
+      setBooks([]);
       return;
     }
     let cancelled = false;
     setOddsLoading(true);
     fetchOdds(selected)
       .then((rows) => {
-        if (!cancelled)
-          setMarkets(buildMarkets(rows, selected.home, selected.away, selected.league.id));
+        if (cancelled) return;
+        const built = buildMarkets(rows, selected.home, selected.away, selected.league.id);
+        setMarkets(built.groups);
+        setBooks(built.books);
       })
       .catch((e) => {
         if (!cancelled) {
@@ -70,8 +74,10 @@ export default function EventView() {
     const id = setInterval(() => {
       fetchOdds(selected)
         .then((rows) => {
-          if (!cancelled)
-            setMarkets(buildMarkets(rows, selected.home, selected.away, selected.league.id));
+          if (cancelled) return;
+          const built = buildMarkets(rows, selected.home, selected.away, selected.league.id);
+          setMarkets(built.groups);
+          setBooks(built.books);
         })
         .catch(() => {});
     }, 30_000);
@@ -90,7 +96,15 @@ export default function EventView() {
   }, [selected, slug, navigate]);
 
   if (selected) {
-    return <EventDetail event={selected} now={now} markets={markets} loading={oddsLoading} />;
+    return (
+      <EventDetail
+        event={selected}
+        now={now}
+        markets={markets}
+        books={books}
+        loading={oddsLoading}
+      />
+    );
   }
   if (!fixtureId) return <Placeholder text={eventsLoading ? 'Loading…' : 'Select an event'} />;
   if (eventsLoading) return <Placeholder text="Loading…" />;
