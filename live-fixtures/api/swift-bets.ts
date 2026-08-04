@@ -239,6 +239,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             bet_type: 1,
             odd: 1,
             pl: 1,
+            bet_status: 1,
             is_bonus: 1,
             'derived.event_key': 1,
             'derived.legs_event_keys': 1,
@@ -300,6 +301,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         bet_type: d.bet_type,
         odd: d.odd,
         pl: d.pl,
+        // SwiftBet's own settlement state, added to the feed 2026-07-31 and
+        // fully populated from 08-01: "paid" | "Unresulted" | "FullyRefunded" |
+        // "PartiallyRefunded" | "Rejected" | "Cancelled" | "Failed" |
+        // "Unsettled". Absent (not null) on anything older. Casing is
+        // inconsistent upstream — "paid" is lower-case, the rest PascalCase —
+        // so never compare it without normalising.
+        bet_status: (d.bet_status as string | null) ?? null,
         is_bonus: !!d.is_bonus,
         sport: d.derived?.sport ?? null,
         type: d.derived?.type ?? null,
