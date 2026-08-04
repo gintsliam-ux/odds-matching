@@ -6,7 +6,7 @@ import { DateBar } from '../components/DateBar'
 import { GridSkeleton } from '../components/Skeleton'
 import { useTerminal } from '../components/Layout'
 import { favouriteMatches, useFavourites } from '../lib/favourites'
-import { sportGroupKey, slugToSport } from '../lib/sports'
+import { prettySport, sportGroupKey, slugToSport } from '../lib/sports'
 import { useSportUniverse } from '../hooks/useSportUniverse'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { useMainScrollMemory } from '../hooks/useMainScrollMemory'
@@ -98,6 +98,26 @@ export default function Terminal() {
   const [sportPage, setSportPage] = useState(0)
   const [sportHasMore, setSportHasMore] = useState(false)
   const [sportLoadingMore, setSportLoadingMore] = useState(false)
+  /**
+   * What to query for the sport currently being viewed.
+   *
+   * `own` is only the slugs the feed already files under this sport; `leagues`
+   * carries every competition in the group, which is how the ones filed under
+   * another sport get picked up (cricket's One Day Cup arrives as soccer).
+   * Passing the foreign slugs as sports instead would drag that whole sport
+   * into the result set — see fetchFixturesBySport.
+   */
+  const sportQuery = useMemo(() => {
+    if (!sport) return null
+    const raws = universe.rawSportsAll.get(sport) ?? [universe.rawSport.get(sport) ?? sport]
+    const own = raws.filter((rs) => prettySport(rs) === sport)
+    const leagues: string[] = []
+    for (const [k, v] of universe.rawLeagueByGroup) {
+      if (k.slice(0, k.indexOf('|')) === sport && v) leagues.push(v)
+    }
+    return { raws: own.length ? own : raws, leagues }
+  }, [sport, universe])
+
   // Reset paging when the sport switches.
   useEffect(() => {
     setSportFallback(null)
@@ -106,10 +126,9 @@ export default function Terminal() {
     if (!sport || dateMode) return
     // Multiple raw slugs can resolve to one prettified sport (Rugby Union pulls
     // from rugby_union AND reclassified `rugby` rows).
-    const raws = universe.rawSportsAll.get(sport) ?? [universe.rawSport.get(sport) ?? sport]
     let alive = true
     setSportFallbackLoading(true)
-    fetchFixturesBySport(raws, 0)
+    fetchFixturesBySport(sportQuery?.raws ?? [sport], 0, sportQuery?.leagues ?? [])
       .then(({ rows, hasMore }) => {
         if (!alive) return
         setSportFallback(rows)
@@ -120,15 +139,18 @@ export default function Terminal() {
     return () => {
       alive = false
     }
-  }, [sport, dateMode, universe])
+  }, [sport, dateMode, sportQuery])
 
   const loadMoreSport = async () => {
     if (!sport || sportLoadingMore || !sportHasMore) return
     setSportLoadingMore(true)
     try {
-      const raws = universe.rawSportsAll.get(sport) ?? [universe.rawSport.get(sport) ?? sport]
       const next = sportPage + 1
-      const { rows, hasMore } = await fetchFixturesBySport(raws, next)
+      const { rows, hasMore } = await fetchFixturesBySport(
+        sportQuery?.raws ?? [sport],
+        next,
+        sportQuery?.leagues ?? [],
+      )
       setSportFallback((prev) => (prev ?? []).concat(rows))
       setSportPage(next)
       setSportHasMore(hasMore)
