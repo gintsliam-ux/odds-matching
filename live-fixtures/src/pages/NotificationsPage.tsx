@@ -90,8 +90,8 @@ export default function NotificationsPage() {
           <p className="mt-1.5 max-w-2xl text-[13px] leading-relaxed text-[color:var(--muted-2)]">
             Events where OPTIC has turned live but a book still has the market open
             (SwiftBet prematch, or mybet before its close time). Polled every 10s.
-            Plus finished events a book hasn't resulted 15+ minutes
-            after OPTIC called them over, re-checked every 2 min.
+            Plus finished events where a book still hasn't resulted this event's
+            leg 30+ minutes after OPTIC called them over, re-checked every 45s.
           </p>
         </div>
         {stillOpen > 0 && (
@@ -240,7 +240,7 @@ function NotificationRow({ n }: { n: Notification }) {
             <div className="flex flex-wrap items-center gap-1.5">
               <BrandPill brand={isMybet ? 'mybet' : 'swift'} />
               <span className="inline-flex items-center rounded bg-[color:var(--up)]/15 px-1.5 py-0.5 text-[11px] font-semibold text-[color:var(--up)]">
-                {n.unsettledCount} unresulted
+                {n.unsettledCount} legs unresulted
               </span>
               {n.unsettledStake ? (
                 <span className="tabular-nums text-[11px] text-gray-300">${n.unsettledStake.toFixed(2)} at stake</span>
@@ -248,7 +248,7 @@ function NotificationRow({ n }: { n: Notification }) {
             </div>
             {n.unsettledMultiCount ? (
               <div className="text-[11px] text-[color:var(--muted-2)]">
-                + {n.unsettledMultiCount} multi{n.unsettledMultiCount === 1 ? '' : 's'} waiting on another leg (not counted)
+                + {n.unsettledMultiCount} resulted here, bet still open on another game
               </div>
             ) : null}
             {isMybet
