@@ -80,9 +80,9 @@ type LateAgg = {
 }
 
 /**
- * Per-fixture unsettled aggregate. `count`/`stake` cover only bets whose ENTIRE
- * exposure is this game; `multi` counts pending bets still waiting on a leg in
- * another game.
+ * Per-fixture unsettled aggregate. `count`/`stake` cover bets the book should
+ * already have resulted (see shouldBeResulted); `multi` counts pending bets
+ * genuinely still waiting on a leg in another game.
  *
  * That split is the difference between a signal and noise. Of 116 bets left
  * pending on games that ended 1-4 days ago, 108 were multis with an unplayed
@@ -95,12 +95,28 @@ type UnsettledAgg = {
   mybet?: { count: number; stake: number; multi: number }
 }
 
-/** Does this bet's whole result rest on this one game? Singles do; so do Same
- *  Game Multis, whose legs are all this fixture. Both should settle the moment
- *  the game is resulted. A cross-game multi should not. */
-function settlesWithThisGame(b: SwiftBetRow | MybetBetRow): boolean {
+/**
+ * Should the book have resulted this bet by now, given this game is over?
+ *
+ * Yes in two cases:
+ *  - The bet's whole result rests on this game — a single, or a Same Game
+ *    Multi whose legs are all this fixture.
+ *  - A leg has already LOST. One lost leg kills a multi no matter what the
+ *    other legs do, so it's decided and there is nothing left to wait for.
+ *
+ * The second case is rare by design: SwiftBet already settles dead multis
+ * promptly, so `Unresulted` bets carrying a `Lost` leg number 0 over the last
+ * 5 days and 134 in the whole collection. That's the point — it adds no noise,
+ * and the handful it does catch are multis that are mathematically finished
+ * yet still sitting unresulted, which is exactly the anomaly worth surfacing.
+ *
+ * mybet legs carry no per-leg result, so only the first case applies there.
+ */
+function shouldBeResulted(b: SwiftBetRow | MybetBetRow): boolean {
   if ((b as MybetBetRow).sgm) return true
-  return (b.leg_count ?? 0) <= 1
+  if ((b.leg_count ?? 0) <= 1) return true
+  const legs = (b as SwiftBetRow).leg_breakdown
+  return !!legs?.some((l) => (l.result ?? '').toLowerCase().includes('los'))
 }
 
 /**
@@ -155,8 +171,10 @@ const SETTLE_GRACE_MIN = 15
 /** Don't look further back than this for unsettled games — the backlog doesn't
  *  converge on its own, so an unbounded window becomes a list nobody reads. */
 const UNSETTLED_MAX_AGE_H = 24
-/** Bets move slowly once a game is over; no need to re-read Mongo often. */
-const UNSETTLED_POLL_MS = 120_000
+/** Re-check cadence for the unsettled pass. Matches the late-bet pass so the
+ *  two bet reads stay on the same rhythm rather than beating against each
+ *  other, and so a book resulting an event clears the alert within a minute. */
+const UNSETTLED_POLL_MS = 45_000
 /** Cap the per-tick Mongo reads. The shared Atlas cluster also serves the
  *  user's scrapers, so this pass stays deliberately small. */
 const UNSETTLED_MAX_FIXTURES = 20
@@ -526,7 +544,7 @@ export function useNotifications(fixtures: Fixture[]): {
               // bet_status classify as 'unknown' and must never be read as
               // outstanding, or every pre-2026-07-31 game would alert forever.
               const pending = bets.filter((b) => betSettlement(b.bet_status) === 'pending')
-              const own = pending.filter(settlesWithThisGame)
+              const own = pending.filter(shouldBeResulted)
               if (own.length) {
                 entry.swift = {
                   count: own.length,
@@ -543,7 +561,7 @@ export function useNotifications(fixtures: Fixture[]): {
                 eventId: mid, suspendAt: f.scheduledStart, home: f.homeName, away: f.awayName,
               })
               const pending = mbets.filter((b) => mybetSettlement(b.bet_status) === 'pending')
-              const own = pending.filter(settlesWithThisGame)
+              const own = pending.filter(shouldBeResulted)
               if (own.length) {
                 entry.mybet = {
                   count: own.length,
