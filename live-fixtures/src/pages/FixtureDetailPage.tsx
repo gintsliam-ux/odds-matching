@@ -1966,6 +1966,9 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
   // Badge. SGM reflects its (possibly derived) overall result. A multi combines
   // ALL legs: this game's leg uses the resolved result above; sibling legs
   // (other games, not fetched here) fall back to their leg_breakdown summary.
+  const legLabels = (b.leg_breakdown ?? []).map((l, i) =>
+    i === b.matched_leg_index ? mainRes.label : normLabel(l.result),
+  )
   const mStatus: MultiStatus | null = isSgm
     ? mainRes.label === 'Won'
       ? 'Won'
@@ -1973,12 +1976,26 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
         ? 'Lost'
         : null
     : isMulti
-      ? statusFromLabels(
-          (b.leg_breakdown ?? []).map((l, i) =>
-            i === b.matched_leg_index ? mainRes.label : normLabel(l.result),
-          ),
-        )
+      ? statusFromLabels(legLabels)
       : null
+  // Is this badge the BOOK's word, or our own reading of the final score?
+  //
+  // When the book hasn't resulted a leg, resolveResult infers it from the
+  // score and flags `derived`. Without surfacing that, a bet could show a
+  // solid LOST next to PENDING and look self-contradictory — the book plainly
+  // hasn't lost it, since it hasn't resulted it at all. It isn't a
+  // contradiction: we can see it's dead, the book just hasn't processed it.
+  // Mark it so the row says that instead of implying the book did.
+  //
+  // A Lost decided by SOME OTHER leg is book data, so it isn't derived — only
+  // our inference about THIS game's leg is.
+  const lostByOtherLeg = legLabels.some((l, i) => i !== b.matched_leg_index && l === 'Lost')
+  const mDerived =
+    mStatus === 'Lost'
+      ? mainRes.derived && mainRes.label === 'Lost' && !lostByOtherLeg
+      : mStatus === 'Won'
+        ? mainRes.derived
+        : false
   return (
     <>
       <tr
@@ -2011,8 +2028,14 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
           {mStatus && (
             <div className="mt-1">
               <span
-                className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold ${MULTI_STATUS_BADGE[mStatus]}`}
+                className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold ${MULTI_STATUS_BADGE[mStatus]} ${mDerived ? 'italic opacity-80' : ''}`}
+                title={
+                  mDerived
+                    ? `Derived from the final score — the book has not resulted this leg yet, which is why it still shows as pending.`
+                    : undefined
+                }
               >
+                {mDerived ? '~' : ''}
                 {mStatus === 'Won' ? 'WON' : 'LOST'}
               </span>
             </div>
