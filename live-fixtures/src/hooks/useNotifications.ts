@@ -80,9 +80,9 @@ type LateAgg = {
 }
 
 /**
- * Per-fixture unsettled aggregate. `count`/`stake` cover bets the book should
- * already have resulted (see shouldBeResulted); `multi` counts pending bets
- * genuinely still waiting on a leg in another game.
+ * Per-fixture unsettled aggregate. `count`/`stake` cover bets whose leg for
+ * THIS event is still unresulted; `other` counts pending bets whose leg here
+ * IS resolved and which are simply waiting on a different game.
  *
  * That split is the difference between a signal and noise. Of 116 bets left
  * pending on games that ended 1-4 days ago, 108 were multis with an unplayed
@@ -91,32 +91,43 @@ type LateAgg = {
  * alert ~93% false positives.
  */
 type UnsettledAgg = {
-  swift?: { count: number; stake: number; multi: number }
-  mybet?: { count: number; stake: number; multi: number }
+  swift?: { count: number; stake: number; other: number }
+  mybet?: { count: number; stake: number; other: number }
 }
 
 /**
- * Should the book have resulted this bet by now, given this game is over?
+ * Has the book resulted THIS event's leg?
  *
- * Yes in two cases:
- *  - The bet's whole result rests on this game — a single, or a Same Game
- *    Multi whose legs are all this fixture.
- *  - A leg has already LOST. One lost leg kills a multi no matter what the
- *    other legs do, so it's decided and there is nothing left to wait for.
+ * The alert is per-event, so the question is about the one leg that IS this
+ * fixture — not the bet as a whole. SwiftBet results legs individually
+ * (`selections[].status`: Unresulted -> ResultedWin / ResultedLoss /
+ * FullyRefunded), so a cross-game multi can have this game's leg settled while
+ * the bet stays open on a game that hasn't kicked off. Measured on finished
+ * games: of 86 pending cross-game multis, 6 already had this event's leg
+ * resulted. Those are somebody else's game to worry about, not this event's.
  *
- * The second case is rare by design: SwiftBet already settles dead multis
- * promptly, so `Unresulted` bets carrying a `Lost` leg number 0 over the last
- * 5 days and 134 in the whole collection. That's the point — it adds no noise,
- * and the handful it does catch are multis that are mathematically finished
- * yet still sitting unresulted, which is exactly the anomaly worth surfacing.
+ * Conversely a multi whose leg here is still `Unresulted` an hour after the
+ * final whistle IS this event's problem, even though the bet legitimately
+ * can't pay out yet — which is why the earlier "skip every cross-game multi"
+ * rule was answering the wrong question.
  *
- * mybet legs carry no per-leg result, so only the first case applies there.
+ * `matched_leg` is null when the bet joined by slug rather than by leg
+ * event_id; fall back to the whole-exposure test there.
  */
-function shouldBeResulted(b: SwiftBetRow | MybetBetRow): boolean {
-  if ((b as MybetBetRow).sgm) return true
-  if ((b.leg_count ?? 0) <= 1) return true
-  const legs = (b as SwiftBetRow).leg_breakdown
-  return !!legs?.some((l) => (l.result ?? '').toLowerCase().includes('los'))
+function swiftLegUnresulted(b: SwiftBetRow): boolean {
+  const st = (b.matched_leg?.status ?? '').trim().toLowerCase()
+  if (!st) return (b.leg_count ?? 0) <= 1
+  return st.startsWith('unresulted') || st.startsWith('unsettled')
+}
+
+/**
+ * mybet has no per-leg status — its legs carry only description/outcome/odds —
+ * so the leg test above can't be applied. Fall back to bets whose whole result
+ * rests on this game (singles and SGMs); a cross-game mybet multi is left
+ * alone rather than guessed at.
+ */
+function mybetShouldBeResulted(b: MybetBetRow): boolean {
+  return b.sgm || (b.leg_count ?? 0) <= 1
 }
 
 /**
@@ -166,8 +177,8 @@ const POLL_MS = 10_000
  *  delay) and those always resolve fine, so don't alert until the game has been
  *  started for longer than this. */
 const SWIFT_OPEN_GRACE_MS = 2 * 60_000
-/** How long after OPTIC finishes a game before an unsettled bet is an alert. */
-const SETTLE_GRACE_MIN = 15
+/** How long after OPTIC finishes a game before an unresulted leg is an alert. */
+const SETTLE_GRACE_MIN = 30
 /** Don't look further back than this for unsettled games — the backlog doesn't
  *  converge on its own, so an unbounded window becomes a list nobody reads. */
 const UNSETTLED_MAX_AGE_H = 24
@@ -544,12 +555,12 @@ export function useNotifications(fixtures: Fixture[]): {
               // bet_status classify as 'unknown' and must never be read as
               // outstanding, or every pre-2026-07-31 game would alert forever.
               const pending = bets.filter((b) => betSettlement(b.bet_status) === 'pending')
-              const own = pending.filter(shouldBeResulted)
+              const own = pending.filter(swiftLegUnresulted)
               if (own.length) {
                 entry.swift = {
                   count: own.length,
                   stake: own.reduce((sum, b) => sum + (b.bet_amount ?? 0), 0),
-                  multi: pending.length - own.length,
+                  other: pending.length - own.length,
                 }
               }
             } catch {/* skip this fixture's swift bets */}
@@ -561,12 +572,12 @@ export function useNotifications(fixtures: Fixture[]): {
                 eventId: mid, suspendAt: f.scheduledStart, home: f.homeName, away: f.awayName,
               })
               const pending = mbets.filter((b) => mybetSettlement(b.bet_status) === 'pending')
-              const own = pending.filter(shouldBeResulted)
+              const own = pending.filter(mybetShouldBeResulted)
               if (own.length) {
                 entry.mybet = {
                   count: own.length,
                   stake: own.reduce((sum, b) => sum + (b.amount_bet ?? 0), 0),
-                  multi: pending.length - own.length,
+                  other: pending.length - own.length,
                 }
               }
             } catch {/* skip this fixture's mybet bets */}
@@ -705,7 +716,7 @@ export function useNotifications(fixtures: Fixture[]): {
           ...base,
           unsettledCount: agg.swift.count,
           unsettledStake: agg.swift.stake,
-          unsettledMultiCount: agg.swift.multi,
+          unsettledMultiCount: agg.swift.other,
         })
       }
       if (agg.mybet) {
@@ -717,7 +728,7 @@ export function useNotifications(fixtures: Fixture[]): {
           mybetEventName: mid ? mybetLive.get(mid)?.name ?? null : null,
           unsettledCount: agg.mybet.count,
           unsettledStake: agg.mybet.stake,
-          unsettledMultiCount: agg.mybet.multi,
+          unsettledMultiCount: agg.mybet.other,
         })
       }
     }

@@ -106,13 +106,10 @@ export function AlertToasts({ toasts, onDismiss, onDismissAll }: Props) {
                 {isUnsettled ? (
                   <>
                     <span className="font-semibold text-gray-100">
-                      {n.unsettledCount} {n.unsettledCount === 1 ? 'bet' : 'bets'}
+                      {n.unsettledCount} {n.unsettledCount === 1 ? 'leg' : 'legs'}
                       {n.unsettledStake ? ` · $${n.unsettledStake.toFixed(2)}` : ''}
                     </span>{' '}
-                    still unresulted on {isMybet ? 'mybet' : 'SwiftBet'} — OPTIC finished this game.
-                    {n.unsettledMultiCount
-                      ? ` (${n.unsettledMultiCount} more await another leg.)`
-                      : ''}
+                    unresulted on {isMybet ? 'mybet' : 'SwiftBet'} — OPTIC finished this game.
                   </>
                 ) : isLateBet ? (
                   <>
