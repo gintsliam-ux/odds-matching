@@ -1499,6 +1499,8 @@ function MybetRow({ b, scheduledStart, actualStart, home, away }: { b: MybetBetR
           <OffsetLabel placed={b.transaction_date} scheduled={scheduledStart} actual={actualStart} />
         </td>
         <td className="px-3 py-2 align-top font-mono text-[10.5px] text-[color:var(--muted-2)]">{b.user_accountID ?? '—'}</td>
+        {/* mybet's bet id is the ticket number it prints on the slip. */}
+        <BetIdCell id={b.transaction_id != null ? String(b.transaction_id) : b.id ?? null} />
         <td className="px-3 py-2 align-top text-gray-200">
           {typeBadge ? (
             <span className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-medium text-gray-200">{typeBadge}</span>
@@ -1536,6 +1538,8 @@ function MybetRow({ b, scheduledStart, actualStart, home, away }: { b: MybetBetR
       </tr>
       {expandable && open && b.legs.map((lg, i) => (
         <tr key={i} className="border-t border-[color:var(--line-soft)]/40 bg-black/[0.18]">
+          {/* spacers: Placed, vs Start, User, Bet ID */}
+          <td />
           <td />
           <td />
           <td />
@@ -1614,7 +1618,32 @@ function StatCard({
 /** Users / Bets / Stake / P/L summary shown directly under the scoreboard. P/L
  *  is computed from the current score (so it ticks while live) and flips its
  *  badge LIVE → FINAL when the game ends. */
-const BET_COLS = ['Placed', 'vs Start', 'User', 'Type', 'Market', 'Outcome', 'Result', 'Stake', 'Odds', 'P/L'] as const
+/**
+ * The book's own id for a bet: first 5 characters, with the FULL value behind
+ * the copy button. Five is enough to eyeball one row against another or against
+ * a support ticket; the whole id is what you actually need to paste into a
+ * query, and it is too long to sit in a table this wide.
+ */
+function BetIdCell({ id }: { id: string | null }) {
+  if (!id) return <td className="px-3 py-2 align-top text-[color:var(--muted-2)]">—</td>
+  const short = id.slice(0, 5)
+  return (
+    <td className="px-3 py-2 align-top">
+      <div className="flex items-center gap-0.5">
+        <span
+          className="font-mono text-[10.5px] text-[color:var(--muted-2)]"
+          title={id}
+        >
+          {short}
+          {id.length > short.length ? '…' : ''}
+        </span>
+        <CopyButton value={id} />
+      </div>
+    </td>
+  )
+}
+
+const BET_COLS = ['Placed', 'vs Start', 'User', 'Bet ID', 'Type', 'Market', 'Outcome', 'Result', 'Stake', 'Odds', 'P/L'] as const
 
 /** One market's bets, as a card with its own aggregate header + bet table. */
 function MarketBetsCard({ title, bets, fixture: f }: { title: string; bets: SwiftBetRow[]; fixture: Fixture }) {
@@ -2066,6 +2095,7 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
         <td className="px-3 py-2 align-top font-mono text-[10.5px] text-[color:var(--muted-2)]">
           {b.user_id?.slice(0, 8) ?? '—'}
         </td>
+        <BetIdCell id={b.bet_id ?? b.id ?? null} />
         <td className="px-3 py-2 align-top text-gray-200">
           {typeBadge ? (
             <span className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-medium text-gray-200">
@@ -2156,6 +2186,8 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
           const r = selResults[i]
           return (
             <tr key={i} className="border-t border-[color:var(--line-soft)]/40 bg-black/[0.18]">
+              {/* spacers: Placed, vs Start, User, Bet ID */}
+              <td />
               <td />
               <td />
               <td />
