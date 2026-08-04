@@ -514,22 +514,18 @@ export function useNotifications(fixtures: Fixture[]): {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveMappedKey])
 
-  // Unsettled detection: for each recently-finished game, read that game's bets
-  // and count the ones still pending. Two-minute cadence and a hard fixture cap
-  // — settlement moves in minutes-to-hours, not seconds, and this shares an
-  // Atlas cluster with the user's scrapers.
-  const unsettledTargets = useMemo(() => {
-    const out: Fixture[] = []
-    for (const f of endedFixtures) {
-      if (!eventMap.has(f.id) && !mybetMap.has(f.id)) continue
-      out.push(f)
-      if (out.length >= UNSETTLED_MAX_FIXTURES) break
-    }
-    return out
-  }, [endedFixtures, eventMap, mybetMap])
-  const unsettledKey = unsettledTargets.map((f) => f.id).sort().join(',')
+  // Every mapped, finished fixture in the window — the full candidate set, not
+  // the slice examined on any one tick.
+  const unsettledPool = useMemo(
+    () => endedFixtures.filter((f) => eventMap.has(f.id) || mybetMap.has(f.id)),
+    [endedFixtures, eventMap, mybetMap],
+  )
+  const unsettledKey = unsettledPool.map((f) => f.id).sort().join(',')
+  // Where the next batch starts. A ref, not state, so advancing it doesn't
+  // re-render or restart the interval.
+  const unsettledCursor = useRef(0)
   useEffect(() => {
-    if (unsettledTargets.length === 0) {
+    if (unsettledPool.length === 0) {
       setUnsettled(new Map())
       return
     }
@@ -540,8 +536,24 @@ export function useNotifications(fixtures: Fixture[]): {
       if (running) return
       running = true
       try {
-        const next = new Map<string, UnsettledAgg>()
-        const pairs = await mapLimit(unsettledTargets, BET_FETCH_CONCURRENCY, async (f) => {
+        // Examine a rotating batch rather than always the newest N.
+        //
+        // The pool is ordered newest-first and was previously truncated to the
+        // first UNSETTLED_MAX_FIXTURES, so with ~120 mapped games finishing in
+        // a 24h window only the 20 most recent were ever checked — a game left
+        // unresulted for eight hours silently stopped being reported as soon
+        // as 20 newer games ended. Rotating covers the whole pool in a few
+        // ticks at the same per-tick cost.
+        const start = unsettledCursor.current % unsettledPool.length
+        const batch = [
+          ...unsettledPool.slice(start, start + UNSETTLED_MAX_FIXTURES),
+          // wrap around so a short tail still fills the batch
+          ...(start + UNSETTLED_MAX_FIXTURES > unsettledPool.length
+            ? unsettledPool.slice(0, Math.min(start + UNSETTLED_MAX_FIXTURES - unsettledPool.length, start))
+            : []),
+        ]
+        unsettledCursor.current = (start + batch.length) % unsettledPool.length
+        const pairs = await mapLimit(batch, BET_FETCH_CONCURRENCY, async (f) => {
           const date = (f.scheduledStart ?? f.startTime ?? '').slice(0, 10)
           const entry: UnsettledAgg = {}
           const sid = eventMap.get(f.id)
@@ -584,8 +596,22 @@ export function useNotifications(fixtures: Fixture[]): {
           }
           return [f.id, entry] as const
         })
-        for (const [id, entry] of pairs) if (entry.swift || entry.mybet) next.set(id, entry)
-        if (alive) setUnsettled(next)
+        // Merge, don't replace: results for fixtures NOT in this batch must
+        // survive, or each tick would wipe the alerts the previous ones found.
+        // A fixture we did examine is authoritative — set it or clear it — and
+        // anything that has aged out of the pool is dropped.
+        if (alive) {
+          const inPool = new Set(unsettledPool.map((f) => f.id))
+          setUnsettled((prev) => {
+            const next = new Map(prev)
+            for (const id of next.keys()) if (!inPool.has(id)) next.delete(id)
+            for (const [id, entry] of pairs) {
+              if (entry.swift || entry.mybet) next.set(id, entry)
+              else next.delete(id)
+            }
+            return next
+          })
+        }
       } finally {
         running = false
       }

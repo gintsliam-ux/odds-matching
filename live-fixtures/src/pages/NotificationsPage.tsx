@@ -240,7 +240,7 @@ function NotificationRow({ n }: { n: Notification }) {
             <div className="flex flex-wrap items-center gap-1.5">
               <BrandPill brand={isMybet ? 'mybet' : 'swift'} />
               <span className="inline-flex items-center rounded bg-[color:var(--up)]/15 px-1.5 py-0.5 text-[11px] font-semibold text-[color:var(--up)]">
-                {n.unsettledCount} legs unresulted
+                {n.unsettledCount} {n.unsettledCount === 1 ? 'leg' : 'legs'} unresulted
               </span>
               {n.unsettledStake ? (
                 <span className="tabular-nums text-[11px] text-gray-300">${n.unsettledStake.toFixed(2)} at stake</span>
@@ -248,7 +248,14 @@ function NotificationRow({ n }: { n: Notification }) {
             </div>
             {n.unsettledMultiCount ? (
               <div className="text-[11px] text-[color:var(--muted-2)]">
-                + {n.unsettledMultiCount} resulted here, bet still open on another game
+                {/* Two different facts behind one number. For SwiftBet we KNOW
+                    this event's leg is resolved, because legs carry a status.
+                    mybet legs carry none, so all we can say is that the bet
+                    spans other games — claiming they were "resulted here"
+                    would be asserting something we can't see. */}
+                {isMybet
+                  ? `+ ${n.unsettledMultiCount} multi${n.unsettledMultiCount === 1 ? '' : 's'} spanning other games — mybet gives no per-leg status`
+                  : `+ ${n.unsettledMultiCount} resulted here, bet still open on another game`}
               </div>
             ) : null}
             {isMybet
