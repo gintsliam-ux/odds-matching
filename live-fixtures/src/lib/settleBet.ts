@@ -1,5 +1,12 @@
-// Best-effort CLIENT-SIDE settlement of a bet selection from a fixture's FINAL
-// score — a fallback for when the book / DB hasn't settled a leg yet.
+// Best-effort CLIENT-SIDE reading of a bet selection against a fixture's score.
+//
+// This is NOT how a bet's result is decided. A result shown to the user always
+// comes from the book / DB; an unresulted leg reads Open. This has exactly two
+// remaining callers, neither of which labels a bet:
+//   1. the LIVE P/L projection, which needs a provisional outcome so in-play
+//      exposure ticks (shown as an explicitly live estimate), and
+//   2. the mis-settlement check, which compares a leg the book HAS settled
+//      against the final score and flags a Won<->Lost contradiction.
 //
 // DELIBERATELY CONSERVATIVE. Mis-settling (showing a wrong Won/Lost) is worse
 // than leaving a leg pending, so we only handle full-match markets a final

@@ -1375,7 +1375,7 @@ function mybetResult(status: string | null): ResolvedResult {
   if (/won|winner|\bpaid\b/.test(s)) label = 'Won'
   else if (/lost|no return|loser/.test(s)) label = 'Lost'
   else if (/push|refund|cancel|void|dead heat/.test(s)) label = 'Push'
-  return { label, tone: RES_TONE[label], derived: false }
+  return { label, tone: RES_TONE[label] }
 }
 
 /** Does `text` mention this team (any of its significant words, len ≥ 4)? */
@@ -1759,10 +1759,9 @@ type ResLabel = 'Won' | 'Lost' | 'Open' | 'Push'
 interface ResolvedResult {
   label: ResLabel
   tone: string
-  derived: boolean // true → we settled it from the final score, book hadn't
   // Set when the book HAS settled this leg but the final score implies the
   // opposite — i.e. a possible mis-settlement to review. Holds what the score
-  // says it should be.
+  // says it should be. Reporting only: `label` is always the book's.
   expected?: 'Won' | 'Lost' | null
 }
 
@@ -1782,33 +1781,48 @@ function normLabel(raw: string | null): 'Won' | 'Lost' | 'Open' {
 }
 
 /**
- * Resolve a selection's result: prefer the book's settlement; when it's still
- * Open, fall back to deriving it from the fixture's final score (full-match
- * markets only — see settleFromScore). `derived` flags the latter so the UI can
- * mark it as inferred.
+ * Resolve a selection's result.
+ *
+ * A result SHOWN to the user is always the book's. If the book hasn't resulted
+ * a leg, it reads Open — we never label it from the score. Deriving used to be
+ * the fallback, which is how a bet could show LOST beside the book's own
+ * PENDING: the book plainly had not lost it, we had just read the scoreline
+ * ourselves.
+ *
+ * `project` opts back into score-derivation, and exists for exactly one
+ * caller: the live P/L projection, which needs a provisional outcome so in-play
+ * exposure ticks. That number is labelled LIVE and is explicitly an estimate —
+ * it never becomes a result label.
+ *
+ * The score is still used one other way, and only to REPORT: when the book HAS
+ * settled a leg, `expected` flags a Won<->Lost contradiction against the final
+ * score, i.e. a possible mis-settlement. That annotates the book's result, it
+ * doesn't replace it.
  */
 function resolveResult(
   officialRaw: string | null,
   sel: { market: string | null; mt: string | null; outcome: string | null },
   ctx: ScoreCtx,
-  allowLive = false,
+  opts: { project?: boolean } = {},
 ): ResolvedResult {
   const off = normLabel(officialRaw)
   if (off !== 'Open') {
-    // Book settled it — cross-check against the FINAL score (completed only, no
-    // allowLive) for a possible mis-settlement. A Won↔Lost contradiction is the
-    // signal; a Push vs Won/Lost is too noisy to flag.
+    // Cross-check against the FINAL score (never the live one — an in-play
+    // scoreline contradicts plenty of correct settlements). A Push vs Won/Lost
+    // is too noisy to flag.
     const check = settleFromScore(sel, ctx)
     const expected = (check === 'Won' || check === 'Lost') && check !== off ? check : null
-    return { label: off, tone: RES_TONE[off], derived: false, expected }
+    return { label: off, tone: RES_TONE[off], expected }
   }
-  const d = settleFromScore(sel, ctx, { allowLive })
-  if (d) return { label: d, tone: RES_TONE[d], derived: true }
-  return { label: 'Open', tone: RES_TONE.Open, derived: false }
+  if (!opts.project) return { label: 'Open', tone: RES_TONE.Open }
+  const d = settleFromScore(sel, ctx, { allowLive: true })
+  if (d) return { label: d, tone: RES_TONE[d] }
+  return { label: 'Open', tone: RES_TONE.Open }
 }
 
-/** Renders a result: "~" + tooltip when derived from the score; a ⚠ + tooltip
- *  when the book's settled result contradicts the final score. */
+/** Renders the book's result, plus a ⚠ + tooltip when that settled result
+ *  contradicts the final score (a possible mis-settlement). There is no
+ *  "inferred" state to render — an unresulted leg simply reads Open. */
 function ResultCell({ r }: { r: ResolvedResult }) {
   if (r.expected) {
     return (
@@ -1821,15 +1835,7 @@ function ResultCell({ r }: { r: ResolvedResult }) {
       </span>
     )
   }
-  return (
-    <span
-      className={`${r.tone} ${r.derived ? 'italic' : ''}`}
-      title={r.derived ? 'Derived from the final score — the book had not settled this leg' : undefined}
-    >
-      {r.derived ? '~' : ''}
-      {r.label}
-    </span>
-  )
+  return <span className={r.tone}>{r.label}</span>
 }
 
 /** Does any leg/selection of this bet look mis-settled vs the final score? */
@@ -1840,27 +1846,27 @@ function betMismatch(b: SwiftBetRow, ctx: ScoreCtx): boolean {
   return ml ? !!resolveResult(ml.status, ml, ctx).expected : false
 }
 
-/** Overall result of a bet w.r.t. THIS game: prefer the granular selection
- *  status, then leg_breakdown, then score-derivation; an SGM combines its
- *  selections (any lost → lost, all won → won). */
-function resolveBet(b: SwiftBetRow, ctx: ScoreCtx, allowLive = false): ResolvedResult {
+/** Overall result of a bet w.r.t. THIS game: the granular selection status,
+ *  else leg_breakdown; an SGM combines its selections (any lost → lost, all
+ *  won → won). `project` is only ever set by the live P/L projection — see
+ *  resolveResult. */
+function resolveBet(b: SwiftBetRow, ctx: ScoreCtx, project = false): ResolvedResult {
   const isSgm = (b.type ?? '').toUpperCase() === 'SGM'
   const sels = b.matched_leg?.selections ?? []
   const leg =
     b.leg_breakdown && b.matched_leg_index >= 0 ? b.leg_breakdown[b.matched_leg_index] ?? null : null
   if (isSgm && sels.length) {
     const official = normLabel(leg?.result ?? null)
-    if (official !== 'Open') return { label: official, tone: RES_TONE[official], derived: false }
-    const sr = sels.map((s) => resolveResult(s.status, s, ctx, allowLive))
-    if (sr.some((r) => r.label === 'Lost'))
-      return { label: 'Lost', tone: RES_TONE.Lost, derived: sr.some((r) => r.label === 'Lost' && r.derived) }
+    if (official !== 'Open') return { label: official, tone: RES_TONE[official] }
+    const sr = sels.map((s) => resolveResult(s.status, s, ctx, { project }))
+    if (sr.some((r) => r.label === 'Lost')) return { label: 'Lost', tone: RES_TONE.Lost }
     if (sr.every((r) => r.label === 'Won' || r.label === 'Push'))
-      return { label: 'Won', tone: RES_TONE.Won, derived: sr.some((r) => r.derived) }
-    return { label: 'Open', tone: RES_TONE.Open, derived: false }
+      return { label: 'Won', tone: RES_TONE.Won }
+    return { label: 'Open', tone: RES_TONE.Open }
   }
   const selStatus = b.matched_leg?.status ?? null
   const best = normLabel(selStatus) !== 'Open' ? selStatus : leg?.result ?? null
-  return resolveResult(best, b.matched_leg ?? { market: null, mt: null, outcome: null }, ctx, allowLive)
+  return resolveResult(best, b.matched_leg ?? { market: null, mt: null, outcome: null }, ctx, { project })
 }
 
 /**
@@ -1874,8 +1880,9 @@ function projectBet(b: SwiftBetRow, ctx: ScoreCtx): { pl: number; decided: boole
   const stake = b.bet_amount ?? 0
   const odd = b.odd ?? 1
   const isMulti = (b.type ?? '').toUpperCase() === 'MULTI'
-  // allowLive: provisionally settle from the in-play score so the liability
-  // ticks while the game is live.
+  // The ONE place score-derivation survives: a provisional outcome so the
+  // liability ticks while the game is live. Shown as the LIVE P/L, never as a
+  // bet's result label.
   const res = resolveBet(b, ctx, true)
   if (res.label === 'Lost') return { pl: -stake, decided: true }
   if (res.label === 'Won') {
@@ -1978,24 +1985,6 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
     : isMulti
       ? statusFromLabels(legLabels)
       : null
-  // Is this badge the BOOK's word, or our own reading of the final score?
-  //
-  // When the book hasn't resulted a leg, resolveResult infers it from the
-  // score and flags `derived`. Without surfacing that, a bet could show a
-  // solid LOST next to PENDING and look self-contradictory — the book plainly
-  // hasn't lost it, since it hasn't resulted it at all. It isn't a
-  // contradiction: we can see it's dead, the book just hasn't processed it.
-  // Mark it so the row says that instead of implying the book did.
-  //
-  // A Lost decided by SOME OTHER leg is book data, so it isn't derived — only
-  // our inference about THIS game's leg is.
-  const lostByOtherLeg = legLabels.some((l, i) => i !== b.matched_leg_index && l === 'Lost')
-  const mDerived =
-    mStatus === 'Lost'
-      ? mainRes.derived && mainRes.label === 'Lost' && !lostByOtherLeg
-      : mStatus === 'Won'
-        ? mainRes.derived
-        : false
   return (
     <>
       <tr
@@ -2028,14 +2017,8 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
           {mStatus && (
             <div className="mt-1">
               <span
-                className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold ${MULTI_STATUS_BADGE[mStatus]} ${mDerived ? 'italic opacity-80' : ''}`}
-                title={
-                  mDerived
-                    ? `Derived from the final score — the book has not resulted this leg yet, which is why it still shows as pending.`
-                    : undefined
-                }
+                className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold ${MULTI_STATUS_BADGE[mStatus]}`}
               >
-                {mDerived ? '~' : ''}
                 {mStatus === 'Won' ? 'WON' : 'LOST'}
               </span>
             </div>
