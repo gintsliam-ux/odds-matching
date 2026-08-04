@@ -347,11 +347,6 @@ function MarketRows({
                   />
                 ) : null}
                 {row.label}
-                {row.isMain && row.groupStart && (
-                  <span className="rounded bg-emerald-500/20 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-300">
-                    Pick&apos;em
-                  </span>
-                )}
               </span>
             </td>
 
