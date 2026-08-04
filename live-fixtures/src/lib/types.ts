@@ -71,6 +71,14 @@ export interface Fixture {
   broadcast: string | null
   seasonType: string | null
   liveUpdatedAt: string | null
+  /**
+   * Row's last write. On a COMPLETED fixture this is effectively when the game
+   * ended: verified that it stops moving at completion (0 of 200 fixtures from
+   * 4 days ago had an updated_at inside the last 6 h) and sits a median 1.98 h
+   * after scheduled_start, i.e. one game's duration. OPTIC exposes no explicit
+   * end time, so this is the best available. Meaningless while a game is live.
+   */
+  updatedAt: string | null
   bookmaker: string | null
 
   liveH2h: OddsLine

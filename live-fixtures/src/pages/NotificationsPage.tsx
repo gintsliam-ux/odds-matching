@@ -18,6 +18,8 @@ const KIND_LABEL: Record<Notification['kind'], string> = {
   swift_still_open: 'SwiftBet still taking bets on started event',
   mybet_still_open: 'mybet market still open on started event',
   optic_overdue_prematch: 'OPTIC still upcoming after scheduled kickoff',
+  swift_unsettled: 'SwiftBet has not resulted a finished event',
+  mybet_unsettled: 'mybet has not resulted a finished event',
 }
 
 /** Which book a notification kind belongs to (drives the brand-coloured pill). */
@@ -55,7 +57,7 @@ export default function NotificationsPage() {
   const grouped = useMemo(() => {
     const m = new Map<Notification['kind'], Notification[]>()
     // Force order: bets-after-live first (money already at risk), then still-open.
-    for (const kind of ['swift_late_bet', 'mybet_late_bet', 'swift_still_open', 'mybet_still_open', 'optic_overdue_prematch'] as const) m.set(kind, [])
+    for (const kind of ['swift_late_bet', 'mybet_late_bet', 'swift_still_open', 'mybet_still_open', 'swift_unsettled', 'mybet_unsettled', 'optic_overdue_prematch'] as const) m.set(kind, [])
     for (const n of notifications) m.get(n.kind)!.push(n)
     return [...m.entries()].filter(([, list]) => list.length > 0)
   }, [notifications])
@@ -88,6 +90,8 @@ export default function NotificationsPage() {
           <p className="mt-1.5 max-w-2xl text-[13px] leading-relaxed text-[color:var(--muted-2)]">
             Events where OPTIC has turned live but a book still has the market open
             (SwiftBet prematch, or mybet before its close time). Polled every 10s.
+            Plus finished events a book hasn't resulted 15+ minutes
+            after OPTIC called them over, re-checked every 2 min.
           </p>
         </div>
         {stillOpen > 0 && (
@@ -132,7 +136,7 @@ export default function NotificationsPage() {
                         <th className="px-4 py-2.5 font-medium">Sport</th>
                         <th className="px-4 py-2.5 font-medium">Match-up</th>
                         <th className="px-4 py-2.5 font-medium">Book event</th>
-                        <th className="px-4 py-2.5 font-medium">Started</th>
+                        <th className="px-4 py-2.5 font-medium">Started / ended</th>
                         <th className="px-4 py-2.5"></th>
                       </tr>
                     </thead>
@@ -203,12 +207,17 @@ export default function NotificationsPage() {
 }
 
 function NotificationRow({ n }: { n: Notification }) {
-  const startedRef = n.opticActualStart ?? n.scheduledStart
+  // Unsettled alerts are measured from when the game ENDED, not when it started
+  // — "3h ago" on a settlement alert means three hours unresulted.
+  const startedRef = (n.kind === 'swift_unsettled' || n.kind === 'mybet_unsettled')
+    ? n.endedAt ?? n.opticActualStart ?? n.scheduledStart
+    : n.opticActualStart ?? n.scheduledStart
   const utc = startedRef ? utcDateTimeShort(startedRef) : '—'
   const melb = startedRef ? melbDateTimeShort(startedRef) : '—'
   const ago = lateLabel(startedRef)
   const isLateBet = n.kind === 'swift_late_bet' || n.kind === 'mybet_late_bet'
-  const isMybet = n.kind === 'mybet_still_open' || n.kind === 'mybet_late_bet'
+  const isUnsettled = n.kind === 'swift_unsettled' || n.kind === 'mybet_unsettled'
+  const isMybet = n.kind === 'mybet_still_open' || n.kind === 'mybet_late_bet' || n.kind === 'mybet_unsettled'
   const isPrimary = n.kind !== 'optic_overdue_prematch'
   return (
     <tr className={`border-t border-white/[0.04] ${isPrimary ? 'bg-[color:var(--live)]/[0.04] hover:bg-[color:var(--live)]/[0.08]' : 'hover:bg-white/[0.02]'}`}>
@@ -226,7 +235,45 @@ function NotificationRow({ n }: { n: Notification }) {
         <div className="text-[color:var(--muted-2)]">vs {n.away}</div>
       </td>
       <td className="px-4 py-3 text-xs">
-        {isLateBet ? (
+        {isUnsettled ? (
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <BrandPill brand={isMybet ? 'mybet' : 'swift'} />
+              <span className="inline-flex items-center rounded bg-[color:var(--up)]/15 px-1.5 py-0.5 text-[11px] font-semibold text-[color:var(--up)]">
+                {n.unsettledCount} unresulted
+              </span>
+              {n.unsettledStake ? (
+                <span className="tabular-nums text-[11px] text-gray-300">${n.unsettledStake.toFixed(2)} at stake</span>
+              ) : null}
+            </div>
+            {n.unsettledMultiCount ? (
+              <div className="text-[11px] text-[color:var(--muted-2)]">
+                + {n.unsettledMultiCount} multi{n.unsettledMultiCount === 1 ? '' : 's'} waiting on another leg (not counted)
+              </div>
+            ) : null}
+            {isMybet
+              ? n.mybetEventId && (
+                  <a
+                    href={mybetEventUrl(n.mybetEventId, n.sport)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-gray-200 hover:text-[color:var(--mybet)]"
+                  >
+                    {n.mybetEventName ?? 'Open on mybet'} <ExternalLink className="h-3 w-3" />
+                  </a>
+                )
+              : n.swiftEventId && (
+                  <a
+                    href={swiftEventUrl(n.swiftEventId)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-gray-200 hover:text-[color:var(--swift)]"
+                  >
+                    {n.swiftEventName ?? 'Open on SwiftBet'} <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+          </div>
+        ) : isLateBet ? (
           <div className="space-y-1.5">
             <div className="flex flex-wrap items-center gap-1.5">
               <BrandPill brand={isMybet ? 'mybet' : 'swift'} />
@@ -324,7 +371,7 @@ function NotificationRow({ n }: { n: Notification }) {
         <div className="text-[color:var(--muted-2)]">{melb} MEL</div>
         {ago && (
           <div className={`mt-0.5 font-semibold ${isPrimary ? 'text-[color:var(--live)]' : 'text-[color:var(--muted-2)]'}`}>
-            {ago} {isPrimary ? 'ago' : 'late'}
+            {ago} {isUnsettled ? 'unresulted' : isPrimary ? 'ago' : 'late'}
           </div>
         )}
       </td>

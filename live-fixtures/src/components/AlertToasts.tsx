@@ -49,8 +49,13 @@ export function AlertToasts({ toasts, onDismiss, onDismissAll }: Props) {
       {ordered.map((t) => {
         const n = t.notification
         const isLateBet = n.kind === 'swift_late_bet' || n.kind === 'mybet_late_bet'
-        const isMybet = n.kind === 'mybet_still_open' || n.kind === 'mybet_late_bet'
-        const startedRef = n.opticActualStart ?? n.scheduledStart
+        const isUnsettled = n.kind === 'swift_unsettled' || n.kind === 'mybet_unsettled'
+        const isMybet =
+          n.kind === 'mybet_still_open' || n.kind === 'mybet_late_bet' || n.kind === 'mybet_unsettled'
+        // Unsettled is timed from the end of the game, not the start.
+        const startedRef = isUnsettled
+          ? n.endedAt ?? n.opticActualStart ?? n.scheduledStart
+          : n.opticActualStart ?? n.scheduledStart
         const resolved = !!t.resolvedAt
         // Resolved tone (green) vs firing tone (red) drives header colour,
         // border, body copy, and the time-row tag.
@@ -71,11 +76,13 @@ export function AlertToasts({ toasts, onDismiss, onDismissAll }: Props) {
               <div className={`flex-1 text-[11px] font-semibold uppercase tracking-wide ${accent.headerText}`}>
                 {resolved
                   ? 'Resolved'
-                  : isLateBet
-                    ? `${isMybet ? 'mybet' : 'SwiftBet'} bet after live`
-                    : isMybet
-                      ? 'mybet still open'
-                      : 'SwiftBet still open'}
+                  : isUnsettled
+                    ? `${isMybet ? 'mybet' : 'SwiftBet'} not resulted`
+                    : isLateBet
+                      ? `${isMybet ? 'mybet' : 'SwiftBet'} bet after live`
+                      : isMybet
+                        ? 'mybet still open'
+                        : 'SwiftBet still open'}
               </div>
               <button
                 onClick={() => onDismiss(t.id)}
@@ -96,7 +103,18 @@ export function AlertToasts({ toasts, onDismiss, onDismissAll }: Props) {
                 {n.home} <span className="text-[color:var(--muted-2)]">vs</span> {n.away}
               </div>
               <div className="text-[11.5px] leading-snug text-gray-300">
-                {isLateBet ? (
+                {isUnsettled ? (
+                  <>
+                    <span className="font-semibold text-gray-100">
+                      {n.unsettledCount} {n.unsettledCount === 1 ? 'bet' : 'bets'}
+                      {n.unsettledStake ? ` · $${n.unsettledStake.toFixed(2)}` : ''}
+                    </span>{' '}
+                    still unresulted on {isMybet ? 'mybet' : 'SwiftBet'} — OPTIC finished this game.
+                    {n.unsettledMultiCount
+                      ? ` (${n.unsettledMultiCount} more await another leg.)`
+                      : ''}
+                  </>
+                ) : isLateBet ? (
                   <>
                     <span className="font-semibold text-gray-100">
                       {n.lateBetCount} {n.lateBetCount === 1 ? 'bet' : 'bets'}
@@ -116,7 +134,9 @@ export function AlertToasts({ toasts, onDismiss, onDismissAll }: Props) {
                 <span className={`font-semibold ${accent.timeText}`}>
                   {resolved
                     ? `resolved ${ago(new Date(t.resolvedAt!).toISOString())}`
-                    : `started ${ago(startedRef)}`}
+                    : isUnsettled
+                      ? `ended ${ago(startedRef)}`
+                      : `started ${ago(startedRef)}`}
                 </span>
                 <div className="flex items-center gap-1.5">
                   {!isMybet && n.swiftEventId && (

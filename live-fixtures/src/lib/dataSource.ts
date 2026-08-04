@@ -105,6 +105,40 @@ export async function fetchOverdueUpcomingFixtures(opts: {
   return (data ?? []).map((r) => mapRow(r, nowMs))
 }
 
+/**
+ * Completed fixtures that ended at least `endedMinutes` ago — the candidate set
+ * for the "book hasn't settled this yet" alert.
+ *
+ * "Ended" is `updated_at`, since OPTIC has no end-time column; see the note on
+ * Fixture.updatedAt for why that stands in. Bounded by `maxAgeHours` because
+ * the unsettled backlog does NOT converge (sampled: 17 of 28 games from 2-4
+ * days ago still had pending bets), so an unbounded window would grow into a
+ * list nobody reads.
+ */
+export async function fetchRecentlyCompletedFixtures(opts: {
+  endedMinutes?: number
+  maxAgeHours?: number
+  limit?: number
+} = {}): Promise<Fixture[]> {
+  const { endedMinutes = 15, maxAgeHours = 24, limit = 120 } = opts
+  await ensureLogoCache()
+  const now = Date.now()
+  const hi = new Date(now - endedMinutes * 60_000).toISOString()
+  const lo = new Date(now - maxAgeHours * 3_600_000).toISOString()
+  const { data, error } = await getSupabase()
+    .from(TABLE)
+    .select(COLUMNS)
+    .eq('status', 'completed')
+    .gte('updated_at', lo)
+    .lt('updated_at', hi)
+    .order('updated_at', { ascending: false })
+    .limit(limit)
+    .returns<Row[]>()
+  if (error) throw error
+  const nowMs = Date.now()
+  return (data ?? []).map((r) => mapRow(r, nowMs))
+}
+
 export const SPORT_PAGE_SIZE = 200
 
 /**
@@ -214,6 +248,7 @@ interface Row {
   live_h2h_draw: number | null
   live_h2h_away: number | null
   live_updated_at: string | null
+  updated_at: string | null
   venue: string | null
   broadcast: string | null
   season_type: string | null
@@ -318,6 +353,7 @@ function mapRow(r: Row, nowMs: number): Fixture {
     broadcast: r.broadcast,
     seasonType: r.season_type,
     liveUpdatedAt: r.live_updated_at,
+    updatedAt: r.updated_at,
     bookmaker: r.closing_bookmaker,
     liveH2h,
     closingH2h,

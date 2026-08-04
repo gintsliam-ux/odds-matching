@@ -72,7 +72,9 @@ export function useAlertToasts(notifications: Notification[]): {
         n.kind === 'swift_still_open' ||
         n.kind === 'mybet_still_open' ||
         n.kind === 'swift_late_bet' ||
-        n.kind === 'mybet_late_bet',
+        n.kind === 'mybet_late_bet' ||
+        n.kind === 'swift_unsettled' ||
+        n.kind === 'mybet_unsettled',
     )
     const openIds = new Set(open.map((n) => n.id))
 
