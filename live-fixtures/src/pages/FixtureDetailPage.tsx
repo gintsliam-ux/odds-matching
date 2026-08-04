@@ -1077,6 +1077,20 @@ function MarketCard<K extends string>({
   )
 }
 
+/** How often an open fixture re-reads its bets from each book. */
+const BETS_POLL_MS = 60_000
+
+/**
+ * Cheap change signature for a bet list. Polling replaces the array every
+ * minute, and handing React a new array of identical rows re-renders the whole
+ * table for nothing — on a busy fixture that is 40+ rows, each with a price
+ * chart and an expandable leg breakdown. Only the fields that actually move
+ * between polls are included.
+ */
+function betsSig(rows: Array<{ id: string; bet_status?: string | null; pl?: number | null; bet_result?: number | null }>): string {
+  return rows.map((r) => `${r.id}:${r.bet_status ?? ''}:${r.pl ?? r.bet_result ?? ''}`).join('|')
+}
+
 /** Bets for a fixture, fetched once per (date, teams). Lifted out of BetsTab so
  *  the liability overview can read the same data above the tab strip. The score
  *  changing doesn't refetch — the deps are stable — so P/L just recomputes. */
@@ -1089,17 +1103,41 @@ function useSwiftBets(f: Fixture, swiftActualStart: string | null, swiftEventId:
   useEffect(() => {
     if (!date || !f.homeName || !f.awayName) return
     let alive = true
-    setLoading(true)
-    setError(null)
-    // `swiftEventId` arrives a beat after the fixture (the mapping loads
-    // async), so this refetches once it lands — picking up any bet the slug
-    // join missed.
-    fetchSwiftBets({ date, home: f.homeName, away: f.awayName, swiftEventId, swiftActualStart, scheduledStart })
-      .then((rows) => alive && setBets(rows))
-      .catch((e) => alive && setError(String(e?.message ?? e)))
-      .finally(() => alive && setLoading(false))
+    // In-flight guard kept local to this effect instance — a ref shared across
+    // instances deadlocks under StrictMode's mount/cleanup/mount.
+    let running = false
+    // Only the first load for this fixture shows the spinner. A poll must never
+    // blank the table it is refreshing, nor replace rows with an error panel.
+    let first = true
+    const load = async () => {
+      if (running) return
+      running = true
+      if (first) {
+        setLoading(true)
+        setError(null)
+      }
+      try {
+        // `swiftEventId` arrives a beat after the fixture (the mapping loads
+        // async), so this refetches once it lands — picking up any bet the slug
+        // join missed.
+        const rows = await fetchSwiftBets({ date, home: f.homeName, away: f.awayName, swiftEventId, swiftActualStart, scheduledStart })
+        if (!alive) return
+        setBets((prev) => (prev && betsSig(prev) === betsSig(rows) ? prev : rows))
+        setError(null)
+      } catch (e) {
+        // A failed poll keeps whatever is already on screen.
+        if (alive && first) setError(String((e as { message?: unknown })?.message ?? e))
+      } finally {
+        if (alive && first) setLoading(false)
+        first = false
+        running = false
+      }
+    }
+    load()
+    const id = setInterval(load, BETS_POLL_MS)
     return () => {
       alive = false
+      clearInterval(id)
     }
   }, [date, f.homeName, f.awayName, swiftEventId, swiftActualStart, scheduledStart])
   return { bets, loading, error, date }
@@ -1230,14 +1268,33 @@ function useMybetBets(args: { eventId: string | null; suspendAt: string | null; 
       return
     }
     let alive = true
-    setLoading(true)
-    setError(null)
-    fetchMybetBets({ eventId, suspendAt, liveAt, home, away })
-      .then((rows) => alive && setBets(rows))
-      .catch((e) => alive && setError(String(e?.message ?? e)))
-      .finally(() => alive && setLoading(false))
+    let running = false
+    let first = true
+    const load = async () => {
+      if (running) return
+      running = true
+      if (first) {
+        setLoading(true)
+        setError(null)
+      }
+      try {
+        const rows = await fetchMybetBets({ eventId, suspendAt, liveAt, home, away })
+        if (!alive) return
+        setBets((prev) => (prev && betsSig(prev) === betsSig(rows) ? prev : rows))
+        setError(null)
+      } catch (e) {
+        if (alive && first) setError(String((e as { message?: unknown })?.message ?? e))
+      } finally {
+        if (alive && first) setLoading(false)
+        first = false
+        running = false
+      }
+    }
+    load()
+    const id = setInterval(load, BETS_POLL_MS)
     return () => {
       alive = false
+      clearInterval(id)
     }
   }, [eventId, suspendAt, liveAt, home, away])
   return { bets, loading, error }
