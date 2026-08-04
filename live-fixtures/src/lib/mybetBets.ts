@@ -11,6 +11,32 @@ export interface MybetLeg {
   date: string | null
 }
 
+/** Settlement state for a mybet bet, read from its free-text `bet_status`.
+ *
+ *  mybet has no enum like SwiftBet's. Instead the placement row's status is
+ *  rewritten as the bet moves:
+ *
+ *    "Accepted"              taken, not yet resulted        -> pending
+ *    "No Return"             resulted, nothing came back    -> settled (lost)
+ *    "Return @<br>Tkt  N"    resulted, money returned       -> settled (won/part)
+ *    "Rejected"              never stood                    -> void
+ *    "Cancelled at Tkt: N"   cancelled                      -> void
+ *
+ *  The paired "Return of<br>Tkt: N" / "Cancellation of Tkt: N" rows are the
+ *  CREDIT transactions, not bets — api/mybet-bets.ts filters those out, so they
+ *  should never reach here.
+ */
+export type MybetSettlement = 'pending' | 'settled' | 'void' | 'unknown'
+
+export function mybetSettlement(betStatus: string | null | undefined): MybetSettlement {
+  const s = (betStatus ?? '').replace(/<br\s*\/?>/gi, ' ').trim().toLowerCase()
+  if (!s) return 'unknown'
+  if (s.startsWith('accepted')) return 'pending'
+  if (s.startsWith('no return') || s.startsWith('return')) return 'settled'
+  if (s.startsWith('rejected') || s.startsWith('cancel')) return 'void'
+  return 'unknown'
+}
+
 export interface MybetBetRow {
   id: string
   transaction_id: number | null

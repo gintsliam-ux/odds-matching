@@ -8,7 +8,7 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { fetchFixtureById } from '../lib/dataSource'
 import { fetchSwiftEvent, swiftEventUrl } from '../lib/swiftStatus'
 import { betSettlement, fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
-import { fetchMybetBets, type MybetBetRow } from '../lib/mybetBets'
+import { fetchMybetBets, mybetSettlement, type MybetBetRow } from '../lib/mybetBets'
 import { BRAND_PILL, BRAND_TONE, type Brand } from '../lib/brand'
 import { settleFromScore, type ScoreCtx } from '../lib/settleBet'
 import { leagueLabel, periodAbbrev, periodNoun, periodState } from '../lib/sports'
@@ -1239,6 +1239,10 @@ function MybetAllCard({ bets, scheduledStart, actualStart, home, away }: { bets:
   const pl = bets.reduce((s, b) => s + (b.bet_result ?? 0), 0)
   const users = new Set(bets.map((b) => b.user_accountID)).size
   const lateCount = bets.filter((b) => b.placed_after_live).length
+  // mybet marks a bet resulted by stamping its status with the return ticket
+  // ("Return @ Tkt N") or "No Return"; "Accepted" means still running.
+  const pending = bets.filter((b) => mybetSettlement(b.bet_status) === 'pending')
+  const pendingStake = pending.reduce((sum, b) => sum + (b.amount_bet ?? 0), 0)
   return (
     <div className={`overflow-hidden rounded-lg bg-[color:var(--panel)]/50 ${lateCount > 0 ? 'border-t-2 border-[color:var(--live)]/60' : ''}`}>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-[color:var(--line-soft)] bg-black/[0.2] px-4 py-2.5">
@@ -1246,6 +1250,15 @@ function MybetAllCard({ bets, scheduledStart, actualStart, home, away }: { bets:
         {lateCount > 0 && (
           <span className="inline-flex items-center gap-1 rounded-full bg-[color:var(--live)]/10 px-2 py-0.5 text-[10px] font-semibold text-[color:var(--live)]">
             ⚠ {lateCount} after live
+          </span>
+        )}
+        {pending.length > 0 && (
+          <span
+            className="inline-flex items-center gap-1 rounded-full bg-[color:var(--up)]/10 px-2 py-0.5 text-[10px] font-semibold text-[color:var(--up)]"
+            title="mybet has not returned or settled these yet (status still Accepted)"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--up)] pulse-dot" />
+            {pending.length} pending · ${pendingStake.toFixed(2)}
           </span>
         )}
         <span className="text-[11px] text-[color:var(--muted-2)]">

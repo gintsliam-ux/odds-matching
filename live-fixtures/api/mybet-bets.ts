@@ -161,11 +161,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .find(
         {
           transaction_licenseid: 'MyBet',
-          // "Return of Tkt…" / "Return @ Tkt…" rows are SETTLEMENT transactions,
-          // not placements — their transaction_date is the settle time (after the
-          // game), so they'd falsely read as "placed after live". Settlement is
-          // carried by the placement row's own bet_result; drop the returns.
-          bet_status: { $not: /^Return/i },
+          // Drop only the CREDIT rows — "Return of Tkt: N" and "Cancellation of
+          // Tkt: N" — whose transaction_date is the settle time and which would
+          // both double-count the bet and falsely read as "placed after live".
+          //
+          // "Return @ Tkt N" is NOT one of those: it is the PLACEMENT, stamped
+          // with a pointer to its return ticket once the bet settled. The old
+          // /^Return/i filter dropped those too, hiding every settled-and-
+          // returned mybet bet — 9,135 of them in the last week, i.e. all the
+          // winners. Verified structurally: "Return @" always carries
+          // transaction_amount > 0 and sits BEFORE its event, while "Return of"
+          // is always transaction_amount 0 and lands after.
+          bet_status: { $not: /^(Return\s*of|Cancellation\s*of)/i },
           transaction_date: { $gte: lo, $lte: hi },
           ...(joins.length > 1 ? { $or: joins } : joins[0]),
         },
