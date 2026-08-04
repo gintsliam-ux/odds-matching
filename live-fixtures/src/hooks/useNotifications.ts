@@ -5,6 +5,7 @@ import { fetchSwiftStatuses } from '../lib/swiftStatus'
 import { fetchMybetStatuses } from '../lib/mybetStatus'
 import { betSettlement, fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
 import { fetchMybetBets, mybetSettlement, type MybetBetRow } from '../lib/mybetBets'
+import { pollWithVisibility } from '../lib/poll'
 import type { Fixture } from '../lib/types'
 
 export type NotificationKind =
@@ -186,6 +187,12 @@ const UNSETTLED_MAX_AGE_H = 24
  *  two bet reads stay on the same rhythm rather than beating against each
  *  other, and so a book resulting an event clears the alert within a minute. */
 const UNSETTLED_POLL_MS = 45_000
+/** Cadence for both bet passes while the tab is hidden. They read bets out of
+ *  a Mongo cluster shared with the scrapers, and a backgrounded terminal was
+ *  making ~1.5 req/s round the clock for a page nobody was watching. Backing
+ *  off rather than stopping keeps alerts firing in the background — within
+ *  minutes rather than seconds. */
+const BET_PASS_HIDDEN_MS = 5 * 60_000
 /** Cap the per-tick Mongo reads. The shared Atlas cluster also serves the
  *  user's scrapers, so this pass stays deliberately small. */
 const UNSETTLED_MAX_FIXTURES = 20
@@ -509,8 +516,8 @@ export function useNotifications(fixtures: Fixture[]): {
       }
     }
     tick()
-    const id = setInterval(tick, 45_000)
-    return () => { alive = false; clearInterval(id) }
+    const stop = pollWithVisibility(tick, 45_000, BET_PASS_HIDDEN_MS)
+    return () => { alive = false; stop() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveMappedKey])
 
@@ -617,8 +624,8 @@ export function useNotifications(fixtures: Fixture[]): {
       }
     }
     tick()
-    const id = setInterval(tick, UNSETTLED_POLL_MS)
-    return () => { alive = false; clearInterval(id) }
+    const stop = pollWithVisibility(tick, UNSETTLED_POLL_MS, BET_PASS_HIDDEN_MS)
+    return () => { alive = false; stop() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unsettledKey])
 
