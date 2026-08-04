@@ -11,7 +11,7 @@
 // SPA (e.g. as a Vercel function) before relying on it in prod.
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { Plugin } from 'vite'
+import type { Plugin, ViteDevServer } from 'vite'
 import { MongoClient } from 'mongodb'
 
 // Read these lazily (at request time), NOT at module load: vite.config.ts
@@ -174,10 +174,66 @@ function participantsOf(
   return [home, away]
 }
 
+/**
+ * Routes with no hand-written dev implementation are served by loading the REAL
+ * `api/<name>.ts` Vercel handler through Vite's SSR pipeline and calling it
+ * behind a thin req/res shim.
+ *
+ * The five routes above are hand-mirrored, and every time one of them gained a
+ * feature (swift-search list mode, swift-bets `bet_status`, swift-status
+ * participant resolution) the dev copy was forgotten and `npm run dev` quietly
+ * behaved differently from prod. Delegating removes that whole failure mode for
+ * these three: there is exactly one implementation.
+ *
+ * All of mybet was simply absent — so locally the mybet panel, its bets and its
+ * search picker all returned nothing, which reads identically to "this event
+ * has no mybet data".
+ */
+const DELEGATED = ['mybet-bets', 'mybet-search', 'mybet-status'] as const
+
+function mountDelegated(server: ViteDevServer, name: string) {
+  server.middlewares.use(`/api/${name}`, async (req, res) => {
+    try {
+      const mod = (await server.ssrLoadModule(`/api/${name}.ts`)) as {
+        default: (req: unknown, res: unknown) => unknown | Promise<unknown>
+      }
+      // The handler reads req.body (Vercel pre-parses it) and writes via the
+      // Express-style res.status().json() chain, neither of which node's raw
+      // http objects provide.
+      const body = req.method === 'POST' ? await readJson(req) : {}
+      const shimRes = {
+        statusCode: 200,
+        status(code: number) {
+          this.statusCode = code
+          return this
+        },
+        setHeader(k: string, v: string) {
+          res.setHeader(k, v)
+          return this
+        },
+        json(payload: unknown) {
+          send(res, this.statusCode, payload)
+          return this
+        },
+        end(chunk?: string) {
+          res.statusCode = this.statusCode
+          res.end(chunk)
+          return this
+        },
+      }
+      await mod.default({ ...req, method: req.method, body, query: {}, headers: req.headers }, shimRes)
+    } catch (e) {
+      send(res, 500, { error: String((e as { message?: unknown })?.message ?? e) })
+    }
+  })
+}
+
 export function swiftApiPlugin(): Plugin {
   return {
     name: 'swift-api',
     configureServer(server) {
+      for (const name of DELEGATED) mountDelegated(server, name)
+
       server.middlewares.use('/api/swift-search', async (req, res) => {
         if (req.method !== 'POST') return send(res, 405, { error: 'POST only' })
         try {
