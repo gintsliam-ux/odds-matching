@@ -28,16 +28,30 @@ function ago(iso: string | null): string {
  * vertically; the most recent fire sits at the top. A "Dismiss all" link
  * appears once there are 2+ toasts.
  */
+/**
+ * How many toasts to actually render.
+ *
+ * The stack had no bound. The unsettled alert can legitimately produce a dozen
+ * at once (13 on production the first time it ran), and at ~120px each they
+ * ran off the bottom of the viewport — where they could be neither read nor
+ * dismissed, since each X is on its own card. Render the newest few and let
+ * the counter plus "Dismiss all" account for the rest; the notifications page
+ * is the place to see the full list.
+ */
+const MAX_VISIBLE = 4
+
 export function AlertToasts({ toasts, onDismiss, onDismissAll }: Props) {
   const navigate = useNavigate()
   if (toasts.length === 0) return null
   // Newest first so the most recent flip is at the top of the stack.
-  const ordered = [...toasts].reverse()
+  const all = [...toasts].reverse()
+  const ordered = all.slice(0, MAX_VISIBLE)
+  const hidden = all.length - ordered.length
   return (
     <div className="pointer-events-none fixed right-4 top-4 z-50 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col gap-2">
-      {ordered.length > 1 && (
+      {all.length > 1 && (
         <div className="pointer-events-auto flex items-center justify-between rounded-md border border-[color:var(--line-soft)] bg-[color:var(--panel)]/95 px-3 py-1.5 text-[11px] backdrop-blur">
-          <span className="text-[color:var(--muted-2)]">{ordered.length} active alerts</span>
+          <span className="text-[color:var(--muted-2)]">{all.length} active alerts</span>
           <button
             onClick={onDismissAll}
             className="font-medium text-gray-300 hover:text-white"
@@ -172,6 +186,15 @@ export function AlertToasts({ toasts, onDismiss, onDismissAll }: Props) {
           </div>
         )
       })}
+      {hidden > 0 && (
+        <button
+          type="button"
+          onClick={() => navigate('/notifications')}
+          className="pointer-events-auto rounded-md border border-[color:var(--line-soft)] bg-[color:var(--panel)]/95 px-3 py-1.5 text-left text-[11px] text-[color:var(--muted-2)] backdrop-blur hover:text-gray-200"
+        >
+          + {hidden} more — open notifications
+        </button>
+      )}
     </div>
   )
 }
