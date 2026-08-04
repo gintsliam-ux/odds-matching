@@ -150,13 +150,36 @@ export const SPORT_PAGE_SIZE = 200
 export async function fetchFixturesBySport(
   rawSports: string | string[],
   page = 0,
+  rawLeagues: string[] = [],
 ): Promise<{ rows: Fixture[]; hasMore: boolean }> {
   await ensureLogoCache()
   const from = page * SPORT_PAGE_SIZE
   const to = from + SPORT_PAGE_SIZE - 1
   const list = Array.isArray(rawSports) ? rawSports : [rawSports]
   let q = getSupabase().from(TABLE).select(COLUMNS)
-  q = list.length === 1 ? q.eq('sport', list[0]) : q.in('sport', list)
+  // `rawSports` must be the sport's OWN slugs. Competitions the feed files
+  // under another sport are picked up by league instead.
+  //
+  // They used to be picked up by querying every contributing slug and
+  // post-filtering on the client, which quietly broke the page: 21 of cricket's
+  // 41 active fixtures arrive as sport='soccer' (One Day Cup, Caribbean Premier
+  // League, Lanka Premier League…), so the query became sport IN (cricket,
+  // soccer) and a 200-row page was 180 soccer rows. Sorted furthest-future
+  // first, cricket's last fixture sat at index 774 — four "Load more" clicks
+  // and 800 mostly-irrelevant rows away — and the moment soccer publishes
+  // fixtures beyond cricket's horizon the sport shows nothing at all while the
+  // sidebar still counts 41.
+  //
+  // Filtering by league instead keeps the page dense: every row fetched belongs
+  // to the sport being viewed.
+  if (rawLeagues.length > 0) {
+    const quote = (v: string) => `"${v.replace(/["\\]/g, '')}"`
+    q = q.or(
+      `sport.in.(${list.map(quote).join(',')}),league.in.(${rawLeagues.map(quote).join(',')})`,
+    )
+  } else {
+    q = list.length === 1 ? q.eq('sport', list[0]) : q.in('sport', list)
+  }
   const { data, error } = await q
     .order('scheduled_start', { ascending: false })
     .range(from, to)
