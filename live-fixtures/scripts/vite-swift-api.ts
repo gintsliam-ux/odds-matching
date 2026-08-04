@@ -406,7 +406,7 @@ export function swiftApiPlugin(): Plugin {
               {
                 projection: {
                   _id: 1, bet_id: 1, user_id: 1, bet_time: 1, bet_amount: 1,
-                  bet_type: 1, odd: 1, pl: 1, is_bonus: 1,
+                  bet_type: 1, odd: 1, pl: 1, bet_status: 1, is_bonus: 1,
                   'derived.event_key': 1, 'derived.legs_event_keys': 1,
                   'derived.event_name': 1, 'derived.market_category': 1,
                   'derived.sport': 1, 'derived.type': 1, 'derived.legs_breakdown': 1,
@@ -437,6 +437,7 @@ export function swiftApiPlugin(): Plugin {
             return [{
               id: d._id, bet_id: d.bet_id, user_id: d.user_id, bet_time: d.bet_time,
               bet_amount: d.bet_amount, bet_type: d.bet_type, odd: d.odd, pl: d.pl,
+              bet_status: (d.bet_status as string | null) ?? null,
               is_bonus: !!d.is_bonus, sport: d.derived?.sport ?? null,
               type: d.derived?.type ?? null, market_category: d.derived?.market_category ?? null,
               event_key: d.derived?.event_key ?? null, legs_event_keys: legs,

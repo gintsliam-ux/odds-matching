@@ -2,6 +2,32 @@
 // by the leg's SwiftBet event_id when the bet carries one, else by the
 // derived.event_key/legs_event_keys slug join.
 
+/** Coarse settlement state derived from SwiftBet's `bet_status`.
+ *
+ *  - `pending`  the book hasn't resulted it yet ("Unresulted"/"Unsettled")
+ *  - `settled`  resulted and paid out ("paid")
+ *  - `void`     money returned or the bet never stood ("FullyRefunded",
+ *               "PartiallyRefunded", "Rejected", "Cancelled", "Failed")
+ *  - `unknown`  no bet_status — every bet placed before 2026-07-31, when
+ *               SwiftBet added the field. NOT the same as pending: we simply
+ *               don't know, so callers must not count these as outstanding.
+ *
+ *  Upstream casing is inconsistent ("paid" lower-case, the rest PascalCase),
+ *  so this lower-cases before comparing.
+ */
+export type BetSettlement = 'pending' | 'settled' | 'void' | 'unknown'
+
+export function betSettlement(betStatus: string | null | undefined): BetSettlement {
+  const s = (betStatus ?? '').trim().toLowerCase()
+  if (!s) return 'unknown'
+  if (s === 'paid') return 'settled'
+  if (s.startsWith('unresulted') || s.startsWith('unsettled')) return 'pending'
+  if (s.includes('refund') || s === 'rejected' || s === 'cancelled' || s === 'failed') return 'void'
+  // An unrecognised value is more likely a new settled/void state than a
+  // pending one — treat it as unknown rather than inventing an outstanding bet.
+  return 'unknown'
+}
+
 export interface SwiftBetRow {
   id: string
   bet_id: string
@@ -11,6 +37,10 @@ export interface SwiftBetRow {
   bet_type: string | null
   odd: number | null
   pl: number | null
+  /** SwiftBet's settlement state — "paid" | "Unresulted" | "FullyRefunded" |
+   *  "Rejected" | … Null on bets from before 2026-07-31, when the field was
+   *  added. Casing is inconsistent upstream, so normalise before comparing. */
+  bet_status: string | null
   is_bonus: boolean
   sport: string | null
   type: string | null // SINGLE | MULTI
