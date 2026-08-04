@@ -316,7 +316,17 @@ function Detail({
         </TabButton>
       </div>
 
-      {tab === 'details' && <DetailsTab fixture={f} now={now} mappingInfo={mappingInfo} />}
+      {tab === 'details' && (
+        <DetailsTab
+          fixture={f}
+          now={now}
+          mappingInfo={mappingInfo}
+          swiftBets={betsState.bets}
+          mybetBets={mybetBetsState.bets}
+          swiftBetsLoading={betsState.loading}
+          mybetBetsLoading={mybetBetsState.loading}
+        />
+      )}
       {tab === 'markets' && <MarketsTab fixture={f} />}
       {tab === 'bets' && (
         <BetsPanel
@@ -359,15 +369,78 @@ function TabButton({
 
 // --- tab panels ----------------------------------------------------------
 
+type Verdict = { label: string; tone: string }
+
+/** Bets not yet fetched: "…" while loading, "—" once we know there's nothing. */
+function pendingVerdict(loading: boolean): Verdict {
+  return { label: loading ? '…' : '—', tone: 'text-[color:var(--muted-2)]' }
+}
+
+/**
+ * Event-level settlement verdict for one brand's bets: has the book resulted
+ * this event yet, or is money still riding on it?
+ *
+ * `pending` is what decides it — as long as ONE bet is unresulted the event
+ * isn't done. Bets we can't classify ('unknown': SwiftBet rows predating
+ * bet_status, added 2026-07-31) are counted separately and never treated as
+ * outstanding, so an old event reads "not reported" rather than a false verdict.
+ */
+function settlementVerdict(
+  states: Array<'pending' | 'settled' | 'void' | 'unknown'>,
+): Verdict {
+  if (states.length === 0) return { label: '— no bets', tone: 'text-[color:var(--muted-2)]' }
+  const pending = states.filter((x) => x === 'pending').length
+  const settled = states.filter((x) => x === 'settled').length
+  const voided = states.filter((x) => x === 'void').length
+  const unknown = states.filter((x) => x === 'unknown').length
+  // Bets we can't classify are called out rather than folded into the verdict.
+  // Events straddling 2026-07-31 have a real mix — SwiftBet started writing
+  // bet_status partway through that day (0% before, 100% since), so "PAID · 13"
+  // on a day with 9 statusless bets would overclaim.
+  const gap = unknown > 0 ? ` · ${unknown} unreported` : ''
+  if (pending > 0) {
+    return {
+      label: `UNRESULTED · ${pending} of ${states.length} pending`,
+      tone: 'text-[color:var(--up)]',
+    }
+  }
+  if (settled > 0) {
+    const extra = voided > 0 ? ` · ${voided} void` : ''
+    return {
+      label: `PAID · ${settled} bet${settled === 1 ? '' : 's'}${extra}${gap}`,
+      tone: 'text-[color:var(--total)]',
+    }
+  }
+  if (voided > 0) return { label: `VOID · ${voided}${gap}`, tone: 'text-[color:var(--muted)]' }
+  // Everything unknown — pre-bet_status rows. Say nothing rather than guess.
+  return { label: '— not reported', tone: 'text-[color:var(--muted-2)]' }
+}
+
 function DetailsTab({
   fixture: f,
   now,
   mappingInfo,
+  swiftBets,
+  mybetBets,
+  swiftBetsLoading,
+  mybetBetsLoading,
 }: {
   fixture: Fixture
   now: Date
   mappingInfo: MappingInfo
+  swiftBets: SwiftBetRow[] | null
+  mybetBets: MybetBetRow[] | null
+  swiftBetsLoading: boolean
+  mybetBetsLoading: boolean
 }) {
+  // Per-brand settlement verdict, shown on each book's panel below. `null` bets
+  // means the fetch hasn't resolved — don't render that as "no bets".
+  const swiftVerdict = swiftBets
+    ? settlementVerdict(swiftBets.map((b) => betSettlement(b.bet_status)))
+    : pendingVerdict(swiftBetsLoading)
+  const mybetVerdict = mybetBets
+    ? settlementVerdict(mybetBets.map((b) => mybetSettlement(b.bet_status)))
+    : pendingVerdict(mybetBetsLoading)
   return (
     <>
       {f.periods.length > 0 && (
@@ -405,8 +478,8 @@ function DetailsTab({
       {/* OPTIC + SWIFT + mybet side-by-side. Stacks on narrow viewports. */}
       <div className="grid grid-cols-1 gap-4 border-t border-white/10 px-5 py-4 md:grid-cols-2 lg:grid-cols-3">
         <OpticPanel fixture={f} now={now} />
-        <SwiftPanel info={mappingInfo} />
-        <MybetPanel info={mappingInfo} />
+        <SwiftPanel info={mappingInfo} verdict={swiftVerdict} />
+        <MybetPanel info={mappingInfo} verdict={mybetVerdict} />
       </div>
     </>
   )
@@ -446,7 +519,7 @@ function OpticPanel({ fixture: f, now }: { fixture: Fixture; now: Date }) {
   )
 }
 
-function SwiftPanel({ info }: { info: MappingInfo }) {
+function SwiftPanel({ info, verdict }: { info: MappingInfo; verdict: Verdict }) {
   if (info.loading) {
     return <PanelSkeleton fields={10} />
   }
@@ -493,6 +566,7 @@ function SwiftPanel({ info }: { info: MappingInfo }) {
         {/* event-level */}
         <Field label="EVENT NAME" value={swiftEvent?.name ?? '—'} />
         <Field label="STATUS" value={(swiftEvent?.status ?? '—').toUpperCase()} />
+        <Field label="BETS RESULTED" value={verdict.label} tone={verdict.tone} />
         <Field label="HOME" value={swiftEvent?.home ?? '—'} />
         <Field label="AWAY" value={swiftEvent?.away ?? '—'} />
         <Field label="SCHEDULED (UTC)" value={fmtDateTime(swiftEvent?.start ?? null)} />
@@ -530,7 +604,7 @@ function SwiftPanel({ info }: { info: MappingInfo }) {
   )
 }
 
-function MybetPanel({ info }: { info: MappingInfo }) {
+function MybetPanel({ info, verdict }: { info: MappingInfo; verdict: Verdict }) {
   if (info.loading) {
     return <PanelSkeleton fields={10} />
   }
@@ -587,6 +661,7 @@ function MybetPanel({ info }: { info: MappingInfo }) {
           label="MARKET"
           value={openFlag == null ? '—' : openFlag ? 'OPEN' : 'CLOSED'}
         />
+        <Field label="BETS RESULTED" value={verdict.label} tone={verdict.tone} />
         <Field label="HOME" value={mybetEvent?.home ?? '—'} />
         <Field label="AWAY" value={mybetEvent?.away ?? '—'} />
         <Field label="CLOSES / SUSPEND (UTC)" value={fmtDateTime(suspend)} />
@@ -2161,17 +2236,20 @@ function Field({
   value,
   mono,
   copyable,
+  tone,
 }: {
   label: string
   value: string
   mono?: boolean
   copyable?: boolean
+  /** Optional text colour class, e.g. the settlement verdict's amber/green. */
+  tone?: string
 }) {
   return (
     <div className="min-w-0">
       <div className="text-[11px] text-[color:var(--muted-2)]">{prettyLabel(label)}</div>
       <div className="flex items-center gap-1.5">
-        <div className={`truncate text-[13px] text-gray-200 ${mono ? 'tabular-nums' : ''}`}>{value}</div>
+        <div className={`truncate text-[13px] ${tone ?? 'text-gray-200'} ${mono ? 'tabular-nums' : ''}`}>{value}</div>
         {copyable && value && value !== '—' && <CopyButton value={value} />}
       </div>
     </div>
