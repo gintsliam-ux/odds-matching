@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { fetchOverdueUpcomingFixtures } from '../lib/dataSource'
+import { fetchOverdueUpcomingFixtures, fetchRecentlyCompletedFixtures } from '../lib/dataSource'
 import { fetchEventMappingsFor } from '../lib/mappingData'
 import { fetchSwiftStatuses } from '../lib/swiftStatus'
 import { fetchMybetStatuses } from '../lib/mybetStatus'
-import { fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
-import { fetchMybetBets } from '../lib/mybetBets'
+import { betSettlement, fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
+import { fetchMybetBets, mybetSettlement, type MybetBetRow } from '../lib/mybetBets'
 import type { Fixture } from '../lib/types'
 
 export type NotificationKind =
@@ -13,6 +13,8 @@ export type NotificationKind =
   | 'swift_late_bet'
   | 'mybet_late_bet'
   | 'optic_overdue_prematch'
+  | 'swift_unsettled'
+  | 'mybet_unsettled'
 
 /** One bet that landed after OPTIC went live, normalised across both books for
  *  display on the notifications page. */
@@ -60,6 +62,15 @@ export interface Notification {
   lateBetCount?: number
   lateBetStake?: number
   lateBets?: LateBet[]
+  /** *_unsettled alerts: bets still pending on a game OPTIC finished. Only
+   *  bets whose whole exposure is this game are counted (see UnsettledAgg). */
+  unsettledCount?: number
+  unsettledStake?: number
+  /** Pending multi bets held up by a leg in another game — shown as context,
+   *  never a trigger. */
+  unsettledMultiCount?: number
+  /** When OPTIC finished the game (its `updated_at`). */
+  endedAt?: string | null
 }
 
 /** Per-fixture late-bet aggregate: count + total stake + the individual bets. */
@@ -67,6 +78,58 @@ type LateAgg = {
   swift?: { count: number; stake: number; bets: LateBet[] }
   mybet?: { count: number; stake: number; bets: LateBet[] }
 }
+
+/**
+ * Per-fixture unsettled aggregate. `count`/`stake` cover only bets whose ENTIRE
+ * exposure is this game; `multi` counts pending bets still waiting on a leg in
+ * another game.
+ *
+ * That split is the difference between a signal and noise. Of 116 bets left
+ * pending on games that ended 1-4 days ago, 108 were multis with an unplayed
+ * leg — nothing is wrong with those, they simply can't settle yet, and 23 of
+ * the 29 affected games had ONLY that kind. Triggering on them would make the
+ * alert ~93% false positives.
+ */
+type UnsettledAgg = {
+  swift?: { count: number; stake: number; multi: number }
+  mybet?: { count: number; stake: number; multi: number }
+}
+
+/** Does this bet's whole result rest on this one game? Singles do; so do Same
+ *  Game Multis, whose legs are all this fixture. Both should settle the moment
+ *  the game is resulted. A cross-game multi should not. */
+function settlesWithThisGame(b: SwiftBetRow | MybetBetRow): boolean {
+  if ((b as MybetBetRow).sgm) return true
+  return (b.leg_count ?? 0) <= 1
+}
+
+/**
+ * Run `worker` over `items` with at most `limit` in flight.
+ *
+ * Both bet passes were a plain sequential for-loop, which for 20 fixtures x 2
+ * books is 40 round-trips end to end — slow enough that the first result took
+ * minutes to appear, and slow enough that a page-load's worth of in-flight
+ * requests (two passes, doubled by StrictMode's double-mount, on top of the
+ * 10s status polls) sat queued against the browser's 6-connections-per-host
+ * budget. Four at a time keeps the wall-clock to seconds without flooding
+ * either the connection pool or the shared Atlas cluster.
+ */
+async function mapLimit<T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let cursor = 0
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const i = cursor++
+      if (i >= items.length) return
+      out[i] = await worker(items[i])
+    }
+  })
+  await Promise.all(runners)
+  return out
+}
+
+/** Concurrent bet reads per pass. */
+const BET_FETCH_CONCURRENCY = 4
 
 /** "market · outcome" for a SwiftBet leg; joins the picks for an SGM. */
 function swiftSelection(b: SwiftBetRow): string | null {
@@ -87,6 +150,16 @@ const POLL_MS = 10_000
  *  delay) and those always resolve fine, so don't alert until the game has been
  *  started for longer than this. */
 const SWIFT_OPEN_GRACE_MS = 2 * 60_000
+/** How long after OPTIC finishes a game before an unsettled bet is an alert. */
+const SETTLE_GRACE_MIN = 15
+/** Don't look further back than this for unsettled games — the backlog doesn't
+ *  converge on its own, so an unbounded window becomes a list nobody reads. */
+const UNSETTLED_MAX_AGE_H = 24
+/** Bets move slowly once a game is over; no need to re-read Mongo often. */
+const UNSETTLED_POLL_MS = 120_000
+/** Cap the per-tick Mongo reads. The shared Atlas cluster also serves the
+ *  user's scrapers, so this pass stays deliberately small. */
+const UNSETTLED_MAX_FIXTURES = 20
 
 /**
  * The core alert that this project exists for: SwiftBet is still taking
@@ -117,6 +190,11 @@ export function useNotifications(fixtures: Fixture[]): {
   >(new Map())
   // Late bets: fixtures where a bet landed AFTER OPTIC went live, per brand.
   const [lateBets, setLateBets] = useState<Map<string, LateAgg>>(new Map())
+  // Unsettled: games OPTIC finished 15+ min ago that a book still hasn't
+  // resulted. Its own fixture set — these games have long since dropped off the
+  // board feed, so they don't appear in `fixtures`.
+  const [endedFixtures, setEndedFixtures] = useState<Fixture[]>([])
+  const [unsettled, setUnsettled] = useState<Map<string, UnsettledAgg>>(new Map())
 
   // The catalogues used to be polled here once a minute for their eventById
   // snapshots. They no longer carry events at all — names and suspend times now
@@ -140,6 +218,22 @@ export function useNotifications(fixtures: Fixture[]): {
     return () => { alive = false; clearInterval(id) }
   }, [])
 
+  // Recently-completed fixtures, refreshed every 2 min. Deliberately NOT merged
+  // into `allFixtures`: those drive the still-open / late-bet rules, which are
+  // about games in progress, and feeding finished games in would widen every
+  // other poll's id set for no benefit.
+  useEffect(() => {
+    let alive = true
+    const load = () => {
+      fetchRecentlyCompletedFixtures({ endedMinutes: SETTLE_GRACE_MIN, maxAgeHours: UNSETTLED_MAX_AGE_H })
+        .then((rows) => alive && setEndedFixtures(rows))
+        .catch(() => {/* keep previous */})
+    }
+    load()
+    const id = setInterval(load, UNSETTLED_POLL_MS)
+    return () => { alive = false; clearInterval(id) }
+  }, [])
+
   // Memoised so its reference is stable across renders when neither source
   // changed — otherwise the notifications array below would be a new ref
   // every Layout tick and downstream consumers (NotificationsPage, the toast
@@ -159,7 +253,13 @@ export function useNotifications(fixtures: Fixture[]): {
   //
   // Keyed on the id string so the 15s board poll (new array identity, same
   // ids) doesn't restart the interval.
-  const mappedIdKey = useMemo(() => allFixtures.map((f) => f.id).sort().join(','), [allFixtures])
+  // Ended fixtures are included here (and only here): the unsettled rule needs
+  // their book ids, but they must stay out of `allFixtures` so the live rules
+  // don't see finished games.
+  const mappedIdKey = useMemo(
+    () => [...new Set([...allFixtures.map((f) => f.id), ...endedFixtures.map((f) => f.id)])].sort().join(','),
+    [allFixtures, endedFixtures],
+  )
   useEffect(() => {
     let alive = true
     const load = () => {
@@ -293,19 +393,29 @@ export function useNotifications(fixtures: Fixture[]): {
     return out
   }, [allFixtures, eventMap, mybetMap])
   const liveMappedKey = liveMapped.map((f) => f.id).sort().join(',')
-  const lateBetsRef = useRef(false)
   useEffect(() => {
     if (liveMapped.length === 0) {
       setLateBets(new Map())
       return
     }
     let alive = true
+/**
+ * Guard against two ticks of the same poll overlapping.
+ *
+ * This MUST be created inside the effect, not held in a ref across effect
+ * instances. React StrictMode mounts, cleans up, then re-runs every effect: a
+ * shared ref is still `true` from the first (now-abandoned) tick when the
+ * second starts, so the second returns immediately — while the first finishes
+ * its work and discards the result, because its own `alive` was set false by
+ * the cleanup. The pass then produces nothing until the next interval fires.
+ */
+    let running = false
     const tick = async () => {
-      if (lateBetsRef.current) return
-      lateBetsRef.current = true
+      if (running) return
+      running = true
       try {
         const next = new Map<string, LateAgg>()
-        for (const f of liveMapped) {
+        const pairs = await mapLimit(liveMapped, BET_FETCH_CONCURRENCY, async (f) => {
           // OPTIC's live moment: its recorded actual_start, else scheduled.
           const liveAt = f.actualStart ?? f.scheduledStart ?? null
           const date = (f.scheduledStart ?? f.startTime ?? '').slice(0, 10)
@@ -361,11 +471,12 @@ export function useNotifications(fixtures: Fixture[]): {
               }
             } catch {/* skip this fixture's mybet bets */}
           }
-          if (entry.swift || entry.mybet) next.set(f.id, entry)
-        }
+          return [f.id, entry] as const
+        })
+        for (const [id, entry] of pairs) if (entry.swift || entry.mybet) next.set(id, entry)
         if (alive) setLateBets(next)
       } finally {
-        lateBetsRef.current = false
+        running = false
       }
     }
     tick()
@@ -373,6 +484,88 @@ export function useNotifications(fixtures: Fixture[]): {
     return () => { alive = false; clearInterval(id) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveMappedKey])
+
+  // Unsettled detection: for each recently-finished game, read that game's bets
+  // and count the ones still pending. Two-minute cadence and a hard fixture cap
+  // — settlement moves in minutes-to-hours, not seconds, and this shares an
+  // Atlas cluster with the user's scrapers.
+  const unsettledTargets = useMemo(() => {
+    const out: Fixture[] = []
+    for (const f of endedFixtures) {
+      if (!eventMap.has(f.id) && !mybetMap.has(f.id)) continue
+      out.push(f)
+      if (out.length >= UNSETTLED_MAX_FIXTURES) break
+    }
+    return out
+  }, [endedFixtures, eventMap, mybetMap])
+  const unsettledKey = unsettledTargets.map((f) => f.id).sort().join(',')
+  useEffect(() => {
+    if (unsettledTargets.length === 0) {
+      setUnsettled(new Map())
+      return
+    }
+    let alive = true
+    // See the note on `running` in the late-bet effect above — same trap.
+    let running = false
+    const tick = async () => {
+      if (running) return
+      running = true
+      try {
+        const next = new Map<string, UnsettledAgg>()
+        const pairs = await mapLimit(unsettledTargets, BET_FETCH_CONCURRENCY, async (f) => {
+          const date = (f.scheduledStart ?? f.startTime ?? '').slice(0, 10)
+          const entry: UnsettledAgg = {}
+          const sid = eventMap.get(f.id)
+          if (sid && date) {
+            try {
+              const bets = await fetchSwiftBets({
+                date, home: f.homeName, away: f.awayName, swiftEventId: sid,
+                swiftActualStart: f.actualStart, scheduledStart: f.scheduledStart,
+              })
+              // Only `pending` counts. Bets from before SwiftBet added
+              // bet_status classify as 'unknown' and must never be read as
+              // outstanding, or every pre-2026-07-31 game would alert forever.
+              const pending = bets.filter((b) => betSettlement(b.bet_status) === 'pending')
+              const own = pending.filter(settlesWithThisGame)
+              if (own.length) {
+                entry.swift = {
+                  count: own.length,
+                  stake: own.reduce((sum, b) => sum + (b.bet_amount ?? 0), 0),
+                  multi: pending.length - own.length,
+                }
+              }
+            } catch {/* skip this fixture's swift bets */}
+          }
+          const mid = mybetMap.get(f.id)
+          if (mid) {
+            try {
+              const mbets = await fetchMybetBets({
+                eventId: mid, suspendAt: f.scheduledStart, home: f.homeName, away: f.awayName,
+              })
+              const pending = mbets.filter((b) => mybetSettlement(b.bet_status) === 'pending')
+              const own = pending.filter(settlesWithThisGame)
+              if (own.length) {
+                entry.mybet = {
+                  count: own.length,
+                  stake: own.reduce((sum, b) => sum + (b.amount_bet ?? 0), 0),
+                  multi: pending.length - own.length,
+                }
+              }
+            } catch {/* skip this fixture's mybet bets */}
+          }
+          return [f.id, entry] as const
+        })
+        for (const [id, entry] of pairs) if (entry.swift || entry.mybet) next.set(id, entry)
+        if (alive) setUnsettled(next)
+      } finally {
+        running = false
+      }
+    }
+    tick()
+    const id = setInterval(tick, UNSETTLED_POLL_MS)
+    return () => { alive = false; clearInterval(id) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unsettledKey])
 
   const notifications = useMemo<Notification[]>(() => {
     const out: Notification[] = []
@@ -464,8 +657,54 @@ export function useNotifications(fixtures: Fixture[]): {
         }
       }
     }
+
+    // Unsettled: OPTIC finished the game 15+ min ago and a book still has bets
+    // pending on it. Iterated over `endedFixtures` rather than `allFixtures` —
+    // a game that ended hours ago is long gone from the board feed.
+    for (const f of endedFixtures) {
+      const agg = unsettled.get(f.id)
+      if (!agg) continue
+      const sid = eventMap.get(f.id) ?? null
+      const mid = mybetMap.get(f.id) ?? null
+      const base = {
+        opticFixtureId: f.id,
+        swiftEventId: sid,
+        sport: f.sport,
+        league: f.league,
+        home: f.homeName,
+        away: f.awayName,
+        scheduledStart: f.scheduledStart,
+        opticActualStart: f.actualStart,
+        opticStatus: f.status,
+        swiftStatus: sid ? liveStatus.get(sid) ?? null : null,
+        swiftEventName: sid ? swiftNames.get(sid) ?? null : null,
+        endedAt: f.updatedAt,
+      }
+      if (agg.swift) {
+        out.push({
+          id: `swiftunsettled-${f.id}`,
+          kind: 'swift_unsettled',
+          ...base,
+          unsettledCount: agg.swift.count,
+          unsettledStake: agg.swift.stake,
+          unsettledMultiCount: agg.swift.multi,
+        })
+      }
+      if (agg.mybet) {
+        out.push({
+          id: `mybetunsettled-${f.id}`,
+          kind: 'mybet_unsettled',
+          ...base,
+          mybetEventId: mid,
+          mybetEventName: mid ? mybetLive.get(mid)?.name ?? null : null,
+          unsettledCount: agg.mybet.count,
+          unsettledStake: agg.mybet.stake,
+          unsettledMultiCount: agg.mybet.multi,
+        })
+      }
+    }
     return out
-  }, [allFixtures, eventMap, swiftNames, liveStatus, pollIdsSet, mybetMap, mybetLive, lateBets])
+  }, [allFixtures, eventMap, swiftNames, liveStatus, pollIdsSet, mybetMap, mybetLive, lateBets, endedFixtures, unsettled])
 
   return { notifications, loading }
 }
