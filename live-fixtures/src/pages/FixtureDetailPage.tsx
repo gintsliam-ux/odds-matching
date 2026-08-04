@@ -1732,19 +1732,25 @@ function legStake(b: SwiftBetRow): number {
   return isMulti && b.leg_count > 0 ? stake / b.leg_count : stake
 }
 
-/** Overall multi status from per-leg result labels: dead the moment any leg
- *  loses, won when every leg won (pushes don't kill it), otherwise still alive
- *  (legs pending, none lost). Drives the live/settled badge. */
-type MultiStatus = 'Alive' | 'Won' | 'Lost'
+/**
+ * Decided outcome of a multi, from its per-leg result labels: dead the moment
+ * any leg loses, won when every leg won (pushes don't kill it).
+ *
+ * Returns null while it's still running. There used to be an 'Alive' badge for
+ * that case, but it sat directly above the PENDING chip saying the same thing
+ * in the same colour — and PENDING is the book's own bet_status rather than
+ * something derived from leg results, so it's the one to keep. WON/LOST stay
+ * because PENDING can't tell you which way a settled bet went.
+ */
+type MultiStatus = 'Won' | 'Lost'
 function statusFromLabels(labels: Array<'Won' | 'Lost' | 'Open' | 'Push'>): MultiStatus | null {
   if (labels.length === 0) return null
   if (labels.some((l) => l === 'Lost')) return 'Lost'
   if (labels.every((l) => l === 'Won' || l === 'Push')) return 'Won'
-  return 'Alive'
+  return null
 }
 
 const MULTI_STATUS_BADGE: Record<MultiStatus, string> = {
-  Alive: 'bg-[color:var(--up)]/10 text-[color:var(--up)]',
   Won: 'bg-[color:var(--total)]/10 text-[color:var(--total)]',
   Lost: 'bg-[color:var(--live)]/10 text-[color:var(--live)]',
 }
@@ -1965,7 +1971,7 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
       ? 'Won'
       : mainRes.label === 'Lost'
         ? 'Lost'
-        : 'Alive'
+        : null
     : isMulti
       ? statusFromLabels(
           (b.leg_breakdown ?? []).map((l, i) =>
@@ -2007,10 +2013,7 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
               <span
                 className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold ${MULTI_STATUS_BADGE[mStatus]}`}
               >
-                {mStatus === 'Alive' && (
-                  <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--up)] pulse-dot" />
-                )}
-                {mStatus === 'Alive' ? 'ALIVE' : mStatus === 'Won' ? 'WON' : 'LOST'}
+                {mStatus === 'Won' ? 'WON' : 'LOST'}
               </span>
             </div>
           )}
