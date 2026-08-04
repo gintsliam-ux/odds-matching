@@ -7,7 +7,7 @@ import { DetailSkeleton, PanelSkeleton } from '../components/Skeleton'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { fetchFixtureById } from '../lib/dataSource'
 import { fetchSwiftEvent, swiftEventUrl } from '../lib/swiftStatus'
-import { fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
+import { betSettlement, fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
 import { fetchMybetBets, type MybetBetRow } from '../lib/mybetBets'
 import { BRAND_PILL, BRAND_TONE, type Brand } from '../lib/brand'
 import { settleFromScore, type ScoreCtx } from '../lib/settleBet'
@@ -1561,6 +1561,12 @@ function BetsTab({
   const ctx = scoreCtx(f)
   const lateCount = list.filter((b) => b.placed_after_start).length
   const mismatchCount = list.filter((b) => betMismatch(b, ctx)).length
+  // Bets SwiftBet hasn't resulted yet. Worth surfacing on its own because the
+  // feed pre-books a pending bet's `pl` as MINUS THE FULL STAKE and only flips
+  // it to the real figure once resulted — so any P/L shown alongside is
+  // pessimistic by exactly this stake until the book settles.
+  const pending = list.filter((b) => betSettlement(b.bet_status) === 'pending')
+  const pendingStake = pending.reduce((sum, b) => sum + (b.bet_amount ?? 0), 0)
 
   if (list.length === 0) {
     return (
@@ -1581,7 +1587,7 @@ function BetsTab({
 
   return (
     <div className="space-y-3 px-5 py-5">
-      {(swiftActualStart || lateCount > 0 || mismatchCount > 0) && (
+      {(swiftActualStart || lateCount > 0 || mismatchCount > 0 || pending.length > 0) && (
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px] text-[color:var(--muted)]">
           {swiftActualStart && (
             <span>
@@ -1592,6 +1598,15 @@ function BetsTab({
           {lateCount > 0 && (
             <span className="inline-flex items-center gap-1.5 rounded-full bg-[color:var(--live)]/10 px-2.5 py-0.5 text-[11px] font-semibold text-[color:var(--live)]">
               ⚠ {lateCount} placed after start
+            </span>
+          )}
+          {pending.length > 0 && (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full bg-[color:var(--up)]/10 px-2.5 py-0.5 text-[11px] font-semibold text-[color:var(--up)]"
+              title="SwiftBet has not resulted these yet. Their pl is booked as minus the full stake until it does, so P/L above understates by this amount."
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--up)] pulse-dot" />
+              {pending.length} pending result · ${pendingStake.toFixed(2)} at stake
             </span>
           )}
           {mismatchCount > 0 && (
@@ -1836,6 +1851,11 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
   const shownOdds = isSgm ? odd : legOdds ?? odd
   const perLegStake = legStake(b)
   const typeBadge = isSgm ? `SGM · ${sels.length}` : isMulti ? `MULTI · ${b.leg_count}` : null
+  // SwiftBet's OWN settlement state, distinct from the per-selection Won/Lost
+  // we derive: a bet can have every leg decided and still not be resulted or
+  // paid. 'unknown' means the bet predates the bet_status field (2026-07-31),
+  // so we show nothing rather than implying it's outstanding.
+  const settlement = betSettlement(b.bet_status)
 
   // Fill in unsettled legs from the fixture's final score (full-match markets).
   const ctx: ScoreCtx = {
@@ -1908,6 +1928,27 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
           )}
           {b.scratched && (
             <div className="mt-0.5 text-[10px] text-[color:var(--muted-2)]">scratched</div>
+          )}
+          {/* SwiftBet's settlement state. Only shown when the book actually
+              tells us — bets predating the bet_status field stay unlabelled
+              rather than being implied to be outstanding. */}
+          {settlement === 'pending' && (
+            <div className="mt-1">
+              <span className="inline-flex items-center gap-1 rounded bg-[color:var(--up)]/10 px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--up)]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--up)] pulse-dot" />
+                PENDING
+              </span>
+            </div>
+          )}
+          {settlement === 'void' && (
+            <div className="mt-1">
+              <span
+                className="inline-flex items-center rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--muted)]"
+                title={b.bet_status ?? undefined}
+              >
+                {(b.bet_status ?? 'VOID').toUpperCase()}
+              </span>
+            </div>
           )}
         </td>
         {/* Market / Outcome — an expandable SGM collapses its legs behind a toggle. */}
