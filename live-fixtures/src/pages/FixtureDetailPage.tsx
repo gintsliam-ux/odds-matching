@@ -10,6 +10,7 @@ import { fetchSwiftEvent, swiftEventUrl } from '../lib/swiftStatus'
 import { betSettlement, fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
 import { fetchMybetBets, mybetSettlement, type MybetBetRow } from '../lib/mybetBets'
 import { BRAND_PILL, BRAND_TONE, type Brand } from '../lib/brand'
+import { pollWithVisibility } from '../lib/poll'
 import { settleFromScore, type ScoreCtx } from '../lib/settleBet'
 import { leagueLabel, periodAbbrev, periodNoun, periodState } from '../lib/sports'
 import { Avatar } from '../components/Avatar'
@@ -1079,6 +1080,8 @@ function MarketCard<K extends string>({
 
 /** How often an open fixture re-reads its bets from each book. */
 const BETS_POLL_MS = 60_000
+/** Same read, but the fixture is sitting in a tab you are not looking at. */
+const BETS_POLL_HIDDEN_MS = 5 * 60_000
 
 /**
  * Cheap change signature for a bet list. Polling replaces the array every
@@ -1134,10 +1137,10 @@ function useSwiftBets(f: Fixture, swiftActualStart: string | null, swiftEventId:
       }
     }
     load()
-    const id = setInterval(load, BETS_POLL_MS)
+    const stop = pollWithVisibility(load, BETS_POLL_MS, BETS_POLL_HIDDEN_MS)
     return () => {
       alive = false
-      clearInterval(id)
+      stop()
     }
   }, [date, f.homeName, f.awayName, swiftEventId, swiftActualStart, scheduledStart])
   return { bets, loading, error, date }
@@ -1291,10 +1294,10 @@ function useMybetBets(args: { eventId: string | null; suspendAt: string | null; 
       }
     }
     load()
-    const id = setInterval(load, BETS_POLL_MS)
+    const stop = pollWithVisibility(load, BETS_POLL_MS, BETS_POLL_HIDDEN_MS)
     return () => {
       alive = false
-      clearInterval(id)
+      stop()
     }
   }, [eventId, suspendAt, liveAt, home, away])
   return { bets, loading, error }
