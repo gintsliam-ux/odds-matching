@@ -182,7 +182,12 @@ export async function searchMybetCompetitions(args: {
       q: args.q,
       kind: 'competitions',
       limit: args.limit ?? 50,
-      ...(args.outright ? { outright: true, sport: args.sport ?? undefined } : {}),
+      // Always scope to the sport, as the SwiftBet search already does.
+      // Without it, mapping a DARTS tournament and typing "open" returned
+      // Snooker's English/British/Shenzhen Open — a different sport entirely,
+      // and the only candidates on offer.
+      ...(args.sport ? { sport: args.sport } : {}),
+      ...(args.outright ? { outright: true } : {}),
     }),
     signal: args.signal,
   })
