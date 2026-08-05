@@ -150,12 +150,21 @@ export async function searchMybetCompetitions(args: {
   q: string
   limit?: number
   signal?: AbortSignal
+  /** Search outright markets rather than league competitions — see the note in
+   *  api/mybet-search.ts. Golf has no mybet competition to map to. */
+  outright?: boolean
+  sport?: string | null
 }): Promise<MybetCompetition[]> {
   if (args.q.trim().length < 2) return []
   const res = await fetch('/api/mybet-search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ q: args.q, kind: 'competitions', limit: args.limit ?? 50 }),
+    body: JSON.stringify({
+      q: args.q,
+      kind: 'competitions',
+      limit: args.limit ?? 50,
+      ...(args.outright ? { outright: true, sport: args.sport ?? undefined } : {}),
+    }),
     signal: args.signal,
   })
   if (!res.ok) throw new Error(`mybet-search ${res.status}`)
