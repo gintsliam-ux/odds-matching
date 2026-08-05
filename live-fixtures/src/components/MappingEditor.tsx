@@ -154,6 +154,10 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
   // where SwiftBet uses "Football"). Falls back to "no filter" for sports the
   // book doesn't map, so an unknown sport shows everything rather than nothing.
   const swiftSport = provider === 'mybet' ? mybetSportOf(target.opticSportRaw) : swiftSportOf(target.opticSportRaw)
+  // Golf has no mybet competition to map to — its outrights carry neither a
+  // league nor a match, so the normal competition list can only ever offer
+  // "PGA Tour". Search the outright markets themselves instead.
+  const mybetOutrightSport = target.opticSportRaw.toLowerCase() === 'golf'
   const sportMatches = (s: string | null) =>
     !swiftSport || (s ?? '').toLowerCase() === swiftSport.toLowerCase()
 
@@ -174,7 +178,12 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
         if (target.kind === 'competition') {
           const comps =
             provider === 'mybet'
-              ? await searchMybetCompetitions({ q, signal: ctl.signal })
+              ? await searchMybetCompetitions({
+                  q,
+                  signal: ctl.signal,
+                  outright: mybetOutrightSport,
+                  sport: swiftSport,
+                })
               : await searchSwiftCompetitions({ q, sport: swiftSport, signal: ctl.signal })
           if (!ctl.signal.aborted) setLiveComps(comps)
         } else {

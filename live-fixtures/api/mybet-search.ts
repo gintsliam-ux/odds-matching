@@ -41,6 +41,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       q?: string
       kind?: 'events' | 'competitions'
       competitionId?: string | null
+      /** Return outright markets as candidates instead of league competitions. */
+      outright?: boolean
       /** mybet sport name ("Basketball") — see mybetSportOf. */
       sport?: string | null
       limit?: number
@@ -64,6 +66,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const client = await getClient()
     const coll = client.db(MONGO_DB).collection(MYBET_COLL)
     res.setHeader('Cache-Control', 'no-store')
+
+    // OUTRIGHT MODE. mybet's competition list is built from head-to-head events
+    // grouped by league — which for golf offers only "PGA Tour" and "LIV Golf
+    // Tour", never a tournament. The outright markets are excluded twice over:
+    // all 25 golf outrights carry no `league` AND no `match`, so they fail both
+    // halves of that filter. That is correct for team sports, where a futures
+    // market is noise, and wrong for golf, where the outright IS the thing to
+    // map to. Here they become the candidates instead, keyed by event id since
+    // they have no competition to belong to.
+    if (body.kind === 'competitions' && body.outright) {
+      const filter: Record<string, unknown> = { comps: { $exists: true } }
+      if (body.sport) filter.sport = body.sport
+      if (re) filter.description = re
+      const docs = await coll
+        .find(filter, { projection: { _id: 1, description: 1, sport: 1, suspendAt: 1 } })
+        .sort({ suspendAt: -1 })
+        .limit(limit)
+        .toArray()
+      const competitions = docs
+        .filter((d) => d.description)
+        .map((d) => ({
+          id: String(d._id),
+          name: (d.description as string) ?? '',
+          sport: (d.sport as string | null) ?? null,
+          n: 1,
+        }))
+      res.status(200).json({ competitions })
+      return
+    }
 
     if (body.kind === 'competitions') {
       const rows = await coll
