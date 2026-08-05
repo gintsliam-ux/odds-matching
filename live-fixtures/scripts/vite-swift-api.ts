@@ -87,21 +87,38 @@ async function readJson(req: IncomingMessage): Promise<{ ids?: unknown }> {
  * search picker all returned nothing, which reads identically to "this event
  * has no mybet data".
  */
-const DELEGATED = [
-  'mybet-bets',
-  'mybet-search',
-  'mybet-status',
-  'swift-bets',
-  'swift-search',
-  'swift-status',
-] as const
+/**
+ * Routes this file still implements by hand, and which therefore must NOT be
+ * delegated. Everything else under /api resolves to its real handler.
+ *
+ * mapping-tick keeps its own version because the throttle is genuinely
+ * dev-specific; mongo-pulse likewise. Both are mounted before the catch-all
+ * below, so Connect gives them the request first.
+ */
+const HAND_WRITTEN = new Set(['mapping-tick', 'mongo-pulse'])
 
-function mountDelegated(server: ViteDevServer, name: string) {
-  server.middlewares.use(`/api/${name}`, async (req, res) => {
+/** `/api/foo` -> `foo`, ignoring query string and any trailing path. */
+function routeName(url: string | undefined): string | null {
+  const path = (url ?? '').split('?')[0].replace(/^\/+/, '').replace(/\/+$/, '')
+  return /^[a-z0-9-]+$/i.test(path) ? path : null
+}
+
+function mountDelegated(server: ViteDevServer) {
+  // A catch-all rather than a list. Adding an api/*.ts used to mean also
+  // remembering to name it here, and forgetting simply made the route return
+  // nothing in dev — the same silent divergence that the hand-written copies
+  // caused, in a new place. Now any handler that exists is served.
+  server.middlewares.use('/api', async (req, res, next) => {
+    const name = routeName(req.url)
+    if (!name || HAND_WRITTEN.has(name)) return next()
+    let mod: { default?: (req: unknown, res: unknown) => unknown | Promise<unknown> }
     try {
-      const mod = (await server.ssrLoadModule(`/api/${name}.ts`)) as {
-        default: (req: unknown, res: unknown) => unknown | Promise<unknown>
-      }
+      mod = (await server.ssrLoadModule(`/api/${name}.ts`)) as typeof mod
+    } catch {
+      return next() // no such handler — let Vite 404 it
+    }
+    if (typeof mod.default !== 'function') return next()
+    try {
       // The handler reads req.body (Vercel pre-parses it) and writes via the
       // Express-style res.status().json() chain, neither of which node's raw
       // http objects provide.
@@ -137,7 +154,7 @@ export function swiftApiPlugin(): Plugin {
   return {
     name: 'swift-api',
     configureServer(server) {
-      for (const name of DELEGATED) mountDelegated(server, name)
+
 
       // GET /api/mapping-tick — see api/mapping-tick.ts. Server-throttled
       // self-trigger for the matcher; the open terminal pings it on a timer.
@@ -229,6 +246,9 @@ export function swiftApiPlugin(): Plugin {
           return send(res, 500, { ok: false, error: String((e as { message?: unknown })?.message ?? e) })
         }
       })
+      // Last: anything under /api not handled above resolves to its real
+      // api/*.ts handler.
+      mountDelegated(server)
     },
   }
 }

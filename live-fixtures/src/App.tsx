@@ -4,6 +4,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import Terminal from './pages/Terminal'
 import FixtureDetailPage from './pages/FixtureDetailPage'
 import MappingPage from './pages/Mapping'
+import GolfDetailPage from './pages/GolfDetailPage'
 import NotificationsPage from './pages/NotificationsPage'
 
 export default function App() {
@@ -23,6 +24,8 @@ export default function App() {
             <Route path="mapping" element={<MappingPage />} />
             <Route path="mapping/:sport" element={<MappingPage />} />
             <Route path="mapping/:sport/:league" element={<MappingPage />} />
+            {/* Golf has no fixture, so it can't live under /fixture/:id. */}
+            <Route path="golf/:tournamentId" element={<GolfDetailPage />} />
             <Route path="notifications" element={<NotificationsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
