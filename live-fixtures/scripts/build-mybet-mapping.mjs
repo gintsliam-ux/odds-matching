@@ -415,8 +415,13 @@ async function getAllSupabase(pathAndQuery) {
 }
 
 /** Wipe every auto+non-verified mybet competition row before re-upserting. */
+/** See the note in build-mapping.mjs — the matcher must not delete mappings
+ *  for sports it cannot rebuild. */
+const UNMANAGED_SPORTS = ['golf']
+
 async function deleteAllAutoUnverified() {
-  const r = await fetchRetry(`${REST}/competition_mapping?provider=eq.mybet&source=eq.auto&verified=eq.false`, {
+  const qs = `provider=eq.mybet&source=eq.auto&verified=eq.false&optic_sport=not.in.(${UNMANAGED_SPORTS.join(',')})`
+  const r = await fetchRetry(`${REST}/competition_mapping?${qs}`, {
     method: 'DELETE',
     headers: { ...HDR, Prefer: 'return=minimal' },
   })

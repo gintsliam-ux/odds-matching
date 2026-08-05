@@ -881,8 +881,23 @@ async function getAllSupabase(pathAndQuery) {
  * table. Sticky-manual rows (source='manual') and verified rows are left
  * alone. PostgREST returns 204 on success.
  */
+/**
+ * Sports the matcher does not process, and whose mappings it must therefore
+ * never delete.
+ *
+ * The cleanup below clears every auto row so the upsert that follows is the
+ * only source of auto mappings — correct, but only for sports this script
+ * actually rebuilds. Golf is not one: it has no rows in `live_fixtures` at all
+ * (its OPTIC side is the `golf_outrights` price table), so the matcher can
+ * neither see it nor recreate it. Golf mappings made in the UI were being
+ * wiped within five minutes by the next mapping-tick and silently reverting to
+ * Unmapped.
+ */
+const UNMANAGED_SPORTS = ['golf']
+const UNMANAGED_FILTER = `&optic_sport=not.in.(${UNMANAGED_SPORTS.join(',')})`
+
 async function deleteAllAutoUnverified() {
-  const qs = 'provider=eq.swift&source=eq.auto&verified=eq.false'
+  const qs = `provider=eq.swift&source=eq.auto&verified=eq.false${UNMANAGED_FILTER}`
   const r = await fetchRetry(`${REST}/competition_mapping?${qs}`, {
     method: 'DELETE',
     headers: { ...HDR, Prefer: 'return=minimal' },
