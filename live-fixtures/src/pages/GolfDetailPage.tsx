@@ -13,6 +13,7 @@ import { fetchCompetitionMappings, type CompetitionMapping } from '../lib/mappin
 import { prettyLeague } from '../lib/sports'
 import { fmtDateTime, melbDateTime } from '../lib/format'
 import { swiftEventUrl } from '../lib/swiftStatus'
+import { Field, Grid, SourcePanel } from '../components/SourcePanel'
 
 /**
  * Golf tournament page — the event page's layout, for something that is not an
@@ -112,17 +113,9 @@ export default function GolfDetailPage() {
     }
   }, [tournament])
 
-  // Join the two fields on a canonical name so each favourite carries both
-  // sides' prices. See golferKey for what does and doesn't join.
-  const rows = useMemo(() => {
-    const swiftSels = swift?.markets?.[0]?.selections ?? []
-    const byKey = new Map<string, SwiftSelection>()
-    for (const s of swiftSels) if (s.name) byKey.set(golferKey(s.name), s)
-    return (prices ?? []).slice(0, TOP_N).map((p) => {
-      const s = byKey.get(golferKey(p.golfer)) ?? null
-      return { ...p, swiftOdds: s?.odds ?? null, swiftName: s?.name ?? null }
-    })
-  }, [prices, swift])
+  // Markets lists the bookmakers we hold prices from — the book's own outright
+  // is reported on the SWIFT panel in Details rather than mixed into this table.
+  const rows = useMemo(() => (prices ?? []).slice(0, TOP_N), [prices])
 
   const books = useMemo(() => {
     const set = new Set<string>()
@@ -200,9 +193,9 @@ export default function GolfDetailPage() {
         </div>
 
         {tab === 'markets' ? (
-          <MarketsTab rows={rows} books={books} swift={swift} total={prices?.length ?? 0} />
+          <MarketsTab rows={rows} books={books} total={prices?.length ?? 0} />
         ) : (
-          <DetailsTab tournament={tournament} mapping={mapping} swift={swift} swiftEventId={swiftEventId} />
+          <DetailsTab tournament={tournament} mapping={mapping} swift={swift} swiftEventId={swiftEventId} prices={prices} />
         )}
       </div>
     </div>
@@ -222,19 +215,8 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   )
 }
 
-/** Outright, top N favourites, with every price we hold for each. */
-function MarketsTab({
-  rows,
-  books,
-  swift,
-  total,
-}: {
-  rows: Array<GolfPrice & { swiftOdds: number | null; swiftName: string | null }>
-  books: string[]
-  swift: SwiftOutright | null
-  total: number
-}) {
-  const swiftCount = swift?.markets?.[0]?.selections?.length ?? 0
+/** Outright, top N favourites, priced by each bookmaker we hold. */
+function MarketsTab({ rows, books, total }: { rows: GolfPrice[]; books: string[]; total: number }) {
   return (
     <div className="px-5 py-4">
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -244,11 +226,6 @@ function MarketsTab({
         <span className="text-[11px] text-[color:var(--muted-2)]">
           top {rows.length} of {total} by price
         </span>
-        {swiftCount > 0 && (
-          <span className="ml-auto text-[11px] text-[color:var(--muted-2)]">
-            SwiftBet pricing {swiftCount} runners
-          </span>
-        )}
       </div>
 
       {rows.length === 0 ? (
@@ -267,47 +244,20 @@ function MarketsTab({
                     {b}
                   </th>
                 ))}
-                <th className="px-4 py-2.5 text-right font-medium text-[color:var(--swift)]">SwiftBet</th>
-                <th className="px-4 py-2.5 text-right font-medium">Edge</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => {
-                // Positive = SwiftBet is the longer (better) price on the same
-                // runner. Only meaningful when both sides priced them.
-                const edge =
-                  r.best != null && r.swiftOdds != null ? (r.swiftOdds / r.best - 1) * 100 : null
-                return (
-                  <tr key={r.golfer} className="border-t border-white/[0.04] hover:bg-white/[0.02]">
-                    <td className="px-4 py-2.5 tabular-nums text-[color:var(--muted-2)]">{i + 1}</td>
-                    <td className="px-4 py-2.5 text-gray-100">{r.golfer}</td>
-                    {books.map((b) => (
-                      <td key={b} className="px-4 py-2.5 text-right tabular-nums text-gray-300">
-                        {r.byBook[b] != null ? r.byBook[b].toFixed(2) : '—'}
-                      </td>
-                    ))}
-                    <td className="px-4 py-2.5 text-right tabular-nums font-medium text-[color:var(--swift)]">
-                      {r.swiftOdds != null ? r.swiftOdds.toFixed(2) : '—'}
+              {rows.map((r, i) => (
+                <tr key={r.golfer} className="border-t border-white/[0.04] hover:bg-white/[0.02]">
+                  <td className="px-4 py-2.5 tabular-nums text-[color:var(--muted-2)]">{i + 1}</td>
+                  <td className="px-4 py-2.5 text-gray-100">{r.golfer}</td>
+                  {books.map((b) => (
+                    <td key={b} className="px-4 py-2.5 text-right tabular-nums text-gray-300">
+                      {r.byBook[b] != null ? r.byBook[b].toFixed(2) : '—'}
                     </td>
-                    <td
-                      className={`px-4 py-2.5 text-right tabular-nums ${
-                        edge == null
-                          ? 'text-[color:var(--muted-2)]'
-                          : edge > 0
-                            ? 'text-[color:var(--total)]'
-                            : 'text-[color:var(--live)]'
-                      }`}
-                      title={
-                        edge == null
-                          ? 'Not priced on both sides — the two feeds spell some names differently'
-                          : 'SwiftBet price vs the best OPTIC price'
-                      }
-                    >
-                      {edge == null ? '—' : `${edge > 0 ? '+' : ''}${edge.toFixed(1)}%`}
-                    </td>
-                  </tr>
-                )
-              })}
+                  ))}
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -316,60 +266,106 @@ function MarketsTab({
   )
 }
 
+/**
+ * OPTIC + SWIFT + mybet side by side, exactly as the fixture page lays them
+ * out — same SourcePanel/Grid/Field components, same breakpoints.
+ */
 function DetailsTab({
   tournament,
   mapping,
   swift,
   swiftEventId,
+  prices,
 }: {
   tournament: GolfTournament
   mapping: CompetitionMapping | null
   swift: SwiftOutright | null
   swiftEventId: string | null
+  prices: GolfPrice[] | null
 }) {
+  const swiftSels = swift?.markets?.[0]?.selections ?? []
+  // How much of the field we can line up name-for-name. Reported rather than
+  // hidden: the two feeds disagree on short forms (Zach/Zachary), so a partial
+  // join is expected and worth seeing.
+  const matched = (() => {
+    if (!prices?.length || !swiftSels.length) return null
+    const keys = new Set(swiftSels.filter((x) => x.name).map((x) => golferKey(x.name as string)))
+    return prices.filter((p) => keys.has(golferKey(p.golfer))).length
+  })()
+
   return (
-    <div className="grid grid-cols-2 gap-x-6 gap-y-4 px-5 py-4 md:grid-cols-3">
-      <Field label="TOURNAMENT" value={tournament.tournament} />
-      <Field label="TOUR" value={prettyLeague(tournament.league)} />
-      <Field label="TOURNAMENT ID" value={tournament.tournamentId} mono />
-      <Field label="FIELD" value={`${tournament.golfers} golfers`} />
-      <Field label="MARKETS" value={tournament.markets.join(', ') || '—'} />
-      <Field label="PRICED BY" value={tournament.books.join(', ') || '—'} />
-      <Field label="STARTS (UTC)" value={fmtDateTime(tournament.startDate)} />
-      <Field label="ENDS (UTC)" value={fmtDateTime(tournament.endDate)} />
-      <Field label="PRICES UPDATED" value={fmtDateTime(tournament.updatedAt)} />
-      <Field
-        label="SWIFT COMPETITION"
-        value={mapping?.swift_competition ?? 'Unmapped'}
-        tone={mapping ? undefined : 'text-[color:var(--muted-2)]'}
-      />
-      <Field label="SWIFT OUTRIGHT EVENT" value={swift?.event?.name ?? '—'} />
-      <div className="min-w-0">
-        <div className="text-[11px] text-[color:var(--muted-2)]">OPEN</div>
-        {swiftEventId ? (
-          <a
-            href={swiftEventUrl(swiftEventId)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-[13px] text-[color:var(--swift)] hover:underline"
-          >
-            SwiftBet <ExternalLink className="h-3 w-3" />
-          </a>
+    <div className="grid grid-cols-1 gap-4 border-t border-white/10 px-5 py-4 md:grid-cols-2 lg:grid-cols-3">
+      <SourcePanel kind="OPTIC" subtitle="golf_outrights">
+        <Grid>
+          <Field label="TOURNAMENT" value={tournament.tournament} />
+          <Field label="TOUR" value={prettyLeague(tournament.league)} />
+          <Field label="FIELD" value={`${tournament.golfers} golfers`} />
+          <Field label="MARKETS" value={tournament.markets.join(', ') || '—'} />
+          <Field label="PRICED BY" value={tournament.books.join(', ') || '—'} />
+          <Field label="PRICES UPDATED" value={fmtDateTime(tournament.updatedAt)} />
+          <Field label="STARTS (UTC)" value={fmtDateTime(tournament.startDate)} />
+          <Field label="ENDS (UTC)" value={fmtDateTime(tournament.endDate)} />
+          <Field label="START (MEL)" value={melbDateTime(tournament.startDate)} />
+          <Field label="TOURNAMENT ID" value={tournament.tournamentId} mono copyable />
+        </Grid>
+      </SourcePanel>
+
+      <SourcePanel
+        kind="SWIFT"
+        subtitle="gutsy.events"
+        action={
+          swiftEventId && (
+            <a
+              href={swiftEventUrl(swiftEventId)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded border border-[color:var(--swift)]/30 px-1.5 py-0.5 text-[10px] font-medium text-[color:var(--swift)] hover:bg-[color:var(--swift)]/10"
+            >
+              Open Swift <ExternalLink className="h-3 w-3" />
+            </a>
+          )
+        }
+      >
+        {mapping ? (
+          <Grid>
+            <Field label="COMPETITION" value={mapping.swift_competition ?? '—'} />
+            <Field label="OUTRIGHT EVENT" value={swift?.event?.name ?? '—'} />
+            <Field label="MARKET" value={swift?.markets?.[0]?.name ?? '—'} />
+            <Field label="RUNNERS PRICED" value={swiftSels.length ? String(swiftSels.length) : '—'} />
+            <Field
+              label="FAVOURITE"
+              value={swiftSels[0]?.name ? `${swiftSels[0].name} @ ${swiftSels[0].odds?.toFixed(2)}` : '—'}
+            />
+            <Field
+              label="NAMES MATCHED"
+              value={matched == null ? '—' : `${matched} of ${tournament.golfers}`}
+            />
+            <Field label="CONFIDENCE" value={`${Math.round((mapping.confidence ?? 0) * 100)}%`} />
+            <Field label="SOURCE" value={(mapping.source ?? 'auto').toUpperCase()} />
+            <Field label="COMPETITION ID" value={mapping.swift_competition_id ?? '—'} mono copyable />
+            <Field label="EVENT ID" value={swiftEventId ?? '—'} mono copyable />
+          </Grid>
         ) : (
-          <div className="text-[13px] text-[color:var(--muted-2)]">—</div>
+          <div className="text-[12px] leading-relaxed text-gray-400">
+            <span className="font-bold text-gray-200">No SwiftBet mapping yet.</span> Pair this
+            tournament on the{' '}
+            <Link to="/mapping/golf" className="text-[color:var(--swift)] underline">
+              Mapping
+            </Link>{' '}
+            tab to pull its outright prices in.
+          </div>
         )}
-      </div>
+      </SourcePanel>
+
+      <SourcePanel kind="MYBET" subtitle="gutsy.mybet_events">
+        <div className="text-[12px] leading-relaxed text-gray-400">
+          <span className="font-bold text-gray-200">mybet has no golf outrights.</span> Its golf is
+          matchups only — "Tournament Matchups", "R1–R4 Matchups" — priced as two-way A vs B, with
+          no winner market anywhere in the feed. There is nothing outright to map to.
+        </div>
+      </SourcePanel>
     </div>
   )
 }
 
-function Field({ label, value, mono, tone }: { label: string; value: string; mono?: boolean; tone?: string }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[11px] text-[color:var(--muted-2)]">{label}</div>
-      <div className={`truncate text-[13px] ${tone ?? 'text-gray-200'} ${mono ? 'font-mono text-[11px]' : ''}`}>
-        {value}
-      </div>
-    </div>
-  )
-}
+
