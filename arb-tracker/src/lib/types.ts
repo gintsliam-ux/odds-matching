@@ -49,5 +49,9 @@ export interface SportEvent {
   periodScores?: PeriodScore[];
   /** ISO timestamp of scheduled start. */
   startsAt: string;
+  /** ISO end for multi-day events (golf tournaments span ~4 days). */
+  endsAt?: string;
+  /** True for outright markets (golf): a field of players, no two-sided match. */
+  outright?: boolean;
   status: EventStatus;
 }

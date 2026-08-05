@@ -27,6 +27,16 @@ const OPTIONAL_BOOKS: Bookmaker[] = [
   { id: 'fanduel', name: 'FanDuel', color: '#1493ff', mark: 'FD', logoUrl: '/logos/brands/fanduel.png' },
 ];
 
+// Golf outrights are priced by US books, none of which overlap the core AU set,
+// so golf uses its own column list. (Logos fall back to the mark chip until the
+// brand images are added.)
+const GOLF_BOOKS: Bookmaker[] = [
+  { id: 'draftkings', name: 'DraftKings', color: '#53d337', mark: 'DK', logoUrl: '/logos/brands/draftkings.png' },
+  { id: 'fanduel', name: 'FanDuel', color: '#1493ff', mark: 'FD', logoUrl: '/logos/brands/fanduel.png' },
+  { id: 'betmgm', name: 'BetMGM', color: '#c8a15a', mark: 'MGM', logoUrl: '/logos/brands/betmgm.png' },
+  { id: 'fanatics', name: 'Fanatics', color: '#1a1a2e', mark: 'FAN', logoUrl: '/logos/brands/fanatics.png' },
+];
+
 /** Book ids that have a takeable (non-lay) price somewhere in these rows. */
 function booksWithOdds(rows: OddsRow[]): Set<string> {
   const present = new Set<string>();
@@ -42,11 +52,16 @@ function booksWithOdds(rows: OddsRow[]): Set<string> {
  * that have no odds for this event are pushed to the far right, so the columns
  * that actually priced the game group together on the left.
  */
-export function eventBooks(rows: OddsRow[]): Bookmaker[] {
+export function eventBooks(rows: OddsRow[], leagueId?: string): Bookmaker[] {
   const present = booksWithOdds(rows);
-  const eligible = [...BOOKMAKERS, ...OPTIONAL_BOOKS.filter((b) => present.has(b.id))];
-  const has = eligible.filter((b) => present.has(b.id));
-  const missing = eligible.filter((b) => !present.has(b.id));
+  // Golf uses an entirely separate (US) book set; every column is optional and
+  // shown only when priced.
+  const base =
+    leagueId === 'golf'
+      ? GOLF_BOOKS.filter((b) => present.has(b.id))
+      : [...BOOKMAKERS, ...OPTIONAL_BOOKS.filter((b) => present.has(b.id))];
+  const has = base.filter((b) => present.has(b.id));
+  const missing = base.filter((b) => !present.has(b.id));
   return [...has, ...missing];
 }
 
@@ -62,7 +77,7 @@ export const BETFAIR: Bookmaker = {
 const BETFAIR_LAY_ID = 'betfair_exchange_australia_lay';
 
 const BY_ID: Record<string, Bookmaker> = Object.fromEntries(
-  [...BOOKMAKERS, ...OPTIONAL_BOOKS, BETFAIR].map((b) => [b.id, b]),
+  [...BOOKMAKERS, ...OPTIONAL_BOOKS, ...GOLF_BOOKS, BETFAIR].map((b) => [b.id, b]),
 );
 
 export function brandById(id: string): Bookmaker | undefined {
@@ -168,7 +183,8 @@ export interface OddsRow {
 
 // market_id -> display, in the order the grid shows them. `kind` drives the
 // ladder shape, since the id naming differs per sport (point_spread/run_line).
-type MarketKind = 'h2h' | 'spread' | 'total';
+// 'outright' is a flat field of selections (golf winner), no home/away or line.
+type MarketKind = 'h2h' | 'spread' | 'total' | 'outright';
 interface MarketDef {
   id: string;
   label: string;
@@ -224,12 +240,16 @@ const UFC_MARKETS: MarketDef[] = [
   { id: 'total_rounds', label: 'Total Rounds', kind: 'total' },
 ];
 
+// Golf: a single outright market — the field of players priced to win.
+const GOLF_MARKETS: MarketDef[] = [{ id: 'winner', label: 'Outright', kind: 'outright' }];
+
 const LEAGUE_MARKETS: Record<string, MarketDef[]> = {
   mlb: MLB_MARKETS,
   atp: TENNIS_MARKETS,
   wta: TENNIS_MARKETS,
   soccer: SOCCER_MARKETS,
   ufc: UFC_MARKETS,
+  golf: GOLF_MARKETS,
   // nfl / ncaaf / wnba use DEFAULT_MARKETS (h2h / point_spread / total_points).
 };
 
@@ -427,7 +447,7 @@ export function buildMarkets(
   leagueId: string,
 ): BuiltMarkets {
   const groups: MarketGroup[] = [];
-  const books = eventBooks(rows);
+  const books = eventBooks(rows, leagueId);
 
   for (const def of LEAGUE_MARKETS[leagueId] ?? DEFAULT_MARKETS) {
     const marketRows = rows.filter((r) => r.market_id === def.id);
@@ -435,7 +455,20 @@ export function buildMarkets(
 
     let selections: SelectionRow[];
 
-    if (def.kind === 'total') {
+    if (def.kind === 'outright') {
+      // A flat field: one row per selection (player), shortest price first.
+      const names = [...new Set(marketRows.map((r) => r.selection))];
+      selections = names
+        .map((name) =>
+          makeSelectionRow(
+            books,
+            name,
+            name,
+            marketRows.filter((r) => r.selection === name),
+          ),
+        )
+        .sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
+    } else if (def.kind === 'total') {
       const isSideA = (r: OddsRow) => isOver(r.selection);
       const main = pickEmLine(marketRows, (r) => r.line ?? NaN, isSideA);
       const lines = [...new Set(marketRows.map((r) => r.line).filter((l): l is number => l != null))];

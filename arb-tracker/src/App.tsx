@@ -175,7 +175,12 @@ export default function App() {
       events.filter((e) => {
         if (sportSel.length && !sportSel.includes(e.sport)) return false;
         if (leagueSel.length && !leagueSel.includes(e.league.name)) return false;
-        if (date && localDay(e.startsAt) !== date) return false;
+        // Multi-day events (golf tournaments) match any day in [start, end].
+        if (date) {
+          const start = localDay(e.startsAt);
+          const end = e.endsAt ? localDay(e.endsAt) : start;
+          if (date < start || date > end) return false;
+        }
         return true;
       }),
     [events, sportSel, leagueSel, date],
@@ -200,10 +205,12 @@ export default function App() {
       events
         .filter((e) => {
           const s = effectiveStatus(e, now);
-          // Only live/upcoming belong on the ticker — no finals, no cancelled.
+          // Only live/upcoming belong on the ticker — no finals, no cancelled,
+          // and no outrights (golf has no two-sided score/price for a cell).
           return (
             s !== 'final' &&
             s !== 'cancelled' &&
+            !e.outright &&
             new Date(e.startsAt).getTime() < now + TICKER_HORIZON_MS
           );
         })

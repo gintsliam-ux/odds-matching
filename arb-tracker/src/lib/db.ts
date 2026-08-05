@@ -255,7 +255,59 @@ export async function fetchAllEvents(): Promise<SportEvent[]> {
       });
     }),
   );
-  return perSport.flat();
+  const golf = await fetchGolfEvents(client);
+  return [...perSport.flat(), ...golf];
+}
+
+// Golf is outright-only: a tournament (from golf_tournaments) with a field of
+// players priced to win (golf_outrights). It has no two-sided fixture, so it's
+// synthesised into a SportEvent rather than read from an `_events` table.
+const GOLF_LEAGUE: League = {
+  id: 'golf',
+  name: 'PGA',
+  code: 'GOLF',
+  sport: 'Golf',
+  logoUrl: '/logos/leagues/golf.png',
+};
+const GOLF_TABLE = 'golf_outrights';
+const TOURNAMENT_DAYS = 4; // Thu–Sun
+
+interface GolfTournamentRow {
+  tournament_id: string;
+  name: string;
+  start_date: string;
+  status: string | null;
+}
+
+/** One synthetic SportEvent per golf tournament that currently has odds. */
+async function fetchGolfEvents(
+  client: NonNullable<typeof supabase>,
+): Promise<SportEvent[]> {
+  const [odds, tourneys] = await Promise.all([
+    client.from(GOLF_TABLE).select('tournament_id'),
+    client.from('golf_tournaments').select('tournament_id,name,start_date,status'),
+  ]);
+  if (odds.error || tourneys.error || !odds.data || !tourneys.data) return [];
+
+  const withOdds = new Set((odds.data as { tournament_id: string }[]).map((r) => r.tournament_id));
+  return (tourneys.data as GolfTournamentRow[])
+    .filter((t) => withOdds.has(t.tournament_id) && t.start_date)
+    .map((t) => {
+      const start = new Date(t.start_date);
+      const end = new Date(start.getTime() + (TOURNAMENT_DAYS - 1) * 24 * 60 * 60 * 1000);
+      return {
+        id: t.tournament_id,
+        sport: 'Golf',
+        league: GOLF_LEAGUE,
+        name: t.name,
+        home: t.name,
+        away: '',
+        startsAt: t.start_date,
+        endsAt: end.toISOString(),
+        outright: true,
+        status: mapStatus(t.status),
+      };
+    });
 }
 
 /** Best (highest) H2H decimal price for each side of a fixture. */
@@ -326,6 +378,8 @@ export async function fetchH2HPrices(
  */
 export async function fetchOdds(event: SportEvent): Promise<OddsRow[]> {
   if (!supabase) return [];
+  if (event.league.id === 'golf') return fetchGolfOdds(supabase, event.id);
+
   const sp = configForLeagueId(event.league.id);
   if (!sp) return [];
 
@@ -342,6 +396,31 @@ export async function fetchOdds(event: SportEvent): Promise<OddsRow[]> {
       .range(from, from + PAGE - 1);
     if (error) throw new Error(`${sp.oddsTable}: ${error.message}`);
     const rows = data as OddsRow[];
+    all.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+  return all;
+}
+
+/** Outright rows for one golf tournament — keyed by tournament_id, no `line`. */
+async function fetchGolfOdds(
+  client: NonNullable<typeof supabase>,
+  tournamentId: string,
+): Promise<OddsRow[]> {
+  const PAGE = 1000;
+  const all: OddsRow[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await client
+      .from(GOLF_TABLE)
+      .select(
+        'market_id,selection,sportsbook,is_lay,current_price,open_price,status,flucs,open_at,price_3h,price_1h,price_30m,price_10m,close_price,current_at,daily_prices',
+      )
+      .eq('tournament_id', tournamentId)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`${GOLF_TABLE}: ${error.message}`);
+    // golf_outrights has no `line` column — the market has no handicap.
+    const rows = (data as Omit<OddsRow, 'line'>[]).map((r) => ({ ...r, line: null }));
     all.push(...rows);
     if (rows.length < PAGE) break;
   }

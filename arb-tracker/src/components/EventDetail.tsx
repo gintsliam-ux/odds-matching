@@ -15,8 +15,10 @@ import { BookmakerLogo } from './BookmakerLogo';
 import { TeamLogo } from './TeamLogo';
 import { PriceCard, type HoverTarget } from './PriceCard';
 
-// Selection + Betfair(back,lay) + Best, then one column per fixed-odds book.
-const FIXED_COLS = 4;
+// Selection + Best (+ Betfair back/lay for two-sided events), then one column
+// per fixed-odds book. Golf outrights have no exchange, so those two drop out.
+const FIXED_COLS_MATCH = 4;
+const FIXED_COLS_OUTRIGHT = 2;
 
 function metaLabel(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
@@ -26,6 +28,19 @@ function metaLabel(iso: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function dayShort(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  });
+}
+
+/** "Thu 6 Aug – Sun 9 Aug" for a multi-day event. */
+function dateRangeLabel(startsAt: string, endsAt?: string): string {
+  return endsAt ? `${dayShort(startsAt)} – ${dayShort(endsAt)}` : dayShort(startsAt);
 }
 
 function timeLabel(iso: string): string {
@@ -135,7 +150,9 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
   const { home, away, homeScore, awayScore, periodScores } = event;
   const status = effectiveStatus(event, now);
   const hasScore = homeScore != null && awayScore != null;
-  const totalCols = FIXED_COLS + books.length;
+  const outright = !!event.outright;
+  const showExchange = !outright;
+  const totalCols = (outright ? FIXED_COLS_OUTRIGHT : FIXED_COLS_MATCH) + books.length;
   const [hover, setHover] = useState<HoverTarget | null>(null);
   // Selection labels carry a competitor name; map it back to its flag.
   const countryFor = (team: string) =>
@@ -153,10 +170,18 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
             {/* Tennis names the tournament here — "ATP · Tennis" says nothing. */}
             {event.league.name} · {event.subtitle ?? event.sport}
           </span>
-          <span>{metaLabel(event.startsAt)}</span>
+          <span>
+            {outright ? dateRangeLabel(event.startsAt, event.endsAt) : metaLabel(event.startsAt)}
+          </span>
         </div>
 
-        {/* scoreboard */}
+        {/* scoreboard — golf is a single tournament header, not a two-sided match */}
+        {outright ? (
+          <div className="flex items-center justify-center gap-2.5 py-1">
+            <LeagueBadge league={event.league} size={28} />
+            <span className="truncate text-lg font-semibold text-slate-100">{event.name}</span>
+          </div>
+        ) : (
         <div className="flex items-center gap-3">
           {/* home */}
           <div className="flex min-w-0 flex-1 items-center justify-end gap-2.5">
@@ -202,6 +227,7 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
             </span>
           </div>
         </div>
+        )}
 
         {/* per-period breakdown — only once it adds info beyond the total */}
         {periodScores && periodScores.length > 1 && (
@@ -240,12 +266,16 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
                 <th className="sticky left-0 top-0 z-40 border-b border-surface-border bg-surface-raised px-3 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
                   Selection
                 </th>
-                <th className="sticky top-0 z-30 border-b border-l border-surface-border bg-surface-raised px-2">
-                  <BetfairHead label="Back" />
-                </th>
-                <th className="sticky top-0 z-30 border-b border-surface-border bg-surface-raised px-2">
-                  <BetfairHead label="Lay" />
-                </th>
+                {showExchange && (
+                  <>
+                    <th className="sticky top-0 z-30 border-b border-l border-surface-border bg-surface-raised px-2">
+                      <BetfairHead label="Back" />
+                    </th>
+                    <th className="sticky top-0 z-30 border-b border-surface-border bg-surface-raised px-2">
+                      <BetfairHead label="Lay" />
+                    </th>
+                  </>
+                )}
                 <th className="sticky top-0 z-30 border-b border-l border-surface-border bg-surface-raised px-2 text-xs font-medium uppercase tracking-wide text-slate-500">
                   Best
                 </th>
@@ -266,6 +296,7 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
                 key={group.key}
                 group={group}
                 totalCols={totalCols}
+                showExchange={showExchange}
                 onHover={setHover}
                 countryFor={countryFor}
               />
@@ -291,11 +322,13 @@ function BetfairHead({ label }: { label: string }) {
 function MarketRows({
   group,
   totalCols,
+  showExchange,
   onHover,
   countryFor,
 }: {
   group: MarketGroup;
   totalCols: number;
+  showExchange: boolean;
   onHover: HoverFn;
   countryFor: (team: string) => string | null | undefined;
 }) {
@@ -350,35 +383,39 @@ function MarketRows({
               </span>
             </td>
 
-            {/* Betfair back / lay */}
-            <td
-              {...withHover(
-                `border-l border-surface-border px-2 py-2 text-center tabular-nums ${
-                  isSuspended(row.betfairBack) ? SUSPENDED_TONE : 'bg-sky-500/[0.06] text-sky-200'
-                }`,
-                hoverProps(row.betfairBack.detail, row.label, 'Betfair back', onHover),
-              )}
-            >
-              {row.betfairBack.price != null ? (
-                fmt(row.betfairBack.price)
-              ) : (
-                <span className="text-slate-600">–</span>
-              )}
-            </td>
-            <td
-              {...withHover(
-                `px-2 py-2 text-center tabular-nums ${
-                  isSuspended(row.betfairLay) ? SUSPENDED_TONE : 'bg-pink-500/[0.06] text-pink-200'
-                }`,
-                hoverProps(row.betfairLay.detail, row.label, 'Betfair lay', onHover),
-              )}
-            >
-              {row.betfairLay.price != null ? (
-                fmt(row.betfairLay.price)
-              ) : (
-                <span className="text-slate-600">–</span>
-              )}
-            </td>
+            {/* Betfair back / lay — omitted for outrights (no exchange). */}
+            {showExchange && (
+              <>
+                <td
+                  {...withHover(
+                    `border-l border-surface-border px-2 py-2 text-center tabular-nums ${
+                      isSuspended(row.betfairBack) ? SUSPENDED_TONE : 'bg-sky-500/[0.06] text-sky-200'
+                    }`,
+                    hoverProps(row.betfairBack.detail, row.label, 'Betfair back', onHover),
+                  )}
+                >
+                  {row.betfairBack.price != null ? (
+                    fmt(row.betfairBack.price)
+                  ) : (
+                    <span className="text-slate-600">–</span>
+                  )}
+                </td>
+                <td
+                  {...withHover(
+                    `px-2 py-2 text-center tabular-nums ${
+                      isSuspended(row.betfairLay) ? SUSPENDED_TONE : 'bg-pink-500/[0.06] text-pink-200'
+                    }`,
+                    hoverProps(row.betfairLay.detail, row.label, 'Betfair lay', onHover),
+                  )}
+                >
+                  {row.betfairLay.price != null ? (
+                    fmt(row.betfairLay.price)
+                  ) : (
+                    <span className="text-slate-600">–</span>
+                  )}
+                </td>
+              </>
+            )}
 
             {/* Best price + best book's logo */}
             <td
