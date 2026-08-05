@@ -14,9 +14,20 @@ const UPCOMING_HORIZON_H = 6
 const RECENT_COMPLETED_H = 3
 const ROW_LIMIT = 500
 
-// The feed sometimes leaves `is_live=true` long after a game ends (seen 10–20h).
-// No sport runs this long, so treat such rows as finished rather than show a
-// runaway live clock.
+// The feed sometimes leaves `is_live=true` long after a game ends (seen 10–20h),
+// which would otherwise show a runaway live clock.
+//
+// The test for that is whether the feed has STOPPED UPDATING, not how long ago
+// the game started. "No sport runs longer than 8h" is simply untrue: a Test
+// match runs five days, and West Indies v Pakistan sat 62.7 h past its
+// actual_start with live_updated_at moving seconds earlier — genuinely live,
+// and shown as completed.
+//
+// A live game's feed ticks constantly; a runaway flag's does not. This window
+// has to clear the longest real lull in play (rain, innings break, half-time)
+// while still catching a dead feed sooner than the old rule did.
+const STALE_LIVE_FEED_H = 3
+// Fallback only, for rows carrying no heartbeat at all.
 const STALE_LIVE_H = 8
 /** A scheduled fixture that never got odds, live data, or an actual_start
  *  and is this many hours past kickoff is a ghost — postponed, cancelled, or
@@ -313,10 +324,17 @@ function numOrNull(v: unknown): number | null {
 function mapRow(r: Row, nowMs: number): Fixture {
   let status = normStatus(r.status, r.is_live)
 
-  // Demote runaway "live" rows (stale is_live flag) to completed.
+  // Demote runaway "live" rows (stale is_live flag) to completed — judged on
+  // the feed's heartbeat, falling back to elapsed time when there is none.
   if (status === 'live') {
-    const ref = r.actual_start ?? r.scheduled_start
-    if (ref && nowMs - new Date(ref).getTime() > STALE_LIVE_H * 3_600_000) status = 'completed'
+    const beat = r.live_updated_at ?? r.updated_at
+    const beatMs = beat ? Date.parse(beat) : NaN
+    if (Number.isFinite(beatMs)) {
+      if (nowMs - beatMs > STALE_LIVE_FEED_H * 3_600_000) status = 'completed'
+    } else {
+      const ref = r.actual_start ?? r.scheduled_start
+      if (ref && nowMs - new Date(ref).getTime() > STALE_LIVE_H * 3_600_000) status = 'completed'
+    }
   }
   // Ghost upcoming fixtures: scheduled in the past with no actual_start, no
   // pregame_odds, no closing line, no live data — game didn't happen. Mark
