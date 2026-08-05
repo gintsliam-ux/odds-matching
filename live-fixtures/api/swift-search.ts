@@ -26,6 +26,10 @@ function getClient(): Promise<MongoClient> {
   return (clientPromise = new MongoClient(MONGO_URI, { maxPoolSize: 4 }).connect())
 }
 
+/** Above this many named runners an event is a field, not a matchup. A golf
+ *  3-ball has 3; the Wyndham outright has 143. */
+const MIN_OUTRIGHT_RUNNERS = 5
+
 // Escape a user-supplied string for a Mongo regex. Without this, ".*" in a
 // query name would silently broaden the search.
 function escapeRegex(s: string): string {
@@ -44,6 +48,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       sport?: string | null
       competitionId?: string | null
       limit?: number
+      /** Return OUTRIGHT events (a field of runners) instead of head-to-heads. */
+      outright?: boolean
     }
     const q = (body.q ?? '').trim()
     // LIST MODE: an empty query is allowed when a competitionId scopes the
@@ -103,6 +109,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Default: search events. Name field is the primary signal; team names
     // appear inside `teams.name` (an array).
+    //
+    // OUTRIGHT MODE. Golf has no home-vs-away: a tournament is one event
+    // carrying the whole field, e.g. "2026 Wyndham Championship" with a single
+    // "Competitors" team holding 143 players, sitting in the same competition
+    // as that week's 3-ball matchups (3 players each). The head-to-head filter
+    // below drops exactly those events, which is why golf could never be mapped
+    // — so this mode inverts it and returns the field instead, using the player
+    // count to tell an outright from a matchup.
     const eventFilter: Record<string, unknown> = { ...sportFilter }
     // In list mode there's no text to match on — the competition filter below
     // is the whole query.
@@ -118,6 +132,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .sort({ start_date: -1 })
       .limit(limit * 3)
       .toArray()
+
+    if (body.outright) {
+      const outrights = docs
+        .map((d) => {
+          const teams =
+            (d.teams as Array<{ name?: string; players?: Array<{ name?: string }> }> | undefined) ?? []
+          const runners = teams.flatMap((t) => (t.players ?? []).map((p) => p.name).filter(Boolean)) as string[]
+          const competition = d.competition as { id?: string; name?: string } | undefined
+          const sport = d.sport as { name?: string } | undefined
+          return {
+            id: String(d._id),
+            cid: competition?.id ?? null,
+            sport: sport?.name ?? null,
+            competition: competition?.name ?? null,
+            name: (d.name as string | null) ?? null,
+            start: (d.start_date as string | null) ?? null,
+            status: ((d.status as string | null) ?? (d.event_view_status as string | null)) ?? null,
+            runnerCount: runners.length,
+            runners: runners.slice(0, 200),
+          }
+        })
+        // A matchup is 2-3 named players; a field is far more. The threshold
+        // keeps 3-balls and head-to-heads out without hard-coding a sport.
+        .filter((e) => e.runnerCount > MIN_OUTRIGHT_RUNNERS)
+        .slice(0, limit)
+      res.status(200).json({ events: outrights })
+      return
+    }
 
     const events = docs
       .map((d) => {

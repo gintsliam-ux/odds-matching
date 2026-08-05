@@ -430,6 +430,8 @@ const LEAGUE_ACRONYMS = new Set([
   'ufc', 'pfl', 'ipl', 'mls', 'mma', 'efl', 'fa', 'uefa', 'fifa', 'caf', 'afc', 'conmebol',
   'concacaf', 'icc', 'pdc', 'wsl', 'usa', 'uk', 'atp', 'wta', 'urc', 'mlr', 'kbo', 'npb',
   'epl', 'ucl', 'uel', 'odi', 't20', 'd2', 'k1', 'j1', 'nb', 'ii', 'iii',
+  // Golf tours — same shape as atp/wta above.
+  'pga', 'lpga', 'liv', 'dp',
   // Domestic basketball leagues.
   'bbl', 'lnb', 'acb', 'bsl', 'cba', 'nbl', 'nbb', 'bsn', 'vba', 'lbl', 'lbf', 'cebl', 'tbt',
   'a1', 'wnbl', 'lkl', 'vtb',

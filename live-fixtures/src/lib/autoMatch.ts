@@ -16,6 +16,14 @@ const MIN_COMP_SIM = 0.4
 // League" being auto-paired with South Africa's promotion play-off.
 const MIN_COMP_SIM_SOCCER = 0.55
 const MIN_TENNIS_SIM = 0.35
+/**
+ * Golf matches on the TOURNAMENT name, which is long and distinctive
+ * ("Wyndham Championship 2026" vs "Wyndham Championship"), so it can afford a
+ * high bar. Measured across the live SwiftBet golf catalogue the right answer
+ * scores 1.000 and every other competition scores 0.000 — there is no middle
+ * ground to accommodate.
+ */
+const MIN_GOLF_SIM = 0.6
 
 /**
  * Country / region tokens that should match exactly. If both sides have a
@@ -376,7 +384,18 @@ export function bestSwiftMatch(args: {
 
   const isTennis = args.opticSportRaw.toLowerCase() === 'tennis'
   const isSoccer = args.opticSportRaw.toLowerCase() === 'soccer'
-  const threshold = isTennis ? MIN_TENNIS_SIM : isSoccer ? MIN_COMP_SIM_SOCCER : MIN_COMP_SIM
+  // Golf, like tennis, has a permanent "league" (the tour) and a weekly
+  // tournament. Scoring the league would compare "PGA" against the catalogue —
+  // which is how "Wyndham Championship 2026" first mapped to "KPMG Women's PGA
+  // Championship" at 100%: the tour name is a substring of half the field.
+  const isGolf = args.opticSportRaw.toLowerCase() === 'golf'
+  const threshold = isTennis
+    ? MIN_TENNIS_SIM
+    : isGolf
+      ? MIN_GOLF_SIM
+      : isSoccer
+        ? MIN_COMP_SIM_SOCCER
+        : MIN_COMP_SIM
   let best: SwiftCompetition | null = null
   let bestScore = 0
 
@@ -384,6 +403,17 @@ export function bestSwiftMatch(args: {
     const ot = parseTennisTournament(args.opticLeagueRaw, args.opticTournamentRaw)
     for (const c of cands) {
       const s = scoreTennis(ot, c.name)
+      if (s > bestScore) {
+        bestScore = s
+        best = c
+      }
+    }
+  } else if (isGolf) {
+    // Tournament only. The tour never identifies the week's event.
+    const t = args.opticTournamentRaw.trim()
+    if (!t) return null
+    for (const c of cands) {
+      const s = sim(t, c.name)
       if (s > bestScore) {
         bestScore = s
         best = c
