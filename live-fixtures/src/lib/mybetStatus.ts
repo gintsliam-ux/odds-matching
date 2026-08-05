@@ -146,6 +146,25 @@ export async function listMybetCompetitions(limit = 500): Promise<MybetCompetiti
   return json.competitions ?? []
 }
 
+/**
+ * mybet's golf outright markets, as mapping candidates.
+ *
+ * Golf has no mybet competition to map to — see the note in api/mybet-search.ts
+ * — so the tournament-level auto-map has to be offered these instead, or it can
+ * only ever reach for "PGA Tour" / "LIV Golf Tour" and pair a whole tour to one
+ * week's tournament.
+ */
+export async function listMybetOutrights(sport = 'Golf', limit = 200): Promise<MybetCompetition[]> {
+  const res = await fetch('/api/mybet-search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: '', kind: 'competitions', outright: true, sport, limit }),
+  })
+  if (!res.ok) throw new Error(`mybet-search ${res.status}`)
+  const json = (await res.json()) as { competitions: MybetCompetition[] }
+  return json.competitions ?? []
+}
+
 export async function searchMybetCompetitions(args: {
   q: string
   limit?: number
