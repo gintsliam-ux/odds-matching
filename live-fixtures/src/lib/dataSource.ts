@@ -1,5 +1,5 @@
 import type { Fixture, FixtureStatus, PeriodScore } from './types'
-import { prettyLeague, prettySport, reclassifySport } from './sports'
+import { prettyLeague, prettySport, reclassifySport, sportGroupKey } from './sports'
 import { espnLogoUrl } from './teamLogos'
 import { cachedLogo, ensureLogoCache } from './logoCache'
 import { countryFlagUrl } from './countryFlags'
@@ -211,7 +211,20 @@ export async function fetchFixturesByTournament(
   rawSeasonType?: string | null,
 ): Promise<Fixture[]> {
   await ensureLogoCache()
-  let q = getSupabase().from(TABLE).select(COLUMNS).eq('sport', rawSport).eq('league', rawLeague)
+  // Query by LEAGUE, not sport+league.
+  //
+  // The feed files whole cricket competitions under the wrong sport — every one
+  // of England One Day Cup's fixtures is stored as sport='soccer' — and
+  // reclassifySport only rescues them once they are already in hand. Asking the
+  // DB for sport='cricket' AND league='england_-_one_day_cup' therefore matched
+  // nothing, and the drill showed "no events" for a tournament the board itself
+  // was listing.
+  //
+  // The league slug carries the sport on its own: of 367 slugs in the table,
+  // ZERO resolve to more than one sport after reclassification, so dropping the
+  // sport predicate loses no precision. The post-filter below keeps it honest
+  // anyway.
+  let q = getSupabase().from(TABLE).select(COLUMNS).eq('league', rawLeague)
   if (rawSeasonType) q = q.eq('season_type', rawSeasonType)
   const { data, error } = await q
     .order('scheduled_start', { ascending: false })
@@ -219,7 +232,10 @@ export async function fetchFixturesByTournament(
     .returns<Row[]>()
   if (error) throw error
   const nowMs = Date.now()
-  return (data ?? []).map((r) => mapRow(r, nowMs))
+  const want = sportGroupKey(prettySport(reclassifySport(rawSport, rawLeague)))
+  return (data ?? [])
+    .map((r) => mapRow(r, nowMs))
+    .filter((f) => !want || sportGroupKey(f.sport) === want)
 }
 
 /** A single fixture by its OpticOdds id — used when deep-linking the detail page
