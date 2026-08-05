@@ -482,11 +482,18 @@ function GolfBoard({ tournaments, loading }: { tournaments: GolfTournament[]; lo
           <div className="flex items-center gap-2 text-[11px] text-[color:var(--muted-2)]">
             <span>⛳</span>
             <span className="uppercase tracking-wide">{prettyLeague(t.league)}</span>
-            <span className="ml-auto">{t.markets.join(' · ') || 'Winner'}</span>
+            <span className="ml-auto">{t.market}</span>
           </div>
           <div className="mt-2 text-[15px] font-semibold text-gray-100">{t.tournament}</div>
           <div className="mt-1 text-[12px] text-[color:var(--muted)]">
-            {t.golfers} in the field · {t.books.join(' + ') || 'no prices'}
+            {t.venueName ?? '—'}
+          </div>
+          {/* Tournaments with no prices are still listed — the catalogue knows
+              about them before any book we read is quoting. */}
+          <div className="mt-1 text-[11px] text-[color:var(--muted-2)]">
+            {t.golfers
+              ? `${t.golfers} priced · ${t.books.join(' + ')}`
+              : `${(t.priceStatus ?? 'no prices').replace(/_/g, ' ')} · ${t.bookCount} books listing`}
           </div>
           <div className="mt-2 text-[11px] tabular-nums text-[color:var(--muted-2)]">
             {melbDateTimeShort(t.startDate)} MEL

@@ -50,16 +50,12 @@ interface MybetOutright {
 }
 
 /**
- * OPTIC has no status column for golf — `golf_outrights` is prices, not a
- * fixture — so it's derived from the tournament's own dates, matching the
- * vocabulary the rest of the terminal uses.
+ * OPTIC's own status, with `is_live` taking precedence. golf_tournaments now
+ * carries status/is_live/is_active directly, so nothing is derived from dates.
  */
-function opticStatus(t: GolfTournament, now = Date.now()): string {
-  const start = Date.parse(t.startDate ?? '')
-  const end = Date.parse(t.endDate ?? '')
-  if (Number.isFinite(end) && now > end) return 'COMPLETED'
-  if (Number.isFinite(start) && now >= start) return 'LIVE'
-  return 'UPCOMING'
+function opticStatus(t: GolfTournament): string {
+  if (t.isLive) return 'LIVE'
+  return (t.status ?? '—').toUpperCase()
 }
 
 interface SwiftOutright {
@@ -206,14 +202,16 @@ export default function GolfDetailPage() {
             </span>
           </div>
           <span className="inline-flex items-center rounded-full bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-gray-300">
-            {tournament.markets.join(' · ') || 'Winner'}
+            {tournament.market}
           </span>
         </div>
 
         <div className="px-5 py-5">
           <div className="text-[20px] font-semibold tracking-tight text-gray-100">{tournament.tournament}</div>
           <div className="mt-1 text-[13px] text-[color:var(--muted)]">
-            {tournament.golfers} in the field · priced by {books.join(' + ') || '—'}
+            {tournament.venueName ?? '—'}
+            {tournament.venueLocation ? ` · ${tournament.venueLocation}` : ''}
+            {tournament.golfers ? ` · ${tournament.golfers} priced` : ' · no prices yet'}
           </div>
         </div>
 
@@ -352,18 +350,27 @@ function DetailsTab({
 
   return (
     <div className="grid grid-cols-1 gap-4 border-t border-white/10 px-5 py-4 md:grid-cols-2 lg:grid-cols-3">
-      <SourcePanel kind="OPTIC" subtitle="golf_outrights">
+      <SourcePanel kind="OPTIC" subtitle="golf_tournaments + golf_outrights">
         <Grid>
           <Field label="TOURNAMENT" value={tournament.tournament} />
           <Field label="STATUS" value={opticStatus(tournament)} />
           <Field label="TOUR" value={prettyLeague(tournament.league)} />
-          <Field label="FIELD" value={`${tournament.golfers} golfers`} />
-          <Field label="MARKETS" value={tournament.markets.join(', ') || '—'} />
-          <Field label="PRICED BY" value={tournament.books.join(', ') || '—'} />
-          <Field label="PRICES UPDATED" value={fmtDateTime(tournament.updatedAt)} />
+          <Field label="MARKET" value={tournament.market} />
+          <Field label="VENUE" value={tournament.venueName ?? '—'} />
+          <Field label="LOCATION" value={tournament.venueLocation ?? '—'} />
           <Field label="STARTS (UTC)" value={fmtDateTime(tournament.startDate)} />
           <Field label="ENDS (UTC)" value={fmtDateTime(tournament.endDate)} />
           <Field label="START (MEL)" value={melbDateTime(tournament.startDate)} />
+          {/* Two different numbers: how many books OPTIC sees listing this
+              tournament, versus the ones we actually hold prices from. */}
+          <Field label="FIELD PRICED" value={tournament.golfers ? `${tournament.golfers} golfers` : 'none yet'} />
+          <Field
+            label="PRICE STATUS"
+            value={(tournament.priceStatus ?? '—').replace(/_/g, ' ').toUpperCase()}
+          />
+          <Field label="BOOKS LISTING" value={String(tournament.bookCount)} />
+          <Field label="PRICES FROM" value={tournament.books.join(', ') || '—'} />
+          <Field label="UPDATED" value={fmtDateTime(tournament.updatedAt)} />
           <Field label="TOURNAMENT ID" value={tournament.tournamentId} mono copyable />
         </Grid>
       </SourcePanel>
