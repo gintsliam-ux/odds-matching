@@ -6,8 +6,11 @@ import { DateBar } from '../components/DateBar'
 import { GridSkeleton } from '../components/Skeleton'
 import { useTerminal } from '../components/Layout'
 import { favouriteMatches, useFavourites } from '../lib/favourites'
-import { prettySport, sportGroupKey, slugToSport } from '../lib/sports'
+import { prettyLeague, prettySport, sportGroupKey, slugToSport } from '../lib/sports'
+import { melbDateTimeShort } from '../lib/format'
+import type { GolfTournament } from '../lib/golfOutrights'
 import { useSportUniverse } from '../hooks/useSportUniverse'
+import { useGolfTournaments } from '../hooks/useGolfTournaments'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { useMainScrollMemory } from '../hooks/useMainScrollMemory'
 import { fetchFixturesBySport } from '../lib/dataSource'
@@ -55,6 +58,11 @@ export default function Terminal() {
   const [params, setParams] = useSearchParams()
   const favourites = useFavourites()
   const universe = useSportUniverse()
+  // /sport/golf can't use the fixture board — golf has no fixtures. The board
+  // is replaced by a tournament list, keeping the URL shape every other sport
+  // uses so the sidebar, rail and dropdown all work unchanged.
+  const isGolf = sportGroupKey(sport ?? '') === 'golf'
+  const { active: golfActive, tournaments: golfAll, loading: golfLoading } = useGolfTournaments()
 
   /** Match a fixture against a chosen sport, including parent-group siblings.
    *  e.g. selecting "basketball" matches NBA/WNBA rows too; selecting "nba"
@@ -206,13 +214,17 @@ export default function Terminal() {
   // sport before its first universe-cache load). In-scope sports come first.
   const sportsForFilter = useMemo(() => {
     const all = new Set<string>([...universe.sports, ...sportCounts.keys()])
+    // Golf has no fixtures to filter, so the universe never offers it. Include
+    // it anyway when tournaments exist — picking it jumps to the golf board
+    // rather than filtering this one to nothing. See the select's onChange.
+    if (golfActive.length > 0) all.add('golf')
     return [...all].sort((a, b) => {
       const ca = sportCounts.get(a) ?? 0
       const cb = sportCounts.get(b) ?? 0
       if ((ca > 0) !== (cb > 0)) return ca > 0 ? -1 : 1 // active sports first
       return a.localeCompare(b)
     })
-  }, [universe, sportCounts])
+  }, [universe, sportCounts, golfActive])
 
   // The `/sport/:sport/:league` path segment (raw league slug, e.g. from the
   // sidebar's expandable sports) pre-selects the league filter. The dropdown
@@ -316,12 +328,18 @@ export default function Terminal() {
           <DropdownLabel label="SPORT">
             <select
               value={sportFilter}
-              onChange={(e) => setSportFilter(e.target.value)}
+              onChange={(e) => {
+                // Golf isn't a filter over this board — it has no fixtures on
+                // it — so selecting it navigates to the golf board instead.
+                if (sportGroupKey(e.target.value) === 'golf') navigate('/sport/golf')
+                else setSportFilter(e.target.value)
+              }}
               className="appearance-none rounded-md border border-[var(--line)] bg-[var(--panel)] py-1.5 pl-3 pr-8 text-[12px] font-bold tracking-wider text-gray-200 focus:border-gray-600 focus:outline-none"
             >
               <option value="all">ALL ({routeScoped.length})</option>
               {sportsForFilter.map((s) => {
-                const n = sportCounts.get(s) ?? 0
+                const isGolfOpt = sportGroupKey(s) === 'golf'
+                const n = isGolfOpt ? golfActive.length : (sportCounts.get(s) ?? 0)
                 return (
                   <option key={s} value={s}>
                     {s.toUpperCase()} ({n})
@@ -399,7 +417,9 @@ export default function Terminal() {
         />
       )}
 
-      {loading ? (
+      {isGolf ? (
+        <GolfBoard tournaments={golfActive.length ? golfActive : golfAll} loading={golfLoading} />
+      ) : loading ? (
         <GridSkeleton />
       ) : errMsg ? (
         <div className="flex h-64 flex-col items-center justify-center gap-2 text-[12px] tracking-widest">
@@ -431,5 +451,48 @@ export default function Terminal() {
         </>
       )}
     </>
+  )
+}
+
+/**
+ * The golf board: one card per tournament, standing in for the fixture grid.
+ *
+ * A golf "event" is a week-long tournament with a field, not a game between two
+ * teams, so there is no score, clock or h2h price to show on a card. What is
+ * useful up front is when it runs, how big the field is, and who is pricing it.
+ */
+function GolfBoard({ tournaments, loading }: { tournaments: GolfTournament[]; loading: boolean }) {
+  const navigate = useNavigate()
+  if (loading) return <GridSkeleton />
+  if (tournaments.length === 0) {
+    return (
+      <div className="flex h-64 items-center justify-center text-[12px] tracking-widest text-gray-600">
+        NO GOLF TOURNAMENTS
+      </div>
+    )
+  }
+  return (
+    <div className="grid gap-3 px-5 py-5 sm:grid-cols-2 xl:grid-cols-3">
+      {tournaments.map((t) => (
+        <button
+          key={t.tournamentId}
+          onClick={() => navigate(`/golf/${encodeURIComponent(t.tournamentId)}`)}
+          className="rounded-lg bg-[color:var(--panel)] p-4 text-left transition-colors hover:bg-white/[0.04]"
+        >
+          <div className="flex items-center gap-2 text-[11px] text-[color:var(--muted-2)]">
+            <span>⛳</span>
+            <span className="uppercase tracking-wide">{prettyLeague(t.league)}</span>
+            <span className="ml-auto">{t.markets.join(' · ') || 'Winner'}</span>
+          </div>
+          <div className="mt-2 text-[15px] font-semibold text-gray-100">{t.tournament}</div>
+          <div className="mt-1 text-[12px] text-[color:var(--muted)]">
+            {t.golfers} in the field · {t.books.join(' + ') || 'no prices'}
+          </div>
+          <div className="mt-2 text-[11px] tabular-nums text-[color:var(--muted-2)]">
+            {melbDateTimeShort(t.startDate)} MEL
+          </div>
+        </button>
+      ))}
+    </div>
   )
 }
