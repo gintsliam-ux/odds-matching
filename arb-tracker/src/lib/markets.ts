@@ -27,15 +27,58 @@ const OPTIONAL_BOOKS: Bookmaker[] = [
   { id: 'fanduel', name: 'FanDuel', color: '#1493ff', mark: 'FD', logoUrl: '/logos/brands/fanduel.png' },
 ];
 
-// Golf outrights are priced by US books, none of which overlap the core AU set,
-// so golf uses its own column list. (Logos fall back to the mark chip until the
-// brand images are added.)
+// Golf outrights are priced by mostly-US books plus TAB — a different set from
+// the core AU columns, so golf uses its own list.
 const GOLF_BOOKS: Bookmaker[] = [
+  { id: 'tab', name: 'TAB', color: '#009845', mark: 'TAB', logoUrl: '/logos/brands/tab.png' },
   { id: 'draftkings', name: 'DraftKings', color: '#53d337', mark: 'DK', logoUrl: '/logos/brands/draftkings.png' },
   { id: 'fanduel', name: 'FanDuel', color: '#1493ff', mark: 'FD', logoUrl: '/logos/brands/fanduel.png' },
   { id: 'betmgm', name: 'BetMGM', color: '#c8a15a', mark: 'MGM', logoUrl: '/logos/brands/betmgm.png' },
   { id: 'fanatics', name: 'Fanatics', color: '#1a1a2e', mark: 'FAN', logoUrl: '/logos/brands/fanatics.png' },
 ];
+
+/**
+ * Canonical key for a golf player across books that spell them differently —
+ * US books write "Cameron Young", TAB writes "YOUNG Cameron". Lowercase, drop
+ * punctuation, sort the name tokens so order and case don't matter.
+ */
+// Letters that don't decompose under NFD (so accent-stripping misses them).
+const LETTER_FOLD: Record<string, string> = {
+  ø: 'o', æ: 'ae', œ: 'oe', ð: 'd', þ: 'th', ß: 'ss', ł: 'l', đ: 'd', ı: 'i',
+};
+
+function playerKey(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '') // combining diacritics (é -> e)
+    .toLowerCase()
+    .replace(/[øæœðþßłđı]/g, (c) => LETTER_FOLD[c] ?? c) // ø -> o, etc.
+    .replace(/[^a-z\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .sort()
+    .join(' ');
+}
+
+/**
+ * A readable display name from a player's spellings across books. Prefer a
+ * "First Last" variant (no all-caps token); fall back to reformatting TAB's
+ * "SURNAME First" form.
+ */
+function playerDisplayName(variants: string[]): string {
+  const isCaps = (w: string) => w.length > 1 && w === w.toUpperCase();
+  const nice = variants.find((v) => !v.split(/\s+/).some(isCaps));
+  if (nice) return nice;
+  const toks = variants[0].split(/\s+/).filter(Boolean);
+  const title = (w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+  const capsIdx = toks.findIndex(isCaps);
+  if (capsIdx >= 0) {
+    // The caps token is the surname — move it to the end and title-case.
+    const surname = toks[capsIdx];
+    return [...toks.filter((_, i) => i !== capsIdx), surname].map(title).join(' ');
+  }
+  return toks.map(title).join(' ');
+}
 
 /** Book ids that have a takeable (non-lay) price somewhere in these rows. */
 function booksWithOdds(rows: OddsRow[]): Set<string> {
@@ -456,17 +499,21 @@ export function buildMarkets(
     let selections: SelectionRow[];
 
     if (def.kind === 'outright') {
-      // A flat field: one row per selection (player), shortest price first.
-      const names = [...new Set(marketRows.map((r) => r.selection))];
-      selections = names
-        .map((name) =>
-          makeSelectionRow(
-            books,
-            name,
-            name,
-            marketRows.filter((r) => r.selection === name),
-          ),
-        )
+      // A flat field, one row per player, shortest price first. Players are
+      // grouped by a normalized key so a book that spells them differently
+      // (TAB's "YOUNG Cameron" vs "Cameron Young") merges into one row.
+      const byPlayer = new Map<string, OddsRow[]>();
+      for (const r of marketRows) {
+        const key = playerKey(r.selection);
+        const bucket = byPlayer.get(key);
+        if (bucket) bucket.push(r);
+        else byPlayer.set(key, [r]);
+      }
+      selections = [...byPlayer.values()]
+        .map((rs) => {
+          const name = playerDisplayName([...new Set(rs.map((r) => r.selection))]);
+          return makeSelectionRow(books, name, name, rs);
+        })
         .sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
     } else if (def.kind === 'total') {
       const isSideA = (r: OddsRow) => isOver(r.selection);
