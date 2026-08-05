@@ -13,6 +13,7 @@ import { fetchCompetitionMappings, type CompetitionMapping } from '../lib/mappin
 import { prettyLeague } from '../lib/sports'
 import { fmtDateTime, melbDateTime } from '../lib/format'
 import { swiftEventUrl } from '../lib/swiftStatus'
+import { mybetEventUrl } from '../lib/mybetStatus'
 import { Field, Grid, SourcePanel } from '../components/SourcePanel'
 
 /**
@@ -33,6 +34,34 @@ interface SwiftSelection {
   odds: number | null
   status: string | null
 }
+interface MybetOutright {
+  event: {
+    id: string
+    description: string | null
+    market: string
+    suspendAt: string | null
+    outcomeAt: string | null
+    lastSeenAt: string | null
+    open: boolean | null
+    runners: number
+  } | null
+  selections: Array<{ name: string | null; odds: number | null }>
+  markets: string[]
+}
+
+/**
+ * OPTIC has no status column for golf — `golf_outrights` is prices, not a
+ * fixture — so it's derived from the tournament's own dates, matching the
+ * vocabulary the rest of the terminal uses.
+ */
+function opticStatus(t: GolfTournament, now = Date.now()): string {
+  const start = Date.parse(t.startDate ?? '')
+  const end = Date.parse(t.endDate ?? '')
+  if (Number.isFinite(end) && now > end) return 'COMPLETED'
+  if (Number.isFinite(start) && now >= start) return 'LIVE'
+  return 'UPCOMING'
+}
+
 interface SwiftOutright {
   event: { id: string; name: string | null; competition: string | null; start: string | null; status: string | null } | null
   markets: Array<{ name: string | null; selections: SwiftSelection[] }>
@@ -43,6 +72,7 @@ export default function GolfDetailPage() {
   const [tournament, setTournament] = useState<GolfTournament | null>(null)
   const [prices, setPrices] = useState<GolfPrice[] | null>(null)
   const [swift, setSwift] = useState<SwiftOutright | null>(null)
+  const [mybet, setMybet] = useState<MybetOutright | null>(null)
   const [mapping, setMapping] = useState<CompetitionMapping | null>(null)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'details' | 'markets'>('markets')
@@ -65,6 +95,24 @@ export default function GolfDetailPage() {
       alive = false
     }
   }, [tournamentId])
+
+  // mybet's outright. It carries no competition id to join on, so it's found by
+  // the tournament name embedded in the description — see api/mybet-outright.
+  useEffect(() => {
+    if (!tournament) return
+    let alive = true
+    fetch('/api/mybet-outright', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tournament: tournament.tournament, market: 'Winner' }),
+    })
+      .then((r) => r.json())
+      .then((j) => alive && setMybet(j))
+      .catch(() => {/* additive — OPTIC prices still render */})
+    return () => {
+      alive = false
+    }
+  }, [tournament])
 
   // Book side: follow the competition mapping to SwiftBet's outright event.
   useEffect(() => {
@@ -195,7 +243,14 @@ export default function GolfDetailPage() {
         {tab === 'markets' ? (
           <MarketsTab rows={rows} books={books} total={prices?.length ?? 0} />
         ) : (
-          <DetailsTab tournament={tournament} mapping={mapping} swift={swift} swiftEventId={swiftEventId} prices={prices} />
+          <DetailsTab
+            tournament={tournament}
+            mapping={mapping}
+            swift={swift}
+            swiftEventId={swiftEventId}
+            prices={prices}
+            mybet={mybet}
+          />
         )}
       </div>
     </div>
@@ -276,12 +331,14 @@ function DetailsTab({
   swift,
   swiftEventId,
   prices,
+  mybet,
 }: {
   tournament: GolfTournament
   mapping: CompetitionMapping | null
   swift: SwiftOutright | null
   swiftEventId: string | null
   prices: GolfPrice[] | null
+  mybet: MybetOutright | null
 }) {
   const swiftSels = swift?.markets?.[0]?.selections ?? []
   // How much of the field we can line up name-for-name. Reported rather than
@@ -298,6 +355,7 @@ function DetailsTab({
       <SourcePanel kind="OPTIC" subtitle="golf_outrights">
         <Grid>
           <Field label="TOURNAMENT" value={tournament.tournament} />
+          <Field label="STATUS" value={opticStatus(tournament)} />
           <Field label="TOUR" value={prettyLeague(tournament.league)} />
           <Field label="FIELD" value={`${tournament.golfers} golfers`} />
           <Field label="MARKETS" value={tournament.markets.join(', ') || '—'} />
@@ -329,6 +387,7 @@ function DetailsTab({
         {mapping ? (
           <Grid>
             <Field label="COMPETITION" value={mapping.swift_competition ?? '—'} />
+            <Field label="STATUS" value={(swift?.event?.status ?? '—').toUpperCase()} />
             <Field label="OUTRIGHT EVENT" value={swift?.event?.name ?? '—'} />
             <Field label="MARKET" value={swift?.markets?.[0]?.name ?? '—'} />
             <Field label="RUNNERS PRICED" value={swiftSels.length ? String(swiftSels.length) : '—'} />
@@ -357,12 +416,52 @@ function DetailsTab({
         )}
       </SourcePanel>
 
-      <SourcePanel kind="MYBET" subtitle="gutsy.mybet_events">
-        <div className="text-[12px] leading-relaxed text-gray-400">
-          <span className="font-bold text-gray-200">mybet has no golf outrights.</span> Its golf is
-          matchups only — "Tournament Matchups", "R1–R4 Matchups" — priced as two-way A vs B, with
-          no winner market anywhere in the feed. There is nothing outright to map to.
-        </div>
+      <SourcePanel
+        kind="MYBET"
+        subtitle="gutsy.mybet_events"
+        action={
+          mybet?.event?.id && (
+            <a
+              href={mybetEventUrl(mybet.event.id, 'golf')}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded border border-[color:var(--mybet)]/30 px-1.5 py-0.5 text-[10px] font-medium text-[color:var(--mybet)] hover:bg-[color:var(--mybet)]/10"
+            >
+              Open mybet <ExternalLink className="h-3 w-3" />
+            </a>
+          )
+        }
+      >
+        {mybet?.event ? (
+          <Grid>
+            <Field label="EVENT" value={mybet.event.description ?? '—'} />
+            <Field
+              label="STATUS"
+              value={mybet.event.open == null ? '—' : mybet.event.open ? 'OPEN' : 'CLOSED'}
+            />
+            <Field label="MARKET" value={mybet.event.market || '—'} />
+            <Field label="RUNNERS PRICED" value={`${mybet.selections.length} of ${mybet.event.runners}`} />
+            <Field
+              label="FAVOURITE"
+              value={
+                mybet.selections[0]?.name
+                  ? `${mybet.selections[0].name} @ ${mybet.selections[0].odds?.toFixed(2)}`
+                  : '—'
+              }
+            />
+            <Field label="OTHER MARKETS" value={mybet.markets.filter((m) => m !== 'Winner').join(', ') || '—'} />
+            <Field label="CLOSES (UTC)" value={fmtDateTime(mybet.event.suspendAt)} />
+            <Field label="CLOSES (MEL)" value={melbDateTime(mybet.event.suspendAt)} />
+            <Field label="LAST SEEN (UTC)" value={fmtDateTime(mybet.event.lastSeenAt)} />
+            <Field label="EVENT ID" value={mybet.event.id} mono copyable />
+          </Grid>
+        ) : (
+          <div className="text-[12px] leading-relaxed text-gray-400">
+            <span className="font-bold text-gray-200">No mybet outright for this tournament.</span>{' '}
+            mybet keeps outrights as a `comps` map rather than the A-vs-B `match`
+            its head-to-heads use, and this one has none.
+          </div>
+        )}
       </SourcePanel>
     </div>
   )
