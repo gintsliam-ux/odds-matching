@@ -410,6 +410,16 @@ const OPTIC_TO_MYBET_SPORT: Record<string, string> = {
   icehockey: 'Ice Hockey',
   hockey: 'Ice Hockey',
   nhl: 'Ice Hockey',
+  // A sport missing from this map returns null, and a null sport switches the
+  // mapping picker's scope filter OFF — it then offers every sport at once.
+  // That is how mapping a DARTS tournament and typing "open" surfaced Snooker's
+  // English/British/Shenzhen Open as the only candidates. mybet carries all
+  // three of these.
+  darts: 'Darts',
+  volleyball: 'Volleyball',
+  netball: 'Netball',
+  // OpticOdds files a few competitions as though they were sports.
+  laliga: 'Soccer',
 }
 
 export function mybetSportOf(opticRawSport: string): string | null {
