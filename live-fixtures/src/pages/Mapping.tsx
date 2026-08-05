@@ -267,6 +267,10 @@ export default function MappingPage() {
     /** Live/upcoming, or finished within ACTIVE_WINDOW_D. Drives the default
      *  "active only" list — see the note on ACTIVE_WINDOW_D. */
     isActive: boolean
+    /** Golf only: OpticOdds' tournament id, so the row can open its page.
+     *  Golf has no fixtures, so the usual drill into events has nothing to
+     *  show — it opens the tournament's outright board instead. */
+    golfTournamentId?: string
   }
 
   // A tennis season_type ("Vancouver, Canada, Qualifying") is a one-week event,
@@ -359,6 +363,7 @@ export default function MappingPage() {
         mybetMappings: realMappings(mybetCompMap.get(k)),
         stickyUnmapped: isStickyUnmapped(compMap.get(k)),
         isActive: isGolfTournamentActive(g),
+        golfTournamentId: g.tournamentId,
       })
     }
 
@@ -842,9 +847,13 @@ export default function MappingPage() {
           rows={visibleTournaments}
           onOpen={(t) =>
             navigate(
-              `/mapping/${sportToSlug(sportGroupKey(t.rawSport))}/${encodeURIComponent(t.rawLeague)}${
-                t.rawTournament ? `?t=${encodeURIComponent(t.rawTournament)}` : ''
-              }`,
+              // Golf drills to its outright board; every other sport drills to
+              // the events under the tournament.
+              t.golfTournamentId
+                ? `/golf/${encodeURIComponent(t.golfTournamentId)}`
+                : `/mapping/${sportToSlug(sportGroupKey(t.rawSport))}/${encodeURIComponent(t.rawLeague)}${
+                    t.rawTournament ? `?t=${encodeURIComponent(t.rawTournament)}` : ''
+                  }`,
             )
           }
           onEdit={(t) =>
@@ -918,6 +927,8 @@ interface TournamentRowShape {
   count: number
   mappings: CompetitionMapping[]
   mybetMappings: CompetitionMapping[]
+  /** Golf only — see the note on TournamentRow.golfTournamentId. */
+  golfTournamentId?: string
 }
 
 function TournamentTable({

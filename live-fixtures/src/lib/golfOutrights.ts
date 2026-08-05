@@ -116,3 +116,63 @@ export function isGolfTournamentActive(t: GolfTournament, graceDays = 7): boolea
   if (!Number.isFinite(end)) return true
   return end > Date.now() - graceDays * 86_400_000
 }
+
+// --- prices -----------------------------------------------------------------
+
+export interface GolfPrice {
+  golfer: string
+  /** Best (shortest) price across the OPTIC books, and the per-book detail. */
+  best: number | null
+  byBook: Record<string, number>
+}
+
+/** Every priced golfer in one tournament, shortest price first. */
+export async function fetchGolfPrices(tournamentId: string): Promise<GolfPrice[]> {
+  const sb = getSupabase()
+  const PAGE = 1000
+  const rows: Array<{ golfer: string | null; price: number | null; sportsbook: string | null }> = []
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await sb
+      .from(TABLE)
+      .select('golfer,price,sportsbook')
+      .eq('tournament_id', tournamentId)
+      .eq('market', 'Winner')
+      .range(from, from + PAGE - 1)
+      .returns<Array<{ golfer: string | null; price: number | null; sportsbook: string | null }>>()
+    if (error) throw error
+    const page = data ?? []
+    rows.push(...page)
+    if (page.length < PAGE) break
+  }
+  const byGolfer = new Map<string, GolfPrice>()
+  for (const r of rows) {
+    if (!r.golfer || r.price == null) continue
+    let g = byGolfer.get(r.golfer)
+    if (!g) byGolfer.set(r.golfer, (g = { golfer: r.golfer, best: null, byBook: {} }))
+    if (r.sportsbook) g.byBook[r.sportsbook] = r.price
+    if (g.best == null || r.price < g.best) g.best = r.price
+  }
+  return [...byGolfer.values()].sort((a, b) => (a.best ?? Infinity) - (b.best ?? Infinity))
+}
+
+/**
+ * Canonical form of a golfer's name, for joining the two feeds.
+ *
+ * OPTIC writes "Cameron Young"; SwiftBet writes "Young, Cameron". Sorting the
+ * name tokens makes the two identical without having to know which convention a
+ * given feed uses. Accents are folded too — the feeds disagree on Højgaard.
+ *
+ * It does NOT fix short forms: "Zach Bauchou" and "Zachary Bauchou" stay
+ * distinct, which is most of the ~15% that doesn't join.
+ */
+export function golferKey(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z ]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .sort()
+    .join(' ')
+}
