@@ -412,10 +412,19 @@ export function bestSwiftMatch(args: {
     // Tournament only. The tour never identifies the week's event.
     const t = args.opticTournamentRaw.trim()
     if (!t) return null
+    // mybet lists one candidate per outright MARKET — "LIV Golf New York 2026 -
+    // Winner", "… - 1st Round Leader", "… - Top 5 Finish" — and every one of
+    // them scores identically against the tournament name. Winner is the market
+    // being mapped, so it breaks the tie; without this the pick is whichever
+    // the feed happened to return first.
+    const isWinner = (name: string) => /(^|[-·:]\s*)winner\s*$/i.test(name.trim())
+    let bestWinner = false
     for (const c of cands) {
       const s = sim(t, c.name)
-      if (s > bestScore) {
+      const w = isWinner(c.name)
+      if (s > bestScore || (s === bestScore && s > 0 && w && !bestWinner)) {
         bestScore = s
+        bestWinner = w
         best = c
       }
     }

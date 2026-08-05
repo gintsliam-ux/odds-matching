@@ -12,7 +12,7 @@ import { MappingEditor, type EditorTarget } from '../components/MappingEditor'
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
 import { getMybetCatalog, type MybetEvent } from '../lib/mybetCatalog'
 import { fetchSwiftStatuses, listSwiftEventsByCompetition, listSwiftCompetitions } from '../lib/swiftStatus'
-import { fetchMybetStatuses, listMybetEventsBySport, listMybetCompetitions } from '../lib/mybetStatus'
+import { fetchMybetStatuses, listMybetEventsBySport, listMybetCompetitions, listMybetOutrights } from '../lib/mybetStatus'
 import { displaySport, mybetSportOf, prettyLeague, slugToSport, sportEmoji, sportGroupKey, sportLabel, sportToSlug } from '../lib/sports'
 import { fetchGolfTournaments, isGolfTournamentActive, type GolfTournament } from '../lib/golfOutrights'
 import { kickoffLabel, melbDateTimeShort, utcDateTimeShort } from '../lib/format'
@@ -584,6 +584,15 @@ export default function MappingPage() {
         provider === 'mybet'
           ? await listMybetCompetitions().catch(async () => (await getMybetCatalog().catch(() => null))?.competitions ?? [])
           : await listSwiftCompetitions().catch(async () => (await getSwiftCatalog().catch(() => null))?.competitions ?? [])
+      // Golf's mybet counterpart is an outright market, not a competition, so
+      // those candidates are appended rather than substituted — one pass still
+      // covers every sport in view. A tour scores 0 against a tournament name
+      // and an outright scores 0 against a league, so neither list can win the
+      // other's rows.
+      if (provider === 'mybet' && visibleTournaments.some((t) => t.sport === 'golf')) {
+        const outrights = await listMybetOutrights().catch(() => [])
+        competitions.push(...outrights)
+      }
       if (competitions.length === 0) {
         setAutoStatus(`${brand} catalogue unavailable.`)
         setAutoRunning(false)
