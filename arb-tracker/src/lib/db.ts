@@ -262,21 +262,28 @@ export async function fetchAllEvents(): Promise<SportEvent[]> {
 // Golf is outright-only: a tournament (from golf_tournaments) with a field of
 // players priced to win (golf_outrights). It has no two-sided fixture, so it's
 // synthesised into a SportEvent rather than read from an `_events` table.
-const GOLF_LEAGUE: League = {
-  id: 'golf',
-  name: 'PGA',
-  code: 'GOLF',
-  sport: 'Golf',
-  logoUrl: '/logos/leagues/golf.png',
-};
 const GOLF_TABLE = 'golf_outrights';
 const TOURNAMENT_DAYS = 4; // Thu–Sun
+
+// Each tournament carries its tour (PGA, LIV, …). The league id stays 'golf' so
+// markets/books still resolve, but the name/badge come from the tour.
+function golfLeague(tour: string | null): League {
+  const name = (tour ?? 'Golf').toUpperCase();
+  return {
+    id: 'golf',
+    name,
+    code: name,
+    sport: 'Golf',
+    logoUrl: `/logos/leagues/golf-${name.toLowerCase()}.png`,
+  };
+}
 
 interface GolfTournamentRow {
   tournament_id: string;
   name: string;
   start_date: string;
   status: string | null;
+  league: string | null;
 }
 
 /** One synthetic SportEvent per golf tournament that currently has odds. */
@@ -285,7 +292,7 @@ async function fetchGolfEvents(
 ): Promise<SportEvent[]> {
   const [odds, tourneys] = await Promise.all([
     client.from(GOLF_TABLE).select('tournament_id'),
-    client.from('golf_tournaments').select('tournament_id,name,start_date,status'),
+    client.from('golf_tournaments').select('tournament_id,name,start_date,status,league'),
   ]);
   if (odds.error || tourneys.error || !odds.data || !tourneys.data) return [];
 
@@ -298,7 +305,7 @@ async function fetchGolfEvents(
       return {
         id: t.tournament_id,
         sport: 'Golf',
-        league: GOLF_LEAGUE,
+        league: golfLeague(t.league),
         name: t.name,
         home: t.name,
         away: '',
