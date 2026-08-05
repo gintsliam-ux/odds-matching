@@ -13,7 +13,8 @@ import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/
 import { getMybetCatalog, type MybetEvent } from '../lib/mybetCatalog'
 import { fetchSwiftStatuses, listSwiftEventsByCompetition, listSwiftCompetitions } from '../lib/swiftStatus'
 import { fetchMybetStatuses, listMybetEventsBySport, listMybetCompetitions } from '../lib/mybetStatus'
-import { displaySport, mybetSportOf, slugToSport, sportEmoji, sportGroupKey, sportLabel, sportToSlug } from '../lib/sports'
+import { displaySport, mybetSportOf, prettyLeague, slugToSport, sportEmoji, sportGroupKey, sportLabel, sportToSlug } from '../lib/sports'
+import { fetchGolfTournaments, isGolfTournamentActive, type GolfTournament } from '../lib/golfOutrights'
 import { kickoffLabel, melbDateTimeShort, utcDateTimeShort } from '../lib/format'
 import {
   fetchCompetitionMappings,
@@ -192,6 +193,19 @@ export default function MappingPage() {
     }
   }, [reloadKey])
 
+  // Golf lives in `golf_outrights`, not `live_fixtures`, so it never reaches
+  // the sport universe and has to be loaded separately — see lib/golfOutrights.
+  const [golf, setGolf] = useState<GolfTournament[]>([])
+  useEffect(() => {
+    let alive = true
+    fetchGolfTournaments()
+      .then((rows) => alive && setGolf(rows))
+      .catch(() => {/* golf is additive — a failure must not blank the page */})
+    return () => {
+      alive = false
+    }
+  }, [reloadKey])
+
   // URL state ------------------------------------------------------------
   const sportFilter = sportSlug ? slugToSport(sportSlug) : 'all' // sportGroupKey or 'all'
   const tournamentTennis = params.get('t') ?? '' // tennis season_type (drill only)
@@ -324,6 +338,30 @@ export default function MappingPage() {
         })
       }
     }
+    // Golf: one row per tournament. There is no fixture behind these — the
+    // OPTIC side is a table of outright prices — so `count` is the size of the
+    // field rather than a number of games, and the row is keyed on the
+    // tournament exactly as tennis keys on its season_type.
+    for (const g of golf) {
+      const league = prettyLeague(g.league)
+      const k = `golf|${league}|${g.tournament}`
+      if (seen.has(k)) continue
+      seen.add(k)
+      rows.push({
+        sport: 'golf',
+        league,
+        tournament: g.tournament,
+        rawSport: 'golf',
+        rawLeague: g.league,
+        rawTournament: g.tournament,
+        count: g.golfers,
+        mappings: realMappings(compMap.get(k)),
+        mybetMappings: realMappings(mybetCompMap.get(k)),
+        stickyUnmapped: isStickyUnmapped(compMap.get(k)),
+        isActive: isGolfTournamentActive(g),
+      })
+    }
+
     for (const f of fixtures) {
       if (f.sport !== 'tennis') continue
       const tournament = f.seasonType ?? ''
@@ -396,7 +434,7 @@ export default function MappingPage() {
         if (am !== bm) return bm - am
         return b.count - a.count || a.sport.localeCompare(b.sport) || a.league.localeCompare(b.league)
       })
-  }, [universe, fixtures, compMap, mybetCompMap, isActiveKey])
+  }, [universe, fixtures, golf, compMap, mybetCompMap, isActiveKey])
 
   // Sport tab list (display-grouped: `mlb` and `baseball` share "Baseball").
   // Includes SwiftBet sports too — clicking a SwiftBet-only sport tab shows
