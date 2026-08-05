@@ -9,6 +9,7 @@ import { favouriteMatches, useFavourites, type Favourite } from '../lib/favourit
 import { FavouriteEditor } from './FavouriteEditor'
 import type { DayView } from './Layout'
 import { useSportUniverse } from '../hooks/useSportUniverse'
+import { useGolfTournaments } from '../hooks/useGolfTournaments'
 
 interface Props {
   fixtures: Fixture[]
@@ -24,6 +25,9 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
   // Single open sport (accordion) — expanding one collapses any other.
   const [expanded, setExpanded] = useState<string | null>(null)
   const universe = useSportUniverse()
+  // Golf isn't in live_fixtures, so the universe can't see it — seed it here or
+  // the sport never appears in the rail or the expanded list.
+  const { active: golfActive } = useGolfTournaments()
   const [editing, setEditing] = useState<Favourite | 'new' | null>(null)
 
   const counts = useMemo(() => {
@@ -65,6 +69,11 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
       if (f.status === 'live') e.live++
     }
     for (const [key, e] of m) e.total = Math.max(universe.activeBySport.get(key) ?? 0, e.live)
+    // Golf: one "fixture" per tournament still to be played. Seeded from the
+    // outright table because it has no rows in live_fixtures at all — and set
+    // AFTER the max above, which would otherwise reset it to 0 (activeBySport
+    // has no golf entry to max against).
+    if (golfActive.length > 0) seed('golf').total = golfActive.length
     return [...m.entries()]
       .map(([key, v]) => ({ key, ...v }))
       .sort(
@@ -74,7 +83,7 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
           b.total - a.total ||
           a.label.localeCompare(b.label),
       )
-  }, [fixtures, universe])
+  }, [fixtures, universe, golfActive])
 
   const favStats = useMemo(() => {
     const map = new Map<string, { total: number; live: number }>()
