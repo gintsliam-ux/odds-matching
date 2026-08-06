@@ -10,9 +10,18 @@ const TABLE = 'live_fixtures'
 
 // Window for the board: everything scheduled up to this far ahead, plus all
 // currently-live games regardless of their (possibly stale) scheduled_start.
-const UPCOMING_HORIZON_H = 6
-const RECENT_COMPLETED_H = 3
-const ROW_LIMIT = 500
+//
+// A full day either side. Measured on a normal slate that is 490 fixtures
+// against 95 for the old -3h/+6h window, so ROW_LIMIT had to move with it —
+// at 500 the query sat one busy weekend away from silently truncating, and
+// because the rows come back ascending by scheduled_start the ones dropped
+// would have been the furthest-future, i.e. the whole tail of tomorrow.
+//
+// 1000 is PostgREST's own per-response ceiling, so it is the most this can
+// fetch without paging.
+const UPCOMING_HORIZON_H = 24
+const RECENT_COMPLETED_H = 24
+const ROW_LIMIT = 1000
 
 // The feed sometimes leaves `is_live=true` long after a game ends (seen 10–20h),
 // which would otherwise show a runaway live clock.

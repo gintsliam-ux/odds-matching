@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { pollWithVisibility } from '../lib/poll'
 import type { Fixture } from '../lib/types'
 import { fetchFixtures } from '../lib/dataSource'
 
@@ -14,6 +15,14 @@ interface UseFixtures {
 }
 
 const POLL_MS = 15_000
+/**
+ * Cadence while the tab is hidden.
+ *
+ * The board window is a day either side, which is ~490 fixtures and ~560 KB a
+ * poll against ~115 KB before. At 15s that is fine while someone is watching
+ * and pure waste when nobody is — same trade already made for the bet passes.
+ */
+const HIDDEN_POLL_MS = 5 * 60_000
 
 export function useFixtures(): UseFixtures {
   const [fixtures, setFixtures] = useState<Fixture[]>([])
@@ -36,17 +45,22 @@ export function useFixtures(): UseFixtures {
       setFeed('error')
       setError(e instanceof Error ? e.message : 'Feed error')
     } finally {
-      if (alive.current) setNextPollAt(Date.now() + POLL_MS)
+      // Report the delay actually in force, or the header's countdown hits 0
+      // and sits there for the rest of a hidden-tab interval.
+      if (alive.current) {
+        const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden'
+        setNextPollAt(Date.now() + (hidden ? HIDDEN_POLL_MS : POLL_MS))
+      }
     }
   }, [])
 
   useEffect(() => {
     alive.current = true
     load()
-    const id = setInterval(load, POLL_MS)
+    const stop = pollWithVisibility(load, POLL_MS, HIDDEN_POLL_MS)
     return () => {
       alive.current = false
-      clearInterval(id)
+      stop()
     }
   }, [load])
 
