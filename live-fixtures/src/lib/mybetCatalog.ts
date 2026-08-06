@@ -14,6 +14,10 @@ export interface MybetCompetition {
   sport: string | null
   name: string
   n: number
+  /** Disambiguator when the league name alone is ambiguous — mybet has six
+   *  different "Primera Division". Taken from the event description, e.g.
+   *  "Chilean Primera Division". */
+  hint?: string | null
 }
 
 export interface MybetEvent {
