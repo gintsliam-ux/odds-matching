@@ -51,6 +51,9 @@ export interface MybetBetRow {
   is_bonus: boolean
   sgm: boolean
   sport: string | null
+  /** Upstream event label — for an outright this names the market, e.g.
+   *  "PGA Rocket Classic 2026 - Winner". */
+  event_string: string | null
   is_multi: boolean
   leg_count: number
   legs: MybetLeg[]

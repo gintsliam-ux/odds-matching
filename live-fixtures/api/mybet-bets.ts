@@ -214,6 +214,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         is_bonus: !!d.bonus_bet,
         sgm: !!d.sgm_flag,
         sport: (d.sport_name as string | null) ?? null,
+        // The market label for an outright: "PGA Rocket Classic 2026 - Winner".
+        // mybet keeps each market as its own event, so this is how a bet says
+        // which one it is.
+        event_string: (d.event_string as string | null) ?? null,
         is_multi: legs.length > 0,
         leg_count: legs.length,
         // Per-leg detail so the UI can show a SwiftBet-style multi breakdown.
