@@ -21,7 +21,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MongoClient } from 'mongodb'
-import { canonSport, sim, prettyOpticLeague, aliasExpand, EXCLUDE_LEAGUES, eventPairSim } from './build-mapping.mjs'
+import { canonSport, sim, prettyOpticLeague, aliasExpand, EXCLUDE_LEAGUES, eventPairSim, gradeKey } from './build-mapping.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const env = parseEnv(join(HERE, '..', '.env'))
@@ -38,6 +38,9 @@ const HDR = { apikey: SUP_KEY, Authorization: `Bearer ${SUP_KEY}` }
 // Both name-similarity and start-time gates must pass, same as SwiftBet's event
 // matcher. mybet's `suspendAt` sits at/near kickoff, so a 2 h skew tolerates the
 // spread across sports without letting a different day's rematch through.
+/** Sports whose competitors are individuals — the grade gate does not apply. */
+const GRADE_EXEMPT_SPORTS = new Set(['mma', 'boxing'])
+
 const MIN_EVENT_SIM = 0.4
 const MAX_START_SKEW_MS = 120 * 60 * 1000
 // Beyond the tight window, out to WIDE, only a near-exact name is accepted.
@@ -245,6 +248,19 @@ async function main(opts = { writeSnapshot: true }) {
       if (!Number.isFinite(estart)) continue
       const skew = Math.abs(opticStart - estart)
       if (skew > MAX_START_SKEW_WIDE_MS) continue
+      // Same clubs, different grade. Candidates here are pooled by sport+day
+      // with no competition gate, so the women's match and the men's — or the
+      // U23s and the seniors — are both in the pool, hours apart, with team
+      // names that score 1.00 because teamScore drops the very tokens that
+      // separate them. Reject outright rather than let the 1:1 claim rule
+      // decide by ordering. See gradeKey.
+      //
+      // Skipped for combat sports: the participants are PEOPLE, so two bouts
+      // never share a name and there is no collision to prevent — while OPTIC
+      // files every bout under one `ufc` league with no gender split, so the
+      // gate would reject correct women's bouts against mybet's "UFC - Women".
+      if (!GRADE_EXEMPT_SPORTS.has(canonSport(r.sport ?? '')) &&
+          gradeKey(r.home_team, r.away_team, r.league) !== gradeKey(e.home, e.away, e.league)) continue
       // Per-team match, not pooled tokens: score home↔home/away↔away and the
       // crossed orientation, and require BOTH teams to clear the bar. Pooled
       // token overlap let "Brewers v NY Mets" match "Pirates v NY Yankees" on

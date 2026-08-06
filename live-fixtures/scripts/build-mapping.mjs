@@ -347,6 +347,60 @@ export function participantSim(a, b) {
 /** Pairwise score for a fixture: both participants must match, in either
  *  orientation (feeds disagree on home/away often enough). min() is the point —
  *  one strong side can't carry a mismatched other side. */
+/**
+ * The grade a fixture is played at: senior / women / an age group / reserves.
+ *
+ * Two clubs meet more than once on the same day — the women's match before the
+ * men's, the U23s before the seniors — and the team names are otherwise
+ * identical. mybet's event matcher pools candidates by sport+day with no
+ * competition gate, so both are candidates for the same OPTIC fixture, and the
+ * tokens that tell them apart ("W", "U23", "2") are exactly the ones team-name
+ * similarity throws away: measured 30 same-day cross-division pairs scoring
+ * 1.00, 25 of them 2-6h apart where the wide band is supposed to be strict.
+ *
+ * Read from the LEAGUE as well as the team names, because the two feeds put it
+ * in different places. OPTIC writes the age group into the team ("Chapecoense
+ * U20") but puts women in the league (`england_-_the_hundred_women`, teams
+ * "Manchester Originals" v "Welsh Fire"); mybet writes it into the team
+ * ("Southern Brave W"). Reading only one side would reject every correct
+ * women's pairing.
+ */
+export function gradeKey(teamA, teamB, league) {
+  // Fold diacritics FIRST. Stripping non-letters straight away turns "Wisła
+  // Kraków" into "wis a krak w", and that stray "w" reads as a women's marker —
+  // every Polish, Czech and Turkish club name became a women's fixture.
+  const norm = (v) =>
+    ' ' +
+    String(v ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[øØ]/g, 'o')
+      .replace(/[łŁ]/g, 'l')
+      .replace(/[đĐ]/g, 'd')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim() +
+    ' '
+  const all = norm([teamA, teamB, league].filter(Boolean).join(' '))
+  // Competitions that are women's without saying so. Without these the gate
+  // reads OPTIC's `wnba` as silent and mybet's "… - Womens" as women's, and
+  // rejects 153 correct WNBA/NRLW/NWSL mappings. WAFL is deliberately absent —
+  // it is men's Australian football.
+  const womensComp = /\b(wnba|nrlw|nwsl|wbbl|wnbl|awsl)\b/.test(all)
+  const women = womensComp || /\b(w|women|womens|ladies|femenino|feminino|feminine|damen)\b/.test(all)
+  // Second string, however the feed spells it. The two sides label the same
+  // side differently — OPTIC "Sydney FC Academy" and "Brisbane Roar Youth"
+  // against mybet "Sydney FC U23" and "Brisbane Roar U23" — so an age number
+  // and a word like Academy/Youth/Reserve collapse to ONE marker rather than
+  // being compared to each other.
+  const isSecond = (v) => {
+    const t = norm(v).trim()
+    return /\b(reserves?|ii|2)$/.test(t) || /\b(reserves?|academy|youth|dev)\b/.test(norm(v)) || /\bu\s?(1[5-9]|2[0-3])\b/.test(norm(v))
+  }
+  const second = isSecond(teamA) || isSecond(teamB) || /\b(reserves?|academy|youth)\b/.test(norm(league)) || /\bu\s?(1[5-9]|2[0-3])\b/.test(norm(league))
+  return `${women ? 'w' : ''}|${second ? '2' : ''}`
+}
+
 export function eventPairSim(oHome, oAway, eHome, eAway) {
   const direct = Math.min(participantSim(oHome, eHome), participantSim(oAway, eAway))
   const swapped = Math.min(participantSim(oHome, eAway), participantSim(oAway, eHome))
