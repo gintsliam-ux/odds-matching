@@ -51,6 +51,9 @@ interface MybetOutright {
   } | null
   selections: Array<{ name: string | null; odds: number | null }>
   markets: string[]
+  /** Every outright market for this tournament WITH its own event id — mybet
+   *  files each one as a separate event. */
+  allMarkets: Array<{ id: string; market: string; description: string | null; runners: number }>
 }
 
 /**
@@ -106,6 +109,8 @@ export default function GolfDetailPage() {
     fetch('/api/mybet-outright', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
+      // `market` picks which one drives the panel + prices; `allMarkets` comes
+      // back regardless, and the bets join uses all of them.
       body: JSON.stringify({ tournament: tournament.tournament, market: 'Winner' }),
     })
       .then((r) => r.json())
@@ -185,17 +190,28 @@ export default function GolfDetailPage() {
     }
   }, [swiftOutrightId, tournament?.startDate])
 
-  const mybetOutrightId = mybet?.event?.id ?? null
+  // Bets join every market's event, not just Winner: mybet files Top 5/10/20
+  // and 1st Round Leader as their own events, so joining Winner alone silently
+  // dropped every bet on the other four.
+  const mybetOutrightIds = useMemo(
+    () => (mybet?.allMarkets ?? []).map((m) => m.id).filter(Boolean),
+    [mybet?.allMarkets],
+  )
+  const mybetIdsKey = mybetOutrightIds.join(',')
   useEffect(() => {
-    if (!mybetOutrightId) return
+    if (!mybetIdsKey) return
     let alive = true
-    fetchMybetBets({ eventId: mybetOutrightId, suspendAt: mybet?.event?.suspendAt ?? null })
+    fetchMybetBets({
+      eventIds: mybetIdsKey.split(','),
+      suspendAt: mybet?.event?.suspendAt ?? null,
+      outright: true,
+    })
       .then((rows) => alive && setMybetBets(rows))
       .catch(() => alive && setMybetBets([]))
     return () => {
       alive = false
     }
-  }, [mybetOutrightId, mybet?.event?.suspendAt])
+  }, [mybetIdsKey, mybet?.event?.suspendAt])
 
   // Markets lists the bookmakers we hold prices from — the book's own outright
   // is reported on the SWIFT panel in Details rather than mixed into this table.
@@ -501,7 +517,14 @@ function DetailsTab({
                   : '—'
               }
             />
-            <Field label="OTHER MARKETS" value={mybet.markets.filter((m) => m !== 'Winner').join(', ') || '—'} />
+            <Field
+              label="MARKETS COVERED"
+              value={
+                mybet.allMarkets?.length
+                  ? `${mybet.allMarkets.length} — ${mybet.allMarkets.map((m) => m.market).join(', ')}`
+                  : '—'
+              }
+            />
             <Field label="CLOSES (UTC)" value={fmtDateTime(mybet.event.suspendAt)} />
             <Field label="CLOSES (MEL)" value={melbDateTime(mybet.event.suspendAt)} />
             <Field label="LAST SEEN (UTC)" value={fmtDateTime(mybet.event.lastSeenAt)} />

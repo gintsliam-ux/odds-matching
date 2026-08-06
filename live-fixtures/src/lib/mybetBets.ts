@@ -67,11 +67,16 @@ export interface MybetBetRow {
 
 export async function fetchMybetBets(args: {
   /** gutsy.mybet_events._id (numeric) for this fixture's mybet mapping. */
-  eventId: string | number
+  eventId?: string | number
+  /** Several ids at once. An outright tournament is one mybet event PER MARKET
+   *  (Winner, Top 5/10/20, 1st Round Leader), so covering it means all of them. */
+  eventIds?: Array<string | number>
   /** Event close time — centres the transaction_date scan window. */
   suspendAt?: string | null
   home?: string | null
   away?: string | null
+  /** Outright (tournament) rather than a fixture — widens the placement scan. */
+  outright?: boolean
   /** When OPTIC went live — flags bets placed after it as `placed_after_live`. */
   liveAt?: string | null
 }): Promise<MybetBetRow[]> {
@@ -80,6 +85,8 @@ export async function fetchMybetBets(args: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       eventId: args.eventId,
+      eventIds: args.eventIds,
+      outright: args.outright,
       suspendAt: args.suspendAt ?? undefined,
       home: args.home ?? undefined,
       away: args.away ?? undefined,

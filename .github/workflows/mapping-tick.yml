@@ -5,19 +5,31 @@ name: live-fixtures mapping-tick
 # is server-throttled to rebuild at most once per 10 min — so this needs no
 # secret and safely dedupes with the in-app pinger.
 #
-# GitHub's scheduled runs are best-effort and often a few minutes late, so we
-# ask for every 5 min; combined with the 10-min server throttle that keeps
-# mappings reliably <~15 min stale. Public repo → Actions minutes are free.
+# GitHub's scheduled runs are best-effort. Asking for */5 did NOT buy 5-minute
+# ticks: GitHub deprioritised this schedule down to a run every ~45 min and then
+# started refusing to allocate a runner at all ("The job was not acquired by
+# Runner of type hosted"), which is a queued-then-abandoned job — 15 min of
+# waiting followed by a failure email, with the ping never sent. Asking every
+# 15 min is honest about what we actually get, and the server throttles a
+# rebuild to once per 10 min anyway, so */5 was only ever generating no-op
+# pings and runner demand.
+#
+# This is a BACKSTOP. Whenever the terminal is open the in-app pinger keeps
+# mappings ~10 min fresh on its own, so a skipped tick here is not an outage.
+# Public repo → Actions minutes are free.
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch: {}
 
-# If a run is still going when the next fires, skip the new one rather than queue.
+# If a run is still going when the next fires, drop the OLD one. It used to hold
+# the group open while stuck waiting for a runner, so a single unacquirable job
+# blocked every later tick behind it. The ping is idempotent and the newest one
+# is the only one worth running.
 concurrency:
   group: mapping-tick
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   ping:

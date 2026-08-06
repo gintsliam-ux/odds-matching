@@ -82,6 +82,9 @@ function utcToMelbWall(ms: number): Date {
 // transaction_date to bound the scan (no index on event_identifier).
 const WINDOW_BEFORE_MS = 10 * 86_400_000
 const WINDOW_AFTER_MS = 1 * 86_400_000
+// An outright is bet weeks or months out — a 10-day lookback would report a
+// tournament's book as near-empty. Mirrors api/swift-bets' outright backDays.
+const OUTRIGHT_BEFORE_MS = 90 * 86_400_000
 /** How far a multi leg's own event time may sit from this event's close time and
  *  still be considered the same game. Well inside the ~24 h gap between
  *  consecutive games of a series. */
@@ -95,30 +98,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const body = (typeof req.body === 'string' ? JSON.parse(req.body) : req.body) as {
       eventId?: string | number
+      /** Several ids at once — an outright tournament has one event PER
+       *  MARKET on mybet, and the caller wants the bets across all of them. */
+      eventIds?: Array<string | number>
+      /** Widens the placement scan to 90 days — outrights price up months out. */
+      outright?: boolean
       suspendAt?: string
       home?: string
       away?: string
       /** When OPTIC went live — bets placed after this (past a grace) are flagged. */
       liveAt?: string
     }
-    const eventId = Number(body.eventId)
-    if (!Number.isFinite(eventId) || eventId <= 0) {
-      res.status(400).json({ error: 'eventId (numeric mybet event id) is required' })
+    const idList = (Array.isArray(body.eventIds) && body.eventIds.length ? body.eventIds : [body.eventId])
+      .map((v) => Number(v))
+      .filter((n) => Number.isFinite(n) && n > 0)
+    if (idList.length === 0) {
+      res.status(400).json({ error: 'eventId or eventIds (numeric mybet event ids) is required' })
       return
     }
+    const eventId = idList[0]
 
     // Date window centred on the event's close time (fallback: now).
     // transaction_date is a BSON Date, so the bounds must be Date objects too —
     // string bounds silently match nothing against a Date field.
     const centreMs = body.suspendAt && Number.isFinite(Date.parse(body.suspendAt)) ? Date.parse(body.suspendAt) : Date.now()
-    const lo = new Date(centreMs - WINDOW_BEFORE_MS)
+    const lo = new Date(centreMs - (body.outright ? OUTRIGHT_BEFORE_MS : WINDOW_BEFORE_MS))
     const hi = new Date(centreMs + WINDOW_AFTER_MS)
 
     // Singles join on event_identifier; multis (event_identifier 0) match on a
     // leg whose description contains BOTH team names — both in the SAME leg (via
     // $elemMatch), so a multi that merely has the two teams in different legs
     // (different games) doesn't false-match.
-    const joins: Record<string, unknown>[] = [{ event_identifier: eventId }]
+    const joins: Record<string, unknown>[] = [
+      idList.length === 1 ? { event_identifier: eventId } : { event_identifier: { $in: idList } },
+    ]
     if (body.home && body.away) {
       const legConds: Record<string, unknown>[] = [
         { multileg_evetdescription: { $regex: esc(body.home), $options: 'i' } },
@@ -194,7 +207,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const liveCutoff = body.liveAt && Number.isFinite(Date.parse(body.liveAt)) ? Date.parse(body.liveAt) + AFTER_LIVE_GRACE_MS : null
     const bets = docs.map((d) => {
       const legs = Array.isArray(d.legs) ? d.legs : []
-      const byEventId = d.event_identifier === eventId
+      const byEventId = idList.includes(d.event_identifier as number)
       // transaction_date is Melbourne wall-clock — convert to real UTC before
       // any comparison against the (UTC) live time, and before returning it.
       const placedUtc = melbWallToUtc(d.transaction_date)

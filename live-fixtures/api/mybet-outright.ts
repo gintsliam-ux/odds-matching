@@ -73,12 +73,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const parts = String(d ?? '').split(' - ')
       return parts.length > 1 ? parts[parts.length - 1].trim() : ''
     }
-    const markets = [...new Set(all.map((d) => marketOf(d.description as string)).filter(Boolean))]
+    // Every outright market for this tournament, each with its own event id —
+    // mybet keeps Winner, Top 5/10/20 Finish and 1st Round Leader as SEPARATE
+    // events, so a caller that wants all of them (bets, coverage) needs the
+    // ids, not just the names.
+    const allMarkets = all
+      .map((d) => ({
+        id: String(d._id),
+        market: marketOf(d.description as string),
+        description: (d.description as string | null) ?? null,
+        runners: Object.keys((d.comps ?? {}) as Record<string, unknown>).length,
+        suspendAt: d.suspendAt ? new Date(d.suspendAt as string).toISOString() : null,
+      }))
+      .filter((x) => x.market)
+      .sort((a, b) => (a.market === 'Winner' ? -1 : b.market === 'Winner' ? 1 : a.market.localeCompare(b.market)))
+    const markets = [...new Set(allMarkets.map((x) => x.market))]
     const doc = all.find((d) => marketOf(d.description as string).toLowerCase() === market.toLowerCase())
 
     if (!doc) {
       res.setHeader('Cache-Control', 'no-store')
-      res.status(200).json({ event: null, selections: [], markets })
+      res.status(200).json({ event: null, selections: [], markets, allMarkets })
       return
     }
 
@@ -110,6 +124,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
       selections,
       markets,
+      allMarkets,
     })
   } catch (e) {
     res.status(500).json({ error: String((e as { message?: unknown })?.message ?? e) })
