@@ -188,18 +188,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       swiftActualStart?: string
       scheduledStart?: string
     }
-    if (!body.date || !body.home || !body.away) {
-      res.status(400).json({ error: 'date, home and away are required' })
-      return
-    }
     // Guard the regex: only a well-formed UUID goes into the `legs` substring
     // match, so a hostile/garbled id can't inject pattern syntax.
     const swiftEventId =
       typeof body.swiftEventId === 'string' && /^[0-9a-f-]{36}$/i.test(body.swiftEventId)
         ? body.swiftEventId
         : null
-    const homeSlug = slug(body.home)
-    const awaySlug = slug(body.away)
+    // OUTRIGHT MODE. A golf tournament has no two competitors, so there is no
+    // home/away and no `home-vs-away` slug to match on — the event id is the
+    // only join. It is also the stronger one: the slug branch exists because
+    // older bets predate the leg event_id, which outrights do not.
+    const outright = !!swiftEventId && (!body.home || !body.away)
+    if (!body.date || (!outright && (!body.home || !body.away))) {
+      res.status(400).json({ error: 'date is required, plus home and away unless swiftEventId is given' })
+      return
+    }
+    const homeSlug = slug(body.home ?? '')
+    const awaySlug = slug(body.away ?? '')
     // Slug format: `<sport[-competition]>/<YYYY-MM-DD>/<home>-vs-<away>`. Match either
     // ordering of teams (some sources flip them).
     const matchPattern = new RegExp(
@@ -213,13 +218,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // a bet-date window (1 week before to 1 day after the event date — bets
     // for a game are placed in that span) and then regex-match the slug.
     const eventDate = new Date(`${body.date}T00:00:00Z`)
-    const loDate = new Date(eventDate.getTime() - 7 * 86_400_000).toISOString().slice(0, 10)
+    // Outrights are backed weeks out — a tournament winner market opens long
+    // before the first tee — so the one-week window that suits a fixture would
+    // miss most of them.
+    const backDays = outright ? 90 : 7
+    const loDate = new Date(eventDate.getTime() - backDays * 86_400_000).toISOString().slice(0, 10)
     const hiDate = new Date(eventDate.getTime() + 1 * 86_400_000).toISOString().slice(0, 10)
     // Either join is enough. The slug branch uses the `derived_legs_event_keys`
     // index; the event_id branch scans `legs` inside the bet_date window.
-    const joins: Record<string, unknown>[] = [
-      { 'derived.legs_event_keys': { $elemMatch: { $regex: matchPattern } } },
-    ]
+    const joins: Record<string, unknown>[] = []
+    // No team names means the slug can only be "-vs-", which matches nothing
+    // useful and everything badly. Event id alone in outright mode.
+    if (!outright) joins.push({ 'derived.legs_event_keys': { $elemMatch: { $regex: matchPattern } } })
     if (swiftEventId) joins.push({ legs: { $regex: esc(swiftEventId) } })
 
     const cursor = bets
