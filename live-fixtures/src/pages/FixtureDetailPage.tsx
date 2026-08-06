@@ -9,8 +9,8 @@ import { fetchFixtureById } from '../lib/dataSource'
 import { fetchSwiftEvent, swiftEventUrl } from '../lib/swiftStatus'
 import { betSettlement, fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
 import { fetchMybetBets, mybetSettlement, type MybetBetRow } from '../lib/mybetBets'
-import { BRAND_PILL } from '../lib/brand'
 import { CopyButton, Field, Grid, SourcePanel } from '../components/SourcePanel'
+import { BrandSubTab, StatCard } from '../components/BetsChrome'
 import { pollWithVisibility } from '../lib/poll'
 import { settleFromScore, type ScoreCtx } from '../lib/settleBet'
 import { leagueLabel, periodAbbrev, periodNoun, periodState } from '../lib/sports'
@@ -1181,35 +1181,6 @@ function CombinedExposure({ fixture: f, swiftBets, mybetBets }: { fixture: Fixtu
   )
 }
 
-function BrandSubTab({
-  active,
-  onClick,
-  brand,
-  count,
-}: {
-  active: boolean
-  onClick: () => void
-  brand: 'swift' | 'mybet'
-  count: number
-}) {
-  const pill =
-    brand === 'swift' ? BRAND_PILL.swift : BRAND_PILL.mybet
-  return (
-    <button
-      onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-semibold transition-colors ${
-        active ? 'bg-white/[0.08] text-white' : 'text-gray-400 hover:bg-white/[0.04]'
-      }`}
-    >
-      <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-medium ${pill}`}>
-        {brand === 'swift' ? 'SWIFT' : 'MYBET'}
-      </span>
-      <span>Bets</span>
-      <span className="tabular-nums text-[color:var(--muted-2)]">{count}</span>
-    </button>
-  )
-}
-
 /** Fetch mybet bets for a game — lifted so the sub-tab count and the view share it. */
 function useMybetBets(args: { eventId: string | null; suspendAt: string | null; liveAt: string | null; home: string; away: string }) {
   const { eventId, suspendAt, liveAt, home, away } = args
@@ -1528,42 +1499,6 @@ function scoreCtx(f: Fixture): ScoreCtx {
 
 function plTone(pl: number): string {
   return pl > 0 ? 'text-[color:var(--total)]' : pl < 0 ? 'text-[color:var(--live)]' : 'text-gray-100'
-}
-
-function StatCard({
-  label,
-  value,
-  tone,
-  badge,
-  live,
-  sub,
-}: {
-  label: string
-  value: string | number
-  tone?: string
-  badge?: string
-  live?: boolean
-  sub?: string
-}) {
-  return (
-    <div className="rounded-md bg-[color:var(--panel-2)] px-3 py-2">
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] uppercase tracking-wide text-[color:var(--muted-2)]">{label}</span>
-        {badge && (
-          <span
-            className={`inline-flex items-center gap-1 text-[9px] font-bold tracking-wide ${
-              live ? 'text-[color:var(--live)]' : 'text-[color:var(--muted-2)]'
-            }`}
-          >
-            {live && <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--live)] pulse-dot" />}
-            {badge}
-          </span>
-        )}
-      </div>
-      <div className={`mt-0.5 text-[15px] font-semibold tabular-nums ${tone ?? 'text-gray-100'}`}>{value}</div>
-      {sub && <div className="text-[10px] text-[color:var(--muted-2)]">{sub}</div>}
-    </div>
-  )
 }
 
 /** Users / Bets / Stake / P/L summary shown directly under the scoreboard. P/L

@@ -11,11 +11,11 @@ import {
 } from '../lib/golfOutrights'
 import { fetchCompetitionMappings, type CompetitionMapping } from '../lib/mappingData'
 import { prettyLeague } from '../lib/sports'
-import { BRAND_PILL } from '../lib/brand'
 import { fmtDateTime, melbDateTime, melbDayTime } from '../lib/format'
 import { swiftEventUrl } from '../lib/swiftStatus'
 import { mybetEventUrl } from '../lib/mybetStatus'
-import { Field, Grid, SourcePanel } from '../components/SourcePanel'
+import { CopyButton, Field, Grid, SourcePanel } from '../components/SourcePanel'
+import { BrandSubTab, StatCard } from '../components/BetsChrome'
 import { betSettlement, fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
 import { fetchMybetBets, mybetSettlement, type MybetBetRow } from '../lib/mybetBets'
 
@@ -520,11 +520,13 @@ function DetailsTab({
 }
 
 /**
- * Bets on the two brands' outright markets.
+ * Bets on the two brands' outright markets — same shape as the fixture page's
+ * Bets tab: a per-brand sub-tab strip, stat cards, then the table.
  *
- * One table per brand rather than the fixture page's sub-tab strip: a golf
- * outright carries a handful of bets, not the hundreds a busy fixture does, so
- * splitting them behind tabs hides more than it organises.
+ * The TABLE differs, and has to. A fixture's rows carry "vs Start", a result
+ * derived from the score and a projected P/L; a tournament outright has no
+ * score, and "before the start" is meaningless when the market opens weeks
+ * out. Those columns are replaced by the market and the runner backed.
  */
 function BetsTab({
   swiftBets,
@@ -533,52 +535,46 @@ function BetsTab({
   swiftBets: SwiftBetRow[] | null
   mybetBets: MybetBetRow[] | null
 }) {
+  const [sub, setSub] = useState<'swift' | 'mybet'>('swift')
   const sw = swiftBets ?? []
   const mb = mybetBets ?? []
-  // Each brand resolves on its own chain — the tournament's competition
-  // mapping, then the book's outright event, then its bets — so one can be
-  // ready while the other is still going. `null` means still resolving; showing
-  // it as "0 bets" reads as "none exist", which is a different claim.
+
+  const swRows: BetLine[] = sw.map((b) => ({
+    key: b.id,
+    placed: b.bet_time,
+    user: b.user_id?.slice(0, 8) ?? '—',
+    betId: b.bet_id ?? b.id,
+    market: b.matched_leg?.market ?? '—',
+    pick: b.matched_leg?.outcome ?? b.bet_type ?? '—',
+    odds: b.matched_leg?.odds ?? b.odd,
+    stake: b.bet_amount,
+    legs: b.leg_count,
+    state: betSettlement(b.bet_status),
+  }))
+  const mbRows: BetLine[] = mb.map((b) => ({
+    key: b.id,
+    placed: b.transaction_date,
+    user: b.user_accountID != null ? String(b.user_accountID) : '—',
+    betId: b.transaction_id != null ? String(b.transaction_id) : b.id,
+    market: b.event_string?.split(' - ').slice(-1)[0] ?? b.bet_type ?? '—',
+    pick: b.selections ?? '—',
+    odds: b.price,
+    stake: b.amount_bet,
+    legs: b.leg_count,
+    state: mybetSettlement(b.bet_status),
+  }))
+
   return (
-    <div className="space-y-5 px-5 py-4">
-      <BetBlock
-        kind="SWIFT"
-        loading={swiftBets === null}
-        empty="No SwiftBet bets on this outright."
-        total={sw.length}
-        stake={sw.reduce((s, b) => s + (b.bet_amount ?? 0), 0)}
-        pending={sw.filter((b) => betSettlement(b.bet_status) === 'pending').length}
-        rows={sw.map((b) => ({
-          key: b.id,
-          placed: b.bet_time,
-          user: b.user_id?.slice(0, 8) ?? '—',
-          betId: b.bet_id ?? b.id,
-          pick: b.matched_leg?.outcome ?? b.bet_type ?? '—',
-          odds: b.matched_leg?.odds ?? b.odd,
-          stake: b.bet_amount,
-          legs: b.leg_count,
-          state: betSettlement(b.bet_status),
-        }))}
-      />
-      <BetBlock
-        kind="MYBET"
-        loading={mybetBets === null}
-        empty="No mybet bets on this outright."
-        total={mb.length}
-        stake={mb.reduce((s, b) => s + (b.amount_bet ?? 0), 0)}
-        pending={mb.filter((b) => mybetSettlement(b.bet_status) === 'pending').length}
-        rows={mb.map((b) => ({
-          key: b.id,
-          placed: b.transaction_date,
-          user: b.user_accountID != null ? String(b.user_accountID) : '—',
-          betId: b.transaction_id != null ? String(b.transaction_id) : b.id,
-          pick: b.selections ?? b.bet_type ?? '—',
-          odds: b.price,
-          stake: b.amount_bet,
-          legs: b.leg_count,
-          state: mybetSettlement(b.bet_status),
-        }))}
-      />
+    <div>
+      <div className="flex items-center gap-1 border-b border-white/[0.05] bg-black/[0.06] px-3 py-2">
+        <BrandSubTab active={sub === 'swift'} onClick={() => setSub('swift')} brand="swift" count={sw.length} />
+        <BrandSubTab active={sub === 'mybet'} onClick={() => setSub('mybet')} brand="mybet" count={mb.length} />
+      </div>
+      {sub === 'swift' ? (
+        <BetsView rows={swRows} loading={swiftBets === null} brand="SwiftBet" />
+      ) : (
+        <BetsView rows={mbRows} loading={mybetBets === null} brand="mybet" />
+      )}
     </div>
   )
 }
@@ -588,6 +584,7 @@ interface BetLine {
   placed: string | null
   user: string
   betId: string
+  market: string
   pick: string
   odds: number | null
   stake: number | null
@@ -595,105 +592,97 @@ interface BetLine {
   state: 'pending' | 'settled' | 'void' | 'unknown'
 }
 
-function BetBlock({
-  kind,
-  rows,
-  total,
-  stake,
-  pending,
-  empty,
-  loading,
-}: {
-  kind: 'SWIFT' | 'MYBET'
-  rows: BetLine[]
-  total: number
-  stake: number
-  pending: number
-  empty: string
-  loading: boolean
-}) {
-  return (
-    <div>
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span
-          className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${
-            kind === 'SWIFT' ? BRAND_PILL.swift : BRAND_PILL.mybet
-          }`}
-        >
-          {kind}
-        </span>
-        <span className="text-[11px] text-[color:var(--muted-2)]">
-          {loading ? 'loading…' : `${total} ${total === 1 ? 'bet' : 'bets'} · $${stake.toFixed(2)} staked`}
-        </span>
-        {pending > 0 && (
-          <span className="inline-flex items-center gap-1 rounded bg-[color:var(--up)]/10 px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--up)]">
-            <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--up)] pulse-dot" />
-            {pending} pending
-          </span>
-        )}
+function BetsView({ rows, loading, brand }: { rows: BetLine[]; loading: boolean; brand: string }) {
+  const users = new Set(rows.map((r) => r.user)).size
+  const stake = rows.reduce((s, r) => s + (r.stake ?? 0), 0)
+  const pending = rows.filter((r) => r.state === 'pending').length
+  const pendingStake = rows.filter((r) => r.state === 'pending').reduce((s, r) => s + (r.stake ?? 0), 0)
+
+  if (loading) {
+    return (
+      <div className="px-5 py-6 text-[13px] text-[color:var(--muted-2)]">
+        Resolving this tournament's {brand} outright…
       </div>
-      {loading ? (
-        <div className="rounded-lg bg-black/[0.15] px-4 py-4 text-[12px] text-[color:var(--muted-2)]">
-          Resolving this tournament's {kind === 'SWIFT' ? 'SwiftBet' : 'mybet'} outright…
-        </div>
-      ) : rows.length === 0 ? (
-        <div className="rounded-lg bg-black/[0.15] px-4 py-4 text-[12px] text-[color:var(--muted-2)]">{empty}</div>
-      ) : (
-        <div className="overflow-x-auto rounded-lg bg-black/[0.15]">
-          <table className="w-full text-[12px]">
-            <thead>
-              <tr className="border-b border-[color:var(--line-soft)] text-left text-[11px] uppercase tracking-wide text-[color:var(--muted-2)]">
-                <th className="px-3 py-2 font-medium">Placed</th>
-                <th className="px-3 py-2 font-medium">User</th>
-                <th className="px-3 py-2 font-medium">Bet ID</th>
-                <th className="px-3 py-2 font-medium">Selection</th>
-                <th className="px-3 py-2 text-right font-medium">Odds</th>
-                <th className="px-3 py-2 text-right font-medium">Stake</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.key} className="border-t border-white/[0.04] hover:bg-white/[0.02]">
-                  <td className="px-3 py-2 tabular-nums text-[11px] text-gray-200">
-                    {r.placed ? melbDayTime(r.placed) : '—'}
-                  </td>
-                  <td className="px-3 py-2 font-mono text-[10.5px] text-[color:var(--muted-2)]">{r.user}</td>
-                  <td className="px-3 py-2 font-mono text-[10.5px] text-[color:var(--muted-2)]">
-                    {r.betId.slice(0, 5)}
-                    {r.betId.length > 5 ? '…' : ''}
-                  </td>
-                  <td className="px-3 py-2 text-gray-100">
-                    {r.pick}
-                    {r.legs > 1 && (
-                      <span className="ml-1.5 rounded bg-white/5 px-1 py-px text-[9px] uppercase tracking-wide text-gray-400">
-                        {r.legs} legs
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-gray-300">
-                    {r.odds != null ? r.odds.toFixed(2) : '—'}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-gray-200">
-                    {r.stake != null ? `$${r.stake.toFixed(2)}` : '—'}
-                  </td>
-                  <td className="px-3 py-2">
-                    {r.state === 'pending' ? (
-                      <span className="text-[10px] font-semibold text-[color:var(--up)]">PENDING</span>
-                    ) : r.state === 'settled' ? (
-                      <span className="text-[10px] font-semibold text-[color:var(--total)]">SETTLED</span>
-                    ) : r.state === 'void' ? (
-                      <span className="text-[10px] font-semibold text-[color:var(--muted)]">VOID</span>
-                    ) : (
-                      <span className="text-[10px] text-[color:var(--muted-2)]">—</span>
-                    )}
-                  </td>
-                </tr>
+    )
+  }
+  if (rows.length === 0) {
+    return <div className="px-5 py-6 text-[13px] text-[color:var(--muted-2)]">No {brand} bets on this outright.</div>
+  }
+  return (
+    <div className="px-5 py-4">
+      <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <StatCard label="Users" value={users} />
+        <StatCard label="Bets" value={rows.length} />
+        <StatCard label="Stake" value={`$${stake.toFixed(2)}`} />
+        <StatCard
+          label="Pending"
+          value={pending}
+          sub={pending ? `$${pendingStake.toFixed(2)} at stake` : undefined}
+          tone={pending ? 'text-[color:var(--up)]' : undefined}
+        />
+      </div>
+      <div className="overflow-x-auto rounded-lg bg-black/[0.15]">
+        <table className="w-full min-w-[820px] text-[12px]">
+          <thead>
+            <tr className="border-b border-[color:var(--line-soft)] bg-black/[0.12] text-left text-[11px] uppercase tracking-wide text-[color:var(--muted-2)]">
+              {['Placed', 'User', 'Bet ID', 'Market', 'Selection', 'Stake', 'Odds'].map((h) => (
+                <th key={h} className={`px-3 py-2 font-medium ${h === 'Stake' || h === 'Odds' ? 'text-right' : ''}`}>
+                  {h}
+                </th>
               ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              <th className="px-3 py-2 font-medium">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.key} className="border-t border-[color:var(--line-soft)] hover:bg-white/[0.02]">
+                <td className="px-3 py-2 align-top text-[11px] tabular-nums text-gray-200">
+                  {r.placed ? melbDayTime(r.placed) : '—'}
+                </td>
+                <td className="px-3 py-2 align-top font-mono text-[10.5px] text-[color:var(--muted-2)]">{r.user}</td>
+                <td className="px-3 py-2 align-top">
+                  <div className="flex items-center gap-0.5">
+                    <span className="font-mono text-[10.5px] text-[color:var(--muted-2)]" title={r.betId}>
+                      {r.betId.slice(0, 5)}
+                      {r.betId.length > 5 ? '…' : ''}
+                    </span>
+                    <CopyButton value={r.betId} />
+                  </div>
+                </td>
+                <td className="px-3 py-2 align-top text-[11.5px] text-gray-300">
+                  {r.market}
+                  {r.legs > 1 && (
+                    <span className="ml-1.5 rounded bg-white/5 px-1 py-px text-[9px] uppercase tracking-wide text-gray-400">
+                      {r.legs} legs
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-2 align-top text-gray-100">{r.pick}</td>
+                <td className="px-3 py-2 text-right align-top tabular-nums text-gray-200">
+                  {r.stake != null ? `$${r.stake.toFixed(2)}` : '—'}
+                </td>
+                <td className="px-3 py-2 text-right align-top tabular-nums text-gray-300">
+                  {r.odds != null ? r.odds.toFixed(2) : '—'}
+                </td>
+                <td className="px-3 py-2 align-top">
+                  {r.state === 'pending' ? (
+                    <span className="inline-flex items-center gap-1 rounded bg-[color:var(--up)]/10 px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--up)]">
+                      <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--up)] pulse-dot" />
+                      PENDING
+                    </span>
+                  ) : r.state === 'settled' ? (
+                    <span className="text-[10px] font-semibold text-[color:var(--total)]">SETTLED</span>
+                  ) : r.state === 'void' ? (
+                    <span className="text-[10px] font-semibold text-[color:var(--muted)]">VOID</span>
+                  ) : (
+                    <span className="text-[10px] text-[color:var(--muted-2)]">—</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
