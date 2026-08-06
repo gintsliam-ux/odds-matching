@@ -215,7 +215,8 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
     const q = query.trim().toLowerCase()
     const local = comps.filter((c) => {
       if (!sportMatches(c.sport)) return false
-      if (q && !`${c.name} ${c.sport ?? ''}`.toLowerCase().includes(q)) return false
+      if (q && !`${c.name} ${c.sport ?? ''} ${(c as { hint?: string | null }).hint ?? ''}`.toLowerCase().includes(q))
+        return false
       return true
     })
     if (!q) return local
@@ -428,7 +429,12 @@ export function MappingEditor({ target, onClose, onSaved }: Props) {
                 active={picked.has(c.id)}
                 onClick={() => togglePick(c.id)}
                 title={c.name}
-                meta={`${c.sport ?? '—'} · ${c.n} events`}
+                // `hint` disambiguates leagues that share a name — mybet has
+                // six different "Primera Division", and without the country
+                // from the description they are six identical rows.
+                meta={`${c.sport ?? '—'} · ${c.n} events${
+                  (c as { hint?: string | null }).hint ? ` · ${(c as { hint?: string | null }).hint}` : ''
+                }`}
               />
             ))
           ) : (

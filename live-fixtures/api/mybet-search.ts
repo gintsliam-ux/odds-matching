@@ -109,7 +109,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               'match.teamB': { $ne: null },
             },
           },
-          { $group: { _id: '$leagueId', name: { $first: '$league' }, sport: { $first: '$sport' }, n: { $sum: 1 } } },
+          {
+            $group: {
+              _id: '$leagueId',
+              name: { $first: '$league' },
+              sport: { $first: '$sport' },
+              n: { $sum: 1 },
+              // mybet reuses league NAMES across countries — six distinct
+              // leagues are all called "Primera Division" (Bolivian, Peruvian,
+              // Chilean, Uruguayan, Costa Rican, Venezuelan). The description
+              // is where the country lives ("Chilean Primera Division"), and
+              // without it the picker shows six identical rows.
+              hint: { $first: '$description' },
+            },
+          },
           { $sort: { n: -1 } },
           { $limit: limit },
         ])
@@ -121,6 +134,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           name: r.name as string,
           sport: (r.sport as string | null) ?? null,
           n: r.n as number,
+          // Only useful when it says something the name doesn't.
+          hint:
+            typeof r.hint === 'string' && r.hint.toLowerCase() !== String(r.name).toLowerCase()
+              ? r.hint
+              : null,
         }))
       res.status(200).json({ competitions })
       return
