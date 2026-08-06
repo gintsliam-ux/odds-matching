@@ -218,13 +218,21 @@ export default function Terminal() {
     // it anyway when tournaments exist — picking it jumps to the golf board
     // rather than filtering this one to nothing. See the select's onChange.
     if (golfActive.length > 0) all.add('golf')
-    return [...all].sort((a, b) => {
-      const ca = sportCounts.get(a) ?? 0
-      const cb = sportCounts.get(b) ?? 0
-      if ((ca > 0) !== (cb > 0)) return ca > 0 ? -1 : 1 // active sports first
-      return a.localeCompare(b)
-    })
-  }, [universe, sportCounts, golfActive])
+    return (
+      [...all]
+        // Nothing on the board means nothing to filter to, so the option is
+        // dead weight — the list was mostly zeroes. The current selection is
+        // kept regardless, or choosing a sport that then empties would blank
+        // the control instead of showing what is selected.
+        .filter((s) => (sportCounts.get(s) ?? 0) > 0 || s === sportFilter || sportGroupKey(s) === 'golf')
+        .sort((a, b) => {
+          const ca = sportCounts.get(a) ?? 0
+          const cb = sportCounts.get(b) ?? 0
+          if ((ca > 0) !== (cb > 0)) return ca > 0 ? -1 : 1 // active sports first
+          return a.localeCompare(b)
+        })
+    )
+  }, [universe, sportCounts, golfActive, sportFilter])
 
   // The `/sport/:sport/:league` path segment (raw league slug, e.g. from the
   // sidebar's expandable sports) pre-selects the league filter. The dropdown
@@ -263,13 +271,17 @@ export default function Terminal() {
       ? (universe.leaguesBySport.get(effectiveSport) ?? [])
       : [...universe.leaguesBySport.values()].flat()
     const all = new Set<string>([...fromUniverse, ...leagueCounts.keys()])
-    return [...all].sort((a, b) => {
-      const ca = leagueCounts.get(a) ?? 0
-      const cb = leagueCounts.get(b) ?? 0
-      if ((ca > 0) !== (cb > 0)) return ca > 0 ? -1 : 1
-      return a.localeCompare(b)
-    })
-  }, [universe, leagueCounts, effectiveSport])
+    return [...all]
+      // Same as the sport list: an empty league filters to nothing, so it is
+      // only noise. The selected one stays so the control never reads blank.
+      .filter((l) => (leagueCounts.get(l) ?? 0) > 0 || l === league)
+      .sort((a, b) => {
+        const ca = leagueCounts.get(a) ?? 0
+        const cb = leagueCounts.get(b) ?? 0
+        if ((ca > 0) !== (cb > 0)) return ca > 0 ? -1 : 1
+        return a.localeCompare(b)
+      })
+  }, [universe, leagueCounts, effectiveSport, league])
 
   const scoped = useMemo(
     () => (effectiveSport ? routeScoped.filter((f) => sportMatches(f.sport, effectiveSport)) : routeScoped),
