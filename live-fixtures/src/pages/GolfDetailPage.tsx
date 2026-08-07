@@ -168,12 +168,18 @@ export default function GolfDetailPage() {
     }
   }, [tournament])
 
-  // Bets on the two brands' outright events. Both join on the book's own event
-  // id — golf has no teams, so the usual name+date join has nothing to work
-  // with (see the outright mode in api/swift-bets.ts).
+  // Bets on the two brands' outrights. Golf has no teams, so the usual
+  // name+date join has nothing to work with — see the outright mode in
+  // api/swift-bets.ts.
+  //
+  // The tournament NAME is the primary join here, not the event id: it also
+  // reaches matchup (2-Ball/3-Ball) bets, whose legs point at the pairing, and
+  // finished tournaments, whose event SwiftBet has already pruned. So this runs
+  // whether or not the tournament is mapped; the event id, when we have one, is
+  // OR-ed in as a second route.
   const swiftOutrightId = swift?.event?.id ?? null
   useEffect(() => {
-    if (!swiftOutrightId || !tournament?.startDate) return
+    if (!tournament?.startDate || !tournament.tournament) return
     let alive = true
     fetchSwiftBets({
       date: tournament.startDate.slice(0, 10),
@@ -182,13 +188,15 @@ export default function GolfDetailPage() {
       swiftEventId: swiftOutrightId,
       swiftActualStart: null,
       scheduledStart: tournament.startDate,
+      tournament: tournament.tournament,
+      eventSport: 'Golf',
     })
       .then((rows) => alive && setSwiftBets(rows))
       .catch(() => alive && setSwiftBets([]))
     return () => {
       alive = false
     }
-  }, [swiftOutrightId, tournament?.startDate])
+  }, [swiftOutrightId, tournament?.startDate, tournament?.tournament])
 
   // Bets join every market's event, not just Winner: mybet files Top 5/10/20
   // and 1st Round Leader as their own events, so joining Winner alone silently
@@ -567,8 +575,11 @@ function BetsTab({
     placed: b.bet_time,
     user: b.user_id?.slice(0, 8) ?? '—',
     betId: b.bet_id ?? b.id,
-    market: b.matched_leg?.market ?? '—',
-    pick: b.matched_leg?.outcome ?? b.bet_type ?? '—',
+    // A bet joined by tournament rather than by event id has no single leg to
+    // read — a 2-Ball's leg names the pairing, a multi's legs are other games —
+    // so fall back to the book's own market and event labels.
+    market: b.matched_leg?.market ?? b.market_raw ?? '—',
+    pick: b.matched_leg?.outcome ?? b.event_name ?? b.bet_type ?? '—',
     odds: b.matched_leg?.odds ?? b.odd,
     stake: b.bet_amount,
     legs: b.leg_count,

@@ -92,6 +92,71 @@ function parseLegs(legsRaw: unknown): unknown[] | null {
 
 /** Index of the leg whose `event_id` is this SWIFT event, or -1. Exact — no
  *  team-name or date fuzziness, and it separates same-teams doubleheaders. */
+// ---------------------------------------------------------------------------
+// Outright: joining by tournament rather than by event id.
+//
+// The event-id join only reaches bets whose leg carries THIS `gutsy.events._id`,
+// which means: the tournament must still be a live event in gutsy.events, it
+// must be mapped, and the bet must be an outright single. It therefore missed
+// two whole families — every bet on a finished tournament (SwiftBet prunes the
+// event, so the id resolves to nothing) and every 2-Ball/3-Ball matchup, whose
+// legs point at the pairing rather than the tournament. On Wyndham 2026 that
+// was 7 of 14 bets.
+//
+// `derived.event_tournament` survives both: it is stamped on the bet at
+// enrichment and is indexed (derived_event_sport_tournament). It is a book name
+// though, not OPTIC's — SwiftBet says "Rocket Mortgage Classic" where OPTIC says
+// "Rocket Classic 2026" — so we read the tournaments actually present in the
+// window and pick the ones that match, rather than guessing a string.
+const GENERIC_TOURNAMENT_WORDS = new Set([
+  'championship', 'championships', 'open', 'classic', 'invitational', 'tournament',
+  'cup', 'golf', 'international', 'presented', 'by', 'the', 'of', 'and', 'tour',
+])
+
+function tourTokens(name: string): string[] {
+  return name
+    .toLowerCase()
+    .replace(/\b(19|20)\d{2}\b/g, ' ') // the year lives in OPTIC's name, not the book's
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+}
+
+/**
+ * Does `candidate` (the book's tournament) name the same event as `optic`?
+ *
+ * Normally: every one of OPTIC's words must appear, and at least one of them
+ * must be distinctive. "Rocket Classic" ⊂ "Rocket Mortgage Classic" passes on
+ * "rocket"; "Wyndham Championship" vs "The Open Championship" fails, since
+ * pairing on "championship" alone would marry unrelated events.
+ *
+ * Some tournaments are named entirely out of the generic words, though — "The
+ * Open Championship" has no distinctive token at all. Those must match exactly,
+ * because the subset rule alone would happily swallow them into "The Senior
+ * Open Championship presented by Rolex".
+ *
+ * A distinctive token also has to be a real word: "U.S. Open" tokenises to
+ * [u, s, open], and counting "u"/"s" as distinctive made it a subset of "U.S.
+ * Women's Open presented by Ally", folding that event's bets in (2 of them into
+ * the U.S. Open's 142 for the 2025 window — small, but wrong, and the shape of
+ * the error grows with the field). Requiring 3+ characters pushes the name onto
+ * the exact-match branch instead. "3M Open" lands there too and matches itself.
+ */
+const MIN_DISTINCTIVE_LEN = 3
+
+function sameTournament(optic: string, candidate: string): boolean {
+  const a = tourTokens(optic)
+  const bTokens = tourTokens(candidate)
+  const b = new Set(bTokens)
+  if (!a.length || !b.size) return false
+  const distinctive = (t: string) => t.length >= MIN_DISTINCTIVE_LEN && !GENERIC_TOURNAMENT_WORDS.has(t)
+  if (!a.some(distinctive)) {
+    return a.length === bTokens.length && a.every((t, i) => t === bTokens[i])
+  }
+  if (!a.every((t) => b.has(t))) return false
+  return true
+}
+
 function legIndexByEventId(legs: unknown[] | null, swiftEventId: string | null): number {
   if (!legs || !swiftEventId) return -1
   return legs.findIndex((l) => (l as { event_id?: unknown } | undefined)?.event_id === swiftEventId)
@@ -187,6 +252,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       swiftEventId?: string
       swiftActualStart?: string
       scheduledStart?: string
+      /** OUTRIGHT: OPTIC's tournament name, e.g. "Wyndham Championship 2026". */
+      tournament?: string
+      /** OUTRIGHT: `derived.event_sport`, e.g. "Golf". Scopes the tournament scan. */
+      eventSport?: string
     }
     // Guard the regex: only a well-formed UUID goes into the `legs` substring
     // match, so a hostile/garbled id can't inject pattern syntax.
@@ -198,9 +267,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // home/away and no `home-vs-away` slug to match on — the event id is the
     // only join. It is also the stronger one: the slug branch exists because
     // older bets predate the leg event_id, which outrights do not.
-    const outright = !!swiftEventId && (!body.home || !body.away)
+    const tournament = typeof body.tournament === 'string' ? body.tournament.trim() : ''
+    const eventSport = typeof body.eventSport === 'string' ? body.eventSport.trim() : ''
+    // A tournament name is enough on its own: an unmapped tournament has no
+    // swiftEventId, and its bets should still show.
+    const outright = (!!swiftEventId || !!tournament) && (!body.home || !body.away)
     if (!body.date || (!outright && (!body.home || !body.away))) {
-      res.status(400).json({ error: 'date is required, plus home and away unless swiftEventId is given' })
+      res.status(400).json({
+        error: 'date is required, plus home and away unless swiftEventId or tournament is given',
+      })
       return
     }
     const homeSlug = slug(body.home ?? '')
@@ -231,6 +306,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // useful and everything badly. Event id alone in outright mode.
     if (!outright) joins.push({ 'derived.legs_event_keys': { $elemMatch: { $regex: matchPattern } } })
     if (swiftEventId) joins.push({ legs: { $regex: esc(swiftEventId) } })
+    // Read the tournaments this sport actually has bets on in the window, keep
+    // the ones naming this tournament, and join on those exactly — an indexed
+    // equality rather than a regex over a book name we'd have to guess.
+    const tournamentHits = new Set<string>()
+    if (outright && tournament && eventSport) {
+      const present = (await bets.distinct('derived.event_tournament', {
+        bet_date: { $gte: loDate, $lte: hiDate },
+        'derived.event_sport': eventSport,
+      })) as unknown[]
+      const hits = present
+        .filter((t): t is string => typeof t === 'string' && !!t)
+        .filter((t) => sameTournament(tournament, t))
+      for (const h of hits) tournamentHits.add(h)
+      if (hits.length) joins.push({ 'derived.event_tournament': { $in: hits } })
+    }
 
     const cursor = bets
       .find(
@@ -255,6 +345,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             'derived.legs_event_keys': 1,
             'derived.event_name': 1,
             'derived.market_category': 1,
+            'derived.market_raw': 1,
+            'derived.event_tournament': 1,
             'derived.sport': 1,
             'derived.type': 1,
             'derived.legs_breakdown': 1,
@@ -286,14 +378,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const matchedLegIndex = matchedByEventId
         ? byEventId
         : legKeys.findIndex((k) => matchPattern.test(k))
+      // An outright joined by tournament has no single leg to point at — a
+      // 2-Ball's leg names the pairing, not the tournament — and that is fine:
+      // the whole bet belongs to this tournament. Only the per-game branches
+      // need a leg.
+      const matchedByTournament =
+        tournamentHits.size > 0 && tournamentHits.has(d.derived?.event_tournament ?? '')
       // The $or means a doc can come back on the slug branch alone; if it
       // matched neither leg precisely there's nothing to show for this game.
-      if (matchedLegIndex < 0) return []
+      if (matchedLegIndex < 0 && !matchedByTournament) return []
       // Disambiguate same-teams doubleheaders/series: drop the bet if its leg's
       // event_time isn't near THIS fixture's scheduled start. (Skip when we have
       // no scheduled start or no leg event_time — keep the bet rather than guess.)
       // An event_id match is already unambiguous, so it bypasses this entirely.
-      if (!matchedByEventId && Number.isFinite(schedMs)) {
+      // A tournament runs for days; pinning a bet to a start instant would drop
+      // every round after the first.
+      if (!matchedByEventId && !matchedByTournament && Number.isFinite(schedMs)) {
         const evtMs = legEventTimeMs(parsedLegs, matchedLegIndex)
         if (evtMs != null && Math.abs(evtMs - (schedMs as number)) > SAME_GAME_TOLERANCE_MS) return []
       }
@@ -322,6 +422,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         sport: d.derived?.sport ?? null,
         type: d.derived?.type ?? null,
         market_category: d.derived?.market_category ?? null,
+        // The book's own market label — "3-Ball", "Top 5". market_category
+        // flattens a matchup to just "Golf", which reads as no market at all.
+        market_raw: d.derived?.market_raw ?? null,
+        // A matchup bet's event IS its pairing ("Cauley, B v Bradley, K v
+        // Koepka, B") — the only readable description of what was backed when
+        // there's no single leg to point at.
+        event_name: d.derived?.event_name ?? null,
         event_key: d.derived?.event_key ?? null,
         legs_event_keys: legKeys,
         matched_leg_index: matchedLegIndex,

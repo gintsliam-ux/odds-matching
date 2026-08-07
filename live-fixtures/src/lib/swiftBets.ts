@@ -45,6 +45,12 @@ export interface SwiftBetRow {
   sport: string | null
   type: string | null // SINGLE | MULTI
   market_category: string | null
+  /** The book's market label ("Outright Winner", "3-Ball", "Top 5"). Prefer it
+   *  over market_category, which flattens a matchup to the sport name. */
+  market_raw?: string | null
+  /** The event as the book names it. For an outright that's the tournament;
+   *  for a matchup it's the pairing. */
+  event_name?: string | null
   event_key: string | null
   legs_event_keys: string[]
   matched_leg_index: number
@@ -102,6 +108,12 @@ export async function fetchSwiftBets(args: {
    *  date+teams slug, so the server keeps only bets whose leg event_time is
    *  near this — pinning each bet to the correct game. */
   scheduledStart?: string | null
+  /** OUTRIGHT: OPTIC's tournament name. Joins on `derived.event_tournament`,
+   *  which reaches finished tournaments and matchup bets that the event id
+   *  cannot — and works even when the tournament has no SwiftBet mapping. */
+  tournament?: string | null
+  /** OUTRIGHT: the sport as `derived.event_sport` spells it, e.g. "Golf". */
+  eventSport?: string | null
 }): Promise<SwiftBetRow[]> {
   const res = await fetch('/api/swift-bets', {
     method: 'POST',
@@ -113,6 +125,8 @@ export async function fetchSwiftBets(args: {
       swiftEventId: args.swiftEventId ?? undefined,
       swiftActualStart: args.swiftActualStart ?? undefined,
       scheduledStart: args.scheduledStart ?? undefined,
+      tournament: args.tournament ?? undefined,
+      eventSport: args.eventSport ?? undefined,
     }),
   })
   if (!res.ok) throw new Error(`swift-bets ${res.status}`)
