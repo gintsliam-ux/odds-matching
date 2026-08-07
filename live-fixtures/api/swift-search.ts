@@ -127,7 +127,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // still fill `limit` with head-to-head matches.
     const docs = await coll
       .find(eventFilter, {
-        projection: { _id: 1, name: 1, sport: 1, competition: 1, teams: 1, start_date: 1, status: 1, event_view_status: 1 },
+        projection: {
+          _id: 1, name: 1, sport: 1, competition: 1, teams: 1, start_date: 1, status: 1, event_view_status: 1,
+          // Names only — a selection carries its whole price_history.
+          'markets.name': 1, 'markets.selections.name': 1,
+        },
       })
       .sort({ start_date: -1 })
       .limit(limit * 3)
@@ -138,7 +142,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .map((d) => {
           const teams =
             (d.teams as Array<{ name?: string; players?: Array<{ name?: string }> }> | undefined) ?? []
-          const runners = teams.flatMap((t) => (t.players ?? []).map((p) => p.name).filter(Boolean)) as string[]
+          const teamRunners = teams.flatMap((t) => (t.players ?? []).map((p) => p.name).filter(Boolean)) as string[]
+          // `teams` is not reliably the field. LIV Golf New York lists FOUR
+          // players there while its outright winner market prices 58 — so the
+          // player count called it a 3-ball and the tournament could never
+          // resolve its SwiftBet event. The market is the real field; take
+          // whichever list is longer, so events that only populate one of the
+          // two (and the pre-market events that only have `teams`) both work.
+          const markets =
+            (d.markets as Array<{ name?: string; selections?: Array<{ name?: string }> }> | undefined) ?? []
+          const outrightMarket =
+            markets.find((m) => /outright winner/i.test(m.name ?? '')) ??
+            markets.reduce<{ name?: string; selections?: Array<{ name?: string }> } | null>(
+              (best, m) => ((m.selections?.length ?? 0) > (best?.selections?.length ?? 0) ? m : best),
+              null,
+            )
+          const marketRunners = (outrightMarket?.selections ?? [])
+            .map((sel) => sel.name)
+            .filter(Boolean) as string[]
+          const runners = marketRunners.length > teamRunners.length ? marketRunners : teamRunners
           const competition = d.competition as { id?: string; name?: string } | undefined
           const sport = d.sport as { name?: string } | undefined
           return {
