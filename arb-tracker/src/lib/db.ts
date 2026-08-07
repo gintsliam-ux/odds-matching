@@ -286,7 +286,6 @@ interface GolfTournamentRow {
   status: string | null;
   league: string | null;
   current_round: string | null;
-  fixture_statuses: { live?: number; unplayed?: number } | null;
 }
 
 /** One synthetic SportEvent per golf tournament that currently has odds. */
@@ -297,9 +296,7 @@ async function fetchGolfEvents(
     client.from(GOLF_TABLE).select('tournament_id'),
     client
       .from('golf_tournaments')
-      .select(
-        'tournament_id,name,start_date,end_date,status,league,current_round,fixture_statuses',
-      ),
+      .select('tournament_id,name,start_date,end_date,status,league,current_round'),
   ]);
   if (odds.error || tourneys.error || !odds.data || !tourneys.data) return [];
 
@@ -313,7 +310,6 @@ async function fetchGolfEvents(
         new Date(
           new Date(t.start_date).getTime() + (TOURNAMENT_DAYS - 1) * 24 * 60 * 60 * 1000,
         ).toISOString();
-      const fs = t.fixture_statuses;
       return {
         id: t.tournament_id,
         sport: 'Golf',
@@ -325,10 +321,6 @@ async function fetchGolfEvents(
         endsAt,
         outright: true,
         round: t.current_round,
-        fieldStatus:
-          fs && (fs.live != null || fs.unplayed != null)
-            ? { live: fs.live ?? 0, unplayed: fs.unplayed ?? 0 }
-            : null,
         status: mapStatus(t.status),
       };
     });
