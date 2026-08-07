@@ -177,9 +177,36 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
 
         {/* scoreboard — golf is a single tournament header, not a two-sided match */}
         {outright ? (
-          <div className="flex items-center justify-center gap-2.5 py-1">
-            <LeagueBadge league={event.league} size={28} />
-            <span className="truncate text-lg font-semibold text-slate-100">{event.name}</span>
+          <div className="flex flex-col items-center gap-1 py-1">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <LeagueBadge league={event.league} size={28} />
+              <span className="truncate text-lg font-semibold text-slate-100">{event.name}</span>
+            </div>
+            {/* live round + how much of the field is out */}
+            {(status === 'live' || event.round || event.fieldStatus) && (
+              <div className="flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 text-xs">
+                {status === 'live' && (
+                  <span
+                    className={`flex items-center gap-1.5 rounded-md px-2 py-0.5 font-semibold ${TONE_CLASSES.live}`}
+                  >
+                    <span className="relative flex h-1.5 w-1.5">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-current opacity-75" />
+                      <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-current" />
+                    </span>
+                    {event.round ?? 'Live'}
+                  </span>
+                )}
+                {event.round && status !== 'live' && (
+                  <span className="text-slate-400">{event.round}</span>
+                )}
+                {event.fieldStatus && event.fieldStatus.live + event.fieldStatus.unplayed > 0 && (
+                  <span className="tabular-nums text-slate-500">
+                    {event.fieldStatus.live} on course
+                    {event.fieldStatus.unplayed > 0 && ` · ${event.fieldStatus.unplayed} to tee`}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         ) : (
         <div className="flex items-center gap-3">

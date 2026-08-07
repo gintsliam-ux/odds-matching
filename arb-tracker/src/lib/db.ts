@@ -282,8 +282,11 @@ interface GolfTournamentRow {
   tournament_id: string;
   name: string;
   start_date: string;
+  end_date: string | null;
   status: string | null;
   league: string | null;
+  current_round: string | null;
+  fixture_statuses: { live?: number; unplayed?: number } | null;
 }
 
 /** One synthetic SportEvent per golf tournament that currently has odds. */
@@ -292,7 +295,11 @@ async function fetchGolfEvents(
 ): Promise<SportEvent[]> {
   const [odds, tourneys] = await Promise.all([
     client.from(GOLF_TABLE).select('tournament_id'),
-    client.from('golf_tournaments').select('tournament_id,name,start_date,status,league'),
+    client
+      .from('golf_tournaments')
+      .select(
+        'tournament_id,name,start_date,end_date,status,league,current_round,fixture_statuses',
+      ),
   ]);
   if (odds.error || tourneys.error || !odds.data || !tourneys.data) return [];
 
@@ -300,8 +307,13 @@ async function fetchGolfEvents(
   return (tourneys.data as GolfTournamentRow[])
     .filter((t) => withOdds.has(t.tournament_id) && t.start_date)
     .map((t) => {
-      const start = new Date(t.start_date);
-      const end = new Date(start.getTime() + (TOURNAMENT_DAYS - 1) * 24 * 60 * 60 * 1000);
+      // Prefer the real end_date; fall back to a 4-day span when it's missing.
+      const endsAt =
+        t.end_date ??
+        new Date(
+          new Date(t.start_date).getTime() + (TOURNAMENT_DAYS - 1) * 24 * 60 * 60 * 1000,
+        ).toISOString();
+      const fs = t.fixture_statuses;
       return {
         id: t.tournament_id,
         sport: 'Golf',
@@ -310,8 +322,13 @@ async function fetchGolfEvents(
         home: t.name,
         away: '',
         startsAt: t.start_date,
-        endsAt: end.toISOString(),
+        endsAt,
         outright: true,
+        round: t.current_round,
+        fieldStatus:
+          fs && (fs.live != null || fs.unplayed != null)
+            ? { live: fs.live ?? 0, unplayed: fs.unplayed ?? 0 }
+            : null,
         status: mapStatus(t.status),
       };
     });

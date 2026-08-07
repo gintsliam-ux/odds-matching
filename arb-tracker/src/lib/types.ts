@@ -53,5 +53,9 @@ export interface SportEvent {
   endsAt?: string;
   /** True for outright markets (golf): a field of players, no two-sided match. */
   outright?: boolean;
+  /** Golf: the round in play, e.g. "Round 2" (null before/between rounds). */
+  round?: string | null;
+  /** Golf: how much of the field is on the course vs still to tee off. */
+  fieldStatus?: { live: number; unplayed: number } | null;
   status: EventStatus;
 }
