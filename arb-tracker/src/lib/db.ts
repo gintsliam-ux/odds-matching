@@ -278,14 +278,16 @@ function golfLeague(tour: string | null): League {
   };
 }
 
+// Every column optional — golf_tournaments' schema is still evolving, so we read
+// defensively rather than pin a fixed shape (see the `select('*')` note below).
 interface GolfTournamentRow {
-  tournament_id: string;
-  name: string;
-  start_date: string;
-  end_date: string | null;
-  status: string | null;
-  league: string | null;
-  current_round: string | null;
+  tournament_id?: string;
+  name?: string;
+  start_date?: string;
+  end_date?: string | null;
+  status?: string | null;
+  league?: string | null;
+  current_round?: string | null;
 }
 
 /** One synthetic SportEvent per golf tournament that currently has odds. */
@@ -294,15 +296,18 @@ async function fetchGolfEvents(
 ): Promise<SportEvent[]> {
   const [odds, tourneys] = await Promise.all([
     client.from(GOLF_TABLE).select('tournament_id'),
-    client
-      .from('golf_tournaments')
-      .select('tournament_id,name,start_date,end_date,status,league,current_round'),
+    // `select('*')` (not a fixed column list) so a dropped/renamed column just
+    // yields an absent field instead of erroring the query and dropping golf
+    // from the whole board.
+    client.from('golf_tournaments').select('*'),
   ]);
   if (odds.error || tourneys.error || !odds.data || !tourneys.data) return [];
 
   const withOdds = new Set((odds.data as { tournament_id: string }[]).map((r) => r.tournament_id));
   return (tourneys.data as GolfTournamentRow[])
-    .filter((t) => withOdds.has(t.tournament_id) && t.start_date)
+    .filter((t): t is GolfTournamentRow & { tournament_id: string; start_date: string } =>
+      Boolean(t.tournament_id && withOdds.has(t.tournament_id) && t.start_date),
+    )
     .map((t) => {
       // Prefer the real end_date; fall back to a 4-day span when it's missing.
       const endsAt =
@@ -310,18 +315,19 @@ async function fetchGolfEvents(
         new Date(
           new Date(t.start_date).getTime() + (TOURNAMENT_DAYS - 1) * 24 * 60 * 60 * 1000,
         ).toISOString();
+      const name = t.name ?? 'Golf Tournament';
       return {
         id: t.tournament_id,
         sport: 'Golf',
-        league: golfLeague(t.league),
-        name: t.name,
-        home: t.name,
+        league: golfLeague(t.league ?? null),
+        name,
+        home: name,
         away: '',
         startsAt: t.start_date,
         endsAt,
         outright: true,
-        round: t.current_round,
-        status: mapStatus(t.status),
+        round: t.current_round ?? null,
+        status: mapStatus(t.status ?? null),
       };
     });
 }
@@ -426,17 +432,17 @@ async function fetchGolfOdds(
   const PAGE = 1000;
   const all: OddsRow[] = [];
   for (let from = 0; ; from += PAGE) {
+    // `select('*')` (not a fixed list) so a dropped/renamed price column just
+    // yields an absent field rather than erroring the whole outright.
     const { data, error } = await client
       .from(GOLF_TABLE)
-      .select(
-        'market_id,selection,sportsbook,is_lay,current_price,open_price,status,flucs,open_at,price_3h,price_1h,price_30m,price_10m,close_price,current_at,daily_prices',
-      )
+      .select('*')
       .eq('tournament_id', tournamentId)
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1);
     if (error) throw new Error(`${GOLF_TABLE}: ${error.message}`);
     // golf_outrights has no `line` column — the market has no handicap.
-    const rows = (data as Omit<OddsRow, 'line'>[]).map((r) => ({ ...r, line: null }));
+    const rows = (data as Partial<OddsRow>[]).map((r) => ({ ...r, line: null }) as OddsRow);
     all.push(...rows);
     if (rows.length < PAGE) break;
   }
