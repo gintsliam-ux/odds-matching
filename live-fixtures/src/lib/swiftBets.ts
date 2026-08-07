@@ -112,6 +112,9 @@ export async function fetchSwiftBets(args: {
    *  which reaches finished tournaments and matchup bets that the event id
    *  cannot — and works even when the tournament has no SwiftBet mapping. */
   tournament?: string | null
+  /** OUTRIGHT: the book's own name for the tournament, from the competition
+   *  mapping — the only bridge when the two names share no words. */
+  tournamentAlias?: string | null
   /** OUTRIGHT: the sport as `derived.event_sport` spells it, e.g. "Golf". */
   eventSport?: string | null
 }): Promise<SwiftBetRow[]> {
@@ -126,6 +129,7 @@ export async function fetchSwiftBets(args: {
       swiftActualStart: args.swiftActualStart ?? undefined,
       scheduledStart: args.scheduledStart ?? undefined,
       tournament: args.tournament ?? undefined,
+      tournamentAlias: args.tournamentAlias ?? undefined,
       eventSport: args.eventSport ?? undefined,
     }),
   })

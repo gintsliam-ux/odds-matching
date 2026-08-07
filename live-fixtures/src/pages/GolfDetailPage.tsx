@@ -189,6 +189,9 @@ export default function GolfDetailPage() {
       swiftActualStart: null,
       scheduledStart: tournament.startDate,
       tournament: tournament.tournament,
+      // SwiftBet's own name for it. OPTIC's "New York 2026" and SwiftBet's "LIV
+      // Golf Invitational Bedminster" share no words at all.
+      tournamentAlias: mapping?.swift_competition ?? null,
       eventSport: 'Golf',
     })
       .then((rows) => alive && setSwiftBets(rows))
@@ -196,7 +199,7 @@ export default function GolfDetailPage() {
     return () => {
       alive = false
     }
-  }, [swiftOutrightId, tournament?.startDate, tournament?.tournament])
+  }, [swiftOutrightId, tournament?.startDate, tournament?.tournament, mapping?.swift_competition])
 
   // Bets join every market's event, not just Winner: mybet files Top 5/10/20
   // and 1st Round Leader as their own events, so joining Winner alone silently

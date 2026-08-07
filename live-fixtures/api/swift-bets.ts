@@ -254,6 +254,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       scheduledStart?: string
       /** OUTRIGHT: OPTIC's tournament name, e.g. "Wyndham Championship 2026". */
       tournament?: string
+      /** OUTRIGHT: the BOOK's name for it, from the competition mapping. OPTIC
+       *  calls LIV's Bedminster stop "New York 2026" and SwiftBet calls it "LIV
+       *  Golf Invitational Bedminster" — names with nothing in common, so no
+       *  amount of token matching bridges them. The mapping already knows. */
+      tournamentAlias?: string
       /** OUTRIGHT: `derived.event_sport`, e.g. "Golf". Scopes the tournament scan. */
       eventSport?: string
     }
@@ -268,6 +273,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // only join. It is also the stronger one: the slug branch exists because
     // older bets predate the leg event_id, which outrights do not.
     const tournament = typeof body.tournament === 'string' ? body.tournament.trim() : ''
+    const tournamentAlias = typeof body.tournamentAlias === 'string' ? body.tournamentAlias.trim() : ''
     const eventSport = typeof body.eventSport === 'string' ? body.eventSport.trim() : ''
     // A tournament name is enough on its own: an unmapped tournament has no
     // swiftEventId, and its bets should still show.
@@ -305,21 +311,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // No team names means the slug can only be "-vs-", which matches nothing
     // useful and everything badly. Event id alone in outright mode.
     if (!outright) joins.push({ 'derived.legs_event_keys': { $elemMatch: { $regex: matchPattern } } })
-    if (swiftEventId) joins.push({ legs: { $regex: esc(swiftEventId) } })
     // Read the tournaments this sport actually has bets on in the window, keep
     // the ones naming this tournament, and join on those exactly — an indexed
     // equality rather than a regex over a book name we'd have to guess.
     const tournamentHits = new Set<string>()
-    if (outright && tournament && eventSport) {
+    if (outright && (tournament || tournamentAlias) && eventSport) {
       const present = (await bets.distinct('derived.event_tournament', {
         bet_date: { $gte: loDate, $lte: hiDate },
         'derived.event_sport': eventSport,
       })) as unknown[]
       const hits = present
         .filter((t): t is string => typeof t === 'string' && !!t)
-        .filter((t) => sameTournament(tournament, t))
+        .filter((t) => (tournament && sameTournament(tournament, t)) || (tournamentAlias && sameTournament(tournamentAlias, t)))
       for (const h of hits) tournamentHits.add(h)
       if (hits.length) joins.push({ 'derived.event_tournament': { $in: hits } })
+    }
+    // The event-id branch is an UNANCHORED regex over every `legs` blob in the
+    // window — 30s and a gateway timeout on a 90-day outright window. It is
+    // also strictly weaker than the tournament join, which found 18 of
+    // Wyndham's bets where this found 7. So outrights only fall back to it when
+    // the tournament join came up empty.
+    if (swiftEventId && (!outright || tournamentHits.size === 0)) {
+      joins.push({ legs: { $regex: esc(swiftEventId) } })
     }
 
     const cursor = bets
