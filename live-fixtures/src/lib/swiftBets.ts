@@ -75,6 +75,21 @@ export interface SwiftBetRow {
       status: string | null
     }>
   } | null
+  /** Every leg of a multi (empty for singles), so the row can expand to show
+   *  what each leg was and at what price — the other legs decide whether this
+   *  bet pays, and the row otherwise says nothing about them. */
+  all_legs: Array<{
+    event_name: string | null
+    competition: string | null
+    event_time: string | null
+    sport: string | null
+    market: string | null
+    outcome: string | null
+    odds: number | null
+    status: string | null
+    /** The leg that IS this fixture. */
+    is_this_game: boolean
+  }>
   leg_count: number
   leg_breakdown:
     | Array<{ sport: string; market_category: string; result: string | null; share: number }>

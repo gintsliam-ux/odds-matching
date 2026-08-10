@@ -73,6 +73,19 @@ export interface MatchedLeg extends LegSelection {
   selections: LegSelection[]
 }
 
+/** One leg of a multi, as the expandable breakdown shows it. */
+interface AllLeg {
+  event_name: string | null
+  competition: string | null
+  event_time: string | null
+  sport: string | null
+  market: string | null
+  outcome: string | null
+  odds: number | null
+  status: string | null
+  is_this_game: boolean
+}
+
 /**
  * Pull the leg-specific market / outcome / price for the leg that IS this game,
  * from the raw `legs` JSON (a stringified array, one entry per leg, in the same
@@ -196,6 +209,40 @@ function extractLeg(legs: unknown[] | null, index: number): MatchedLeg | null {
     status: first.status,
     selections,
   }
+}
+
+/**
+ * Every leg of a multi, so the UI can expand it and show what each one actually
+ * was. `extractLeg` only ever described the leg that IS this game, which left a
+ * 4-leg multi looking like a single bet at a mystery price: the row showed this
+ * game's leg odds and the combined multi odds, and nothing about the other
+ * three legs that decide whether it pays.
+ *
+ * Legs carry their own event_name/meeting_name/event_time, so a leg names its
+ * game without any further lookup.
+ */
+function extractAllLegs(legs: unknown[] | null, matchedIndex: number): AllLeg[] {
+  if (!legs) return []
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+  return legs.map((raw, i) => {
+    const l = raw as {
+      event_name?: unknown; meeting_name?: unknown; event_time?: unknown; sport_name?: unknown
+    }
+    const leg = extractLeg(legs, i)
+    return {
+      event_name: str(l?.event_name),
+      competition: str(l?.meeting_name),
+      event_time: str(l?.event_time),
+      sport: str(l?.sport_name),
+      market: leg?.market ?? null,
+      outcome: leg?.outcome ?? null,
+      odds: leg?.odds ?? null,
+      status: leg?.status ?? null,
+      // Which leg is the game we're looking at — the UI marks it so a 4-leg
+      // multi shows at a glance which part of it belongs here.
+      is_this_game: i === matchedIndex,
+    }
+  })
 }
 
 /**
@@ -447,6 +494,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         matched_leg_index: matchedLegIndex,
         matched_by: matchedByEventId ? 'event_id' : 'slug',
         matched_leg: extractLeg(parsedLegs, matchedLegIndex),
+        // Only for genuine multis — a single's one leg is already the row.
+        all_legs: (parsedLegs?.length ?? 0) > 1 ? extractAllLegs(parsedLegs, matchedLegIndex) : [],
         // Prefer the real leg array — an event_id-matched bet may have no
         // derived.legs_event_keys at all (enrichment hasn't run on it yet).
         leg_count: parsedLegs?.length ?? legKeys.length,

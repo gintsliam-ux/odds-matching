@@ -1386,14 +1386,18 @@ function guessMarket(selection: string, home: string, away: string): string | nu
   return null
 }
 
-/** One mybet bet row — mirrors SwiftBet's BetRow columns and styling. SGMs (and
- *  only SGMs) expand to a per-leg breakdown; singles/multis stay one row. */
+/** One mybet bet row — mirrors SwiftBet's BetRow columns and styling. SGMs and
+ *  cross-game multis both expand to a per-leg breakdown; singles stay one row. */
 function MybetRow({ b, scheduledStart, actualStart, home, away }: { b: MybetBetRow; scheduledStart: string | null; actualStart: string | null; home: string; away: string }) {
   const [open, setOpen] = useState(false)
   const late = b.placed_after_live
   const isSgm = b.sgm && b.legs.length > 1
   const isMulti = b.is_multi && !isSgm
   const expandable = isSgm
+  // A cross-game multi expands from its TYPE badge rather than over the
+  // Market/Outcome cells: those still say what this game's leg was, which is
+  // the thing you came to the fixture page to read.
+  const multiExpandable = isMulti && b.legs.length > 1
   const typeBadge = isSgm ? `SGM · ${b.leg_count}` : isMulti ? `MULTI · ${b.leg_count}` : null
   // Cross-game multi: show ONLY the leg that is this game, not the whole multi
   // string. Singles carry their selection directly.
@@ -1425,7 +1429,17 @@ function MybetRow({ b, scheduledStart, actualStart, home, away }: { b: MybetBetR
         <BetIdCell id={b.transaction_id != null ? String(b.transaction_id) : b.id ?? null} />
         <td className="px-3 py-2 align-top text-gray-200">
           {typeBadge ? (
-            <span className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-medium text-gray-200">{typeBadge}</span>
+            multiExpandable ? (
+              <button
+                onClick={() => setOpen((o) => !o)}
+                className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-medium text-gray-200 hover:bg-white/10 hover:text-white"
+              >
+                {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                {typeBadge}
+              </button>
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-medium text-gray-200">{typeBadge}</span>
+            )
           ) : (
             <span className="text-[11.5px]">SINGLE</span>
           )}
@@ -1458,24 +1472,40 @@ function MybetRow({ b, scheduledStart, actualStart, home, away }: { b: MybetBetR
           ${pl.toFixed(2)}
         </td>
       </tr>
-      {expandable && open && b.legs.map((lg, i) => (
-        <tr key={i} className="border-t border-[color:var(--line-soft)]/40 bg-black/[0.18]">
-          {/* spacers: Placed, vs Start, User, Bet ID */}
-          <td />
-          <td />
-          <td />
-          <td />
-          <td className="px-3 py-1.5 align-top text-[10px] text-[color:var(--muted-2)]">leg {i + 1}</td>
-          <td className="px-3 py-1.5 align-top text-[11.5px] text-gray-200">{lg.event ?? '—'}</td>
-          <td className="px-3 py-1.5 align-top text-[11.5px] text-gray-300">{lg.outcome ?? '—'}</td>
-          <td />
-          <td />
-          <td className="px-3 py-1.5 text-right align-top tabular-nums text-[11.5px] text-gray-300">
-            {lg.odds != null ? lg.odds.toFixed(2) : '—'}
-          </td>
-          <td />
-        </tr>
-      ))}
+      {(expandable || multiExpandable) && open && b.legs.map((lg, i) => {
+        // Mark the leg that is THIS game, by identity with the leg the
+        // collapsed row already resolved. Re-deriving it per leg with a
+        // name test gets it wrong: mentionsTeam matches any word of 4+
+        // chars, so in a multi holding both "Botev Vratsa vs Slavia Sofia"
+        // and "Botev Plovdiv vs Spartak" the Plovdiv leg also answers to
+        // "botev". relevantLeg prefers the leg naming BOTH teams, so it
+        // picks the right one.
+        const thisGame = leg != null && lg === leg
+        return (
+          <tr
+            key={i}
+            className={`border-t border-[color:var(--line-soft)]/40 ${thisGame ? 'bg-[color:var(--swift)]/[0.06]' : 'bg-black/[0.18]'}`}
+          >
+            {/* spacers: Placed, vs Start, User, Bet ID */}
+            <td />
+            <td />
+            <td />
+            <td />
+            <td className="px-3 py-1.5 align-top text-[10px] text-[color:var(--muted-2)]">
+              leg {i + 1}
+              {thisGame && <span className="ml-1 font-semibold text-[color:var(--muted)]">· this game</span>}
+            </td>
+            <td className="px-3 py-1.5 align-top text-[11.5px] text-gray-200">{lg.event ?? '—'}</td>
+            <td className="px-3 py-1.5 align-top text-[11.5px] text-gray-300">{lg.outcome ?? '—'}</td>
+            <td />
+            <td />
+            <td className="px-3 py-1.5 text-right align-top tabular-nums text-[11.5px] text-gray-300">
+              {lg.odds != null ? lg.odds.toFixed(2) : '—'}
+            </td>
+            <td />
+          </tr>
+        )
+      })}
     </>
   )
 }
@@ -1907,6 +1937,12 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
   // market/outcome on the same game) and is expandable to show them all.
   const sels = b.matched_leg?.selections ?? []
   const expandable = sels.length > 1
+  // A cross-game multi expands from its TYPE badge, keeping Market/Outcome on
+  // this game's leg — the reason you're on this fixture's page. Without this a
+  // 4-leg multi showed one leg's price and a combined price, and said nothing
+  // about the three other legs that decide whether it pays.
+  const allLegs = b.all_legs ?? []
+  const multiExpandable = isMulti && allLegs.length > 1
   // For multis, pull the breakdown row that corresponds to THIS game so the
   // panel shows the leg-specific market/outcome rather than the multi's
   // headline. matched_leg_index points into legs_event_keys, which mirrors
@@ -1927,6 +1963,12 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
   const shownOdds = isSgm ? odd : legOdds ?? odd
   const perLegStake = legStake(b)
   const typeBadge = isSgm ? `SGM · ${sels.length}` : isMulti ? `MULTI · ${b.leg_count}` : null
+  const legStatusTone = (st: string | null) => {
+    const t = (st ?? '').toLowerCase()
+    if (t.includes('loss') || t.includes('lost')) return 'text-[color:var(--live)]'
+    if (t.includes('win')) return 'text-[color:var(--total)]'
+    return 'text-[color:var(--muted-2)]'
+  }
   // SwiftBet's OWN settlement state, distinct from the per-selection Won/Lost
   // we derive: a bet can have every leg decided and still not be resulted or
   // paid. 'unknown' means the bet predates the bet_status field (2026-07-31),
@@ -1984,9 +2026,19 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
         <BetIdCell id={b.bet_id ?? b.id ?? null} />
         <td className="px-3 py-2 align-top text-gray-200">
           {typeBadge ? (
-            <span className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-medium text-gray-200">
-              {typeBadge}
-            </span>
+            multiExpandable ? (
+              <button
+                onClick={() => setOpen((o) => !o)}
+                className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-medium text-gray-200 hover:bg-white/10 hover:text-white"
+              >
+                {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                {typeBadge}
+              </button>
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] font-medium text-gray-200">
+                {typeBadge}
+              </span>
+            )
           ) : (
             <span className="text-[11.5px]">{(b.type ?? 'SINGLE').toUpperCase()}</span>
           )}
@@ -2093,8 +2145,58 @@ function BetRow({ bet: b, fixture: f }: { bet: SwiftBetRow; fixture: Fixture }) 
             </tr>
           )
         })}
+      {/* Expanded multi legs: every leg with its own game, pick and price. The
+          leg that is THIS fixture is tinted and labelled. */}
+      {multiExpandable &&
+        open &&
+        allLegs.map((lg, i) => (
+          <tr
+            key={i}
+            className={`border-t border-[color:var(--line-soft)]/40 ${
+              lg.is_this_game ? 'bg-[color:var(--swift)]/[0.06]' : 'bg-black/[0.18]'
+            }`}
+          >
+            {/* spacers: Placed, vs Start, User, Bet ID */}
+            <td />
+            <td />
+            <td />
+            <td />
+            <td className="px-3 py-1.5 align-top text-[10px] text-[color:var(--muted-2)]">
+              leg {i + 1}
+              {lg.is_this_game && (
+                <span className="ml-1 font-semibold text-[color:var(--muted)]">· this game</span>
+              )}
+            </td>
+            <td className="px-3 py-1.5 align-top text-[11.5px] text-gray-200">
+              {lg.event_name ?? '—'}
+              {lg.competition && (
+                <div className="text-[10px] text-[color:var(--muted-2)]">{lg.competition}</div>
+              )}
+            </td>
+            <td className="max-w-[320px] px-3 py-1.5 align-top text-[11.5px] text-gray-300">
+              {lg.outcome ?? '—'}
+              {lg.market && (
+                <div className="text-[10px] text-[color:var(--muted-2)]">{lg.market}</div>
+              )}
+            </td>
+            <td className={`px-3 py-1.5 align-top text-[10.5px] font-medium ${legStatusTone(lg.status)}`}>
+              {lg.status ? prettyLegStatus(lg.status) : '—'}
+            </td>
+            <td />
+            <td className="px-3 py-1.5 text-right align-top tabular-nums text-[11.5px] text-gray-300">
+              {lg.odds != null ? lg.odds.toFixed(2) : '—'}
+            </td>
+            <td />
+          </tr>
+        ))}
     </>
   )
+}
+
+/** SwiftBet writes leg statuses as "ResultedLoss" / "Unresulted". Split the
+ *  camel case so the column reads as words. */
+function prettyLegStatus(s: string): string {
+  return s.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^Resulted /, '')
 }
 
 function StatusBadge({ fixture: f, now }: { fixture: Fixture; now: Date }) {
