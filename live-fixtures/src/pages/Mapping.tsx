@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowLeftRight, Check, ChevronRight, Database, GitMerge, Loa
 import { TableSkeleton } from '../components/Skeleton'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { fixturePath, golfPath } from '../lib/routes'
 import { useTerminal } from '../components/Layout'
 import { useSportUniverse } from '../hooks/useSportUniverse'
 import { useTournamentFixtures } from '../hooks/useTournamentFixtures'
@@ -859,7 +860,7 @@ export default function MappingPage() {
               // Golf drills to its outright board; every other sport drills to
               // the events under the tournament.
               t.golfTournamentId
-                ? `/golf/${encodeURIComponent(t.golfTournamentId)}`
+                ? golfPath(t.golfTournamentId, { tournament: t.tournament })
                 : `/mapping/${sportToSlug(sportGroupKey(t.rawSport))}/${encodeURIComponent(t.rawLeague)}${
                     t.rawTournament ? `?t=${encodeURIComponent(t.rawTournament)}` : ''
                   }`,
@@ -1464,7 +1465,7 @@ function DrillView({
             const m = eventMap.get(f.id)
             const mb = mybetEventMap.get(f.id)
             return (
-              <Row key={f.id} onClick={() => navigate(`/fixture/${encodeURIComponent(f.id)}`)}>
+              <Row key={f.id} onClick={() => navigate(fixturePath(f.id, { home: f.homeName, away: f.awayName }))}>
                 <Cell width="w-44">
                   <span className="flex flex-col gap-0.5 tabular-nums">
                     <span className="text-gray-200">

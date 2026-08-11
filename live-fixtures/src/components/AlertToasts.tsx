@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom'
+import { fixturePath } from '../lib/routes'
 import { AlertTriangle, CheckCircle2, ExternalLink, X } from 'lucide-react'
 import type { AlertToast } from '../hooks/useAlertToasts'
 import { sportLabel } from '../lib/sports'
@@ -173,7 +174,7 @@ export function AlertToasts({ toasts, onDismiss, onDismissAll }: Props) {
                   <button
                     type="button"
                     onClick={() => {
-                      navigate(`/fixture/${encodeURIComponent(n.opticFixtureId)}`)
+                      navigate(fixturePath(n.opticFixtureId, { home: n.home, away: n.away }))
                       onDismiss(t.id)
                     }}
                     className="inline-flex cursor-pointer items-center gap-1 rounded border border-[color:var(--line-soft)] px-2 py-0.5 font-medium text-gray-300 hover:bg-white/5"

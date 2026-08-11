@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { fixturePath } from '../lib/routes'
 import { AlertTriangle, Bell, BellOff, ChevronDown, ChevronRight, ExternalLink, GitMerge } from 'lucide-react'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { useTerminal } from '../components/Layout'
@@ -384,7 +385,7 @@ function NotificationRow({ n }: { n: Notification }) {
       </td>
       <td className="px-4 py-3 text-right">
         <Link
-          to={`/fixture/${encodeURIComponent(n.opticFixtureId)}`}
+          to={fixturePath(n.opticFixtureId, { home: n.home, away: n.away })}
           className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-gray-300 hover:bg-white/5"
         >
           Open <ExternalLink className="h-3 w-3" />

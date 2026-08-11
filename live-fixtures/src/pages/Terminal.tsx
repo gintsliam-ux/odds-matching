@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Search } from 'lucide-react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { fixturePath, golfPath } from '../lib/routes'
 import { FixtureGrid } from '../components/FixtureGrid'
 import { DateBar } from '../components/DateBar'
 import { GridSkeleton } from '../components/Skeleton'
@@ -447,7 +448,7 @@ export default function Terminal() {
           <FixtureGrid
             fixtures={visible}
             now={now}
-            onSelect={(f) => navigate(`/fixture/${encodeURIComponent(f.id)}`)}
+            onSelect={(f) => navigate(fixturePath(f.id, { home: f.homeName, away: f.awayName }))}
           />
           {sport && sportHasMore && (
             <div className="flex justify-center py-6">
@@ -488,7 +489,7 @@ function GolfBoard({ tournaments, loading }: { tournaments: GolfTournament[]; lo
       {tournaments.map((t) => (
         <button
           key={t.tournamentId}
-          onClick={() => navigate(`/golf/${encodeURIComponent(t.tournamentId)}`)}
+          onClick={() => navigate(golfPath(t.tournamentId, { tournament: t.tournament }))}
           className="rounded-lg bg-[color:var(--panel)] p-4 text-left transition-colors hover:bg-white/[0.04]"
         >
           <div className="flex items-center gap-2 text-[11px] text-[color:var(--muted-2)]">

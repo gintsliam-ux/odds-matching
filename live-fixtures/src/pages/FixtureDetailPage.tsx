@@ -22,10 +22,15 @@ import { fetchEventMappingsFor, fetchCompetitionMappings, type EventMapping, typ
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
 import { getMybetCatalog, type MybetCompetition, type MybetEvent } from '../lib/mybetCatalog'
 import { fetchMybetEvent, mybetEventUrl, type MybetLiveEvent } from '../lib/mybetStatus'
+import { fixturePath, idFromParam } from '../lib/routes'
 
 export default function FixtureDetailPage() {
   const navigate = useNavigate()
-  const { id } = useParams()
+  const params = useParams()
+  // The param may be a bare OPTIC id or "home-v-away-<id>". Only the id is
+  // trusted; the slug is never read back, so a renamed team can't 404 a link.
+  const id = idFromParam(params.id)
+  const urlTab = TAB_FROM_PATH[params.tab ?? ''] ?? 'details'
   const { fixtures, now } = useTerminal()
 
   // Prefer the live list entry (keeps ticking on each poll); otherwise fetch
@@ -166,6 +171,25 @@ export default function FixtureDetailPage() {
 
   useDocumentTitle(f ? `${f.homeName} v ${f.awayName}` : null)
 
+  // Rewrite a bare-id or stale-slug URL to the canonical one once the teams are
+  // known, so what gets copied out of the address bar is the readable form.
+  // replace(), not push() — the un-slugged URL should not become a back step
+  // that immediately re-redirects.
+  //
+  // Read from `candidate`, not `f`: `f` falls back to the lastGood ref, and
+  // deriving the path from a ref during render is exactly what that ref is not
+  // for. `candidate` is the freshly-resolved fixture, which is all the URL
+  // needs — it only has to be right once, when the fixture first loads.
+  const homeName = candidate?.homeName ?? ''
+  const awayName = candidate?.awayName ?? ''
+  useEffect(() => {
+    if (!id || !homeName) return
+    const canonical = fixturePath(id, { home: homeName, away: awayName, tab: urlTab })
+    if (decodeURIComponent(window.location.pathname) !== decodeURIComponent(canonical)) {
+      navigate(canonical, { replace: true })
+    }
+  }, [id, homeName, awayName, urlTab, navigate])
+
   if (!f && loading) return <DetailSkeleton />
 
   return (
@@ -185,17 +209,31 @@ export default function FixtureDetailPage() {
       </button>
 
       {!f ? (
-        <div className="flex h-48 items-center justify-center text-[13px] text-[color:var(--muted-2)]">
-          Fixture not found.
+        <div className="flex h-48 flex-col items-center justify-center gap-1 text-[13px] text-[color:var(--muted-2)]">
+          <span>{id ? 'Fixture not found.' : 'That URL carries no fixture id.'}</span>
+          {!id && (
+            <span className="text-[11.5px]">
+              A fixture link ends in its 16-character OPTIC id.
+            </span>
+          )}
         </div>
       ) : (
-        <Detail fixture={f} now={now} mappingInfo={mappingInfo} />
+        <Detail fixture={f} now={now} mappingInfo={mappingInfo} tab={urlTab} />
       )}
     </div>
   )
 }
 
 type DetailTab = 'details' | 'markets' | 'bets'
+
+/** URL segment → tab. Anything unrecognised falls back to Details rather than
+ *  404ing, since the segment is cosmetic. */
+const TAB_FROM_PATH: Record<string, DetailTab> = {
+  '': 'details',
+  details: 'details',
+  markets: 'markets',
+  bets: 'bets',
+}
 
 interface MappingInfo {
   loading: boolean
@@ -212,6 +250,7 @@ interface MappingInfo {
 }
 
 function Detail({
+  tab,
   fixture: f,
   now,
   mappingInfo,
@@ -219,8 +258,14 @@ function Detail({
   fixture: Fixture
   now: Date
   mappingInfo: MappingInfo
+  tab: DetailTab
 }) {
-  const [tab, setTab] = useState<DetailTab>('details')
+  // The tab lives in the URL so it can be linked to and survives a reload.
+  // Replace rather than push: flicking between tabs shouldn't fill the back
+  // button with steps you have to click through to leave the fixture.
+  const navigate = useNavigate()
+  const setTab = (t: DetailTab) =>
+    navigate(fixturePath(f.id, { home: f.homeName, away: f.awayName, tab: t }), { replace: true })
   const isLive = f.status === 'live'
   // Bets are fetched here (not inside BetsTab) so the liability overview under
   // the scoreboard can read them on every tab.

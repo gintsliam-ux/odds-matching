@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, ExternalLink } from 'lucide-react'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import {
@@ -17,6 +17,7 @@ import { mybetEventUrl } from '../lib/mybetStatus'
 import { CopyButton, Field, Grid, SourcePanel } from '../components/SourcePanel'
 import { BrandSubTab, StatCard } from '../components/BetsChrome'
 import { betSettlement, fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
+import { golfPath, idFromParam } from '../lib/routes'
 import { fetchMybetBets, mybetSettlement, type MybetBetRow } from '../lib/mybetBets'
 
 
@@ -29,6 +30,17 @@ import { fetchMybetBets, mybetSettlement, type MybetBetRow } from '../lib/mybetB
  * size of the field where a fixture shows two teams and a scoreline, and the
  * Markets tab shows the outright rather than h2h/spread/total.
  */
+
+type GolfTab = 'details' | 'markets' | 'bets'
+
+/** URL segment → tab. Unknown segments fall back to Details; the segment is
+ *  cosmetic, so a typo should not 404 a tournament. */
+const GOLF_TAB_FROM_PATH: Record<string, GolfTab> = {
+  '': 'details',
+  details: 'details',
+  markets: 'markets',
+  bets: 'bets',
+}
 
 /** How many favourites the Markets tab lists. */
 const TOP_N = 10
@@ -71,7 +83,10 @@ interface SwiftOutright {
 }
 
 export default function GolfDetailPage() {
-  const { tournamentId = '' } = useParams()
+  const params = useParams()
+  // "wyndham-championship-2026-<id>" or a bare id — only the id is trusted.
+  const tournamentId = idFromParam(params.tournamentId)
+  const navigate = useNavigate()
   const [tournament, setTournament] = useState<GolfTournament | null>(null)
   const [prices, setPrices] = useState<GolfPrice[] | null>(null)
   const [swift, setSwift] = useState<SwiftOutright | null>(null)
@@ -80,9 +95,24 @@ export default function GolfDetailPage() {
   const [mybetBets, setMybetBets] = useState<MybetBetRow[] | null>(null)
   const [mapping, setMapping] = useState<CompetitionMapping | null>(null)
   const [loading, setLoading] = useState(true)
-  const [tab, setTab] = useState<'details' | 'markets' | 'bets'>('details')
+  const tab: GolfTab = GOLF_TAB_FROM_PATH[params.tab ?? ''] ?? 'details'
 
   useDocumentTitle(tournament?.tournament ?? 'Golf')
+
+  // The tab lives in the URL so it can be linked to; replace() keeps tab
+  // flicking out of the back button.
+  const setTab = (t: GolfTab) =>
+    navigate(golfPath(tournamentId, { tournament: tournament?.tournament, tab: t }), { replace: true })
+
+  // Rewrite a bare-id URL to the readable one once the tournament name loads.
+  const tournamentName = tournament?.tournament ?? ''
+  useEffect(() => {
+    if (!tournamentId || !tournamentName) return
+    const canonical = golfPath(tournamentId, { tournament: tournamentName, tab })
+    if (decodeURIComponent(window.location.pathname) !== decodeURIComponent(canonical)) {
+      navigate(canonical, { replace: true })
+    }
+  }, [tournamentId, tournamentName, tab, navigate])
 
   // OPTIC side: the tournament and its prices.
   useEffect(() => {
