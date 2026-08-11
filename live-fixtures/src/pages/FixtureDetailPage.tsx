@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { backOr } from '../lib/nav'
 import { ArrowLeft, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
@@ -23,6 +23,14 @@ import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/
 import { getMybetCatalog, type MybetCompetition, type MybetEvent } from '../lib/mybetCatalog'
 import { fetchMybetEvent, mybetEventUrl, type MybetLiveEvent } from '../lib/mybetStatus'
 import { fixturePath, idFromParam } from '../lib/routes'
+import {
+  allLines,
+  normaliseFlucs,
+  normaliseMarket,
+  pricesAt,
+  type BookOdds,
+  type SidePrices,
+} from '../lib/marketOdds'
 
 export default function FixtureDetailPage() {
   const navigate = useNavigate()
@@ -374,7 +382,7 @@ function Detail({
           mybetBetsLoading={mybetBetsState.loading}
         />
       )}
-      {tab === 'markets' && <MarketsTab fixture={f} />}
+      {tab === 'markets' && <MarketsTab fixture={f} now={now} />}
       {tab === 'bets' && (
         <BetsPanel
           fixture={f}
@@ -746,7 +754,6 @@ function MybetPanel({ info, verdict }: { info: MappingInfo; verdict: Verdict }) 
 }
 
 // Reserved keys on each market block in pregame_odds (not bookmakers).
-const PREGAME_NON_BOOK_KEYS = new Set(['line'])
 
 // Display book names with their actual casing — Pinnacle / DraftKings / FanDuel
 // look better than BETMGM / DRAFTKINGS. Map key is the lowercased feed key,
@@ -784,12 +791,43 @@ const BOOK_TINT: Record<string, { text: string; bg: string; border: string }> = 
   tab: { text: 'text-cyan-300', bg: 'bg-cyan-300/10', border: 'border-cyan-300/30' },
 }
 
-function MarketsTab({ fixture: f }: { fixture: Fixture }) {
+function MarketsTab({ fixture: f, now }: { fixture: Fixture; now: Date }) {
   const po = f.pregameOdds
-  const h2hBooks = po?.h2h ? listBookmakers(po.h2h) : []
-  const spreadBooks = po?.spread ? listBookmakers(po.spread) : []
-  const totalBooks = po?.total ? listBookmakers(po.total) : []
-  const hasDraw = po?.h2h && Object.values(po.h2h).some((b) => isBookH2h(b) && b?.draw != null)
+  // Both odds shapes flow through the normaliser: the old flat one and the
+  // alternate-lines ladder the feed started writing on 2026-08-11. Reading the
+  // raw block would show a column per book and a dash in every cell on any
+  // fixture written since.
+  const h2h = useMemo(() => normaliseMarket(po?.h2h, 'h2h'), [po?.h2h])
+  const spread = useMemo(() => normaliseMarket(po?.spread, 'spread'), [po?.spread])
+  const total = useMemo(() => normaliseMarket(po?.total, 'total'), [po?.total])
+  const h2hBooks = h2h.map((b) => b.book)
+  const spreadBooks = spread.map((b) => b.book)
+  const totalBooks = total.map((b) => b.book)
+  const hasDraw = h2h.some((b) => b.mainPrices.draw != null)
+  const byBook = (odds: BookOdds[]) => new Map(odds.map((b) => [b.book, b]))
+  const h2hMap = byBook(h2h)
+  const spreadMap = byBook(spread)
+  const totalMap = byBook(total)
+  const flucsH2h = useMemo(() => normaliseFlucs(f.flucs?.h2h, 'h2h'), [f.flucs?.h2h])
+  const flucsSpread = useMemo(() => normaliseFlucs(f.flucs?.spread, 'spread'), [f.flucs?.spread])
+  const flucsTotal = useMemo(() => normaliseFlucs(f.flucs?.total, 'total'), [f.flucs?.total])
+
+  // "Updated" has to survive an UPCOMING fixture, where live_updated_at is null
+  // and the row would otherwise read "—" despite carrying fresh prices. Newest
+  // fluc snapshot first, since that is literally when a price was last written.
+  const lastPriced =
+    [
+      ...Object.values(f.flucs ?? {}).flatMap((byBookF) =>
+        Object.values(byBookF ?? {}).flatMap((byStage) =>
+          Object.values(byStage ?? {}).map((snap) => (snap as { at?: string | null })?.at ?? null),
+        ),
+      ),
+      f.liveUpdatedAt,
+      f.updatedAt,
+    ]
+      .filter((t): t is string => !!t)
+      .sort()
+      .at(-1) ?? null
 
   const h2hLive: Record<'home' | 'draw' | 'away', number | null> = {
     home: f.liveH2h.home,
@@ -809,11 +847,10 @@ function MarketsTab({ fixture: f }: { fixture: Fixture }) {
         </span>
         <span>
           Updated{' '}
-          <span className="ml-1 text-gray-200 tabular-nums">
-            {f.liveUpdatedAt
-              ? new Date(f.liveUpdatedAt).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'
-              : '—'}
-          </span>
+          <span className="ml-1 text-gray-200 tabular-nums">{fmtDateTime(lastPriced)}</span>
+          {lastPriced && (
+            <span className="ml-1.5 text-[color:var(--muted-2)]">({agoLabel(lastPriced, now)})</span>
+          )}
         </span>
         {(f.openAt || f.closeAt) && (
           <span className="flex items-center gap-4">
@@ -851,12 +888,11 @@ function MarketsTab({ fixture: f }: { fixture: Fixture }) {
               ...(hasDraw ? [{ label: 'Draw', key: 'draw' }] : []),
               { label: f.awayName, key: 'away' },
             ]}
-            getPrice={(book, k) =>
-              (po?.h2h?.[book] as { [k: string]: number | null | undefined })?.[k] ?? null
-            }
+            getPrice={(book, k) => h2hMap.get(book)?.mainPrices[k as keyof SidePrices] ?? null}
             getLive={(k) => h2hLive[k as 'home' | 'draw' | 'away'] ?? null}
             getLine={() => null}
-            flucs={f.flucs?.h2h}
+            odds={h2h}
+            flucs={flucsH2h}
           />
         )}
 
@@ -870,14 +906,13 @@ function MarketsTab({ fixture: f }: { fixture: Fixture }) {
               { label: f.homeName, key: 'home' },
               { label: f.awayName, key: 'away' },
             ]}
-            getPrice={(book, k) =>
-              (po?.spread?.[book] as { [k: string]: number | null | undefined })?.[k] ?? null
-            }
+            getPrice={(book, k) => spreadMap.get(book)?.mainPrices[k as keyof SidePrices] ?? null}
             getLive={() => null}
-            getLine={(book) => bookLine(po?.spread, book)}
-            // The away side of a handicap is the home side negated.
+            getLine={(book) => spreadMap.get(book)?.mainLine ?? null}
+            // The line is the HOME handicap, so the away side is its negation.
             lineSuffix={(k, line) => (line == null ? undefined : fmtLine(k === 'away' ? negate(line) : line))}
-            flucs={f.flucs?.spread}
+            odds={spread}
+            flucs={flucsSpread}
           />
         )}
 
@@ -891,13 +926,12 @@ function MarketsTab({ fixture: f }: { fixture: Fixture }) {
               { label: 'Over', key: 'over' },
               { label: 'Under', key: 'under' },
             ]}
-            getPrice={(book, k) =>
-              (po?.total?.[book] as { [k: string]: number | null | undefined })?.[k] ?? null
-            }
+            getPrice={(book, k) => totalMap.get(book)?.mainPrices[k as keyof SidePrices] ?? null}
             getLive={() => null}
-            getLine={(book) => bookLine(po?.total, book)}
+            getLine={(book) => totalMap.get(book)?.mainLine ?? null}
             lineSuffix={(k, line) => (line == null ? undefined : `${k === 'over' ? 'O' : 'U'} ${line}`)}
-            flucs={f.flucs?.total}
+            odds={total}
+            flucs={flucsTotal}
           />
         )}
 
@@ -909,14 +943,6 @@ function MarketsTab({ fixture: f }: { fixture: Fixture }) {
       </div>
     </>
   )
-}
-
-function listBookmakers(block: Record<string, unknown>): string[] {
-  return Object.keys(block).filter((k) => !PREGAME_NON_BOOK_KEYS.has(k))
-}
-
-function isBookH2h(v: unknown): v is { home?: number | null; away?: number | null; draw?: number | null } {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
 function bookTint(book: string) {
@@ -994,22 +1020,6 @@ function stagesPresent(
   })
 }
 
-/**
- * The line a book is quoting on this market.
- *
- * The line lives PER BOOK — `spread.Pinnacle.line` is 1 while
- * `spread.FanDuel.line` is 1.5 on the same game — and only some blocks carry a
- * market-level `line` as well. Reading only the market-level key (as this page
- * used to) dropped the line entirely on most fixtures AND silently compared
- * books quoting different handicaps as if they were the same bet.
- */
-function bookLine(block: Record<string, unknown> | undefined, book: string): number | null {
-  const b = block?.[book] as { line?: unknown } | undefined
-  if (typeof b?.line === 'number') return b.line
-  const marketLine = (block as { line?: unknown } | undefined)?.line
-  return typeof marketLine === 'number' ? marketLine : null
-}
-
 /** Stable key for grouping — `null` (no line quoted) is its own group. */
 function lineKey(line: number | null): string {
   return line == null ? 'none' : String(line)
@@ -1036,6 +1046,7 @@ function MarketCard<K extends string>({
   getPrice,
   getLive,
   getLine,
+  odds,
   lineSuffix,
   flucs,
 }: {
@@ -1047,6 +1058,8 @@ function MarketCard<K extends string>({
   getLive: (key: K) => number | null
   /** The line this book quotes. Null for a market without one (h2h). */
   getLine: (book: string) => number | null
+  /** Normalised odds, so the card can offer the full alternate-lines ladder. */
+  odds: BookOdds[]
   /** How an outcome names the line — "+1.5" for a spread, "O 7.5" for a total. */
   lineSuffix?: (key: K, line: number | null) => string | undefined
   /** This market's price history, book → stage → snapshot. */
@@ -1076,6 +1089,10 @@ function MarketCard<K extends string>({
   })()
 
   const hasLive = outcomes.some((o) => getLive(o.key) != null)
+  // A ladder only exists when some book quotes more than its main line.
+  const ladderLines = allLines(odds)
+  const hasLadder = odds.some((b) => b.lines.length > 1)
+
   const stages = stagesPresent(flucs)
   const flucBooks = flucs ? Object.keys(flucs).filter((b) => Object.keys(flucs[b] ?? {}).length > 0) : []
   const hasFlucs = stages.length > 1 && flucBooks.length > 0
@@ -1116,7 +1133,9 @@ function MarketCard<K extends string>({
             </div>
           )}
           <span className="text-[11.5px] text-[color:var(--muted-2)]">
-            {showing === 'movement' ? `${flucBooks.length} tracked · ${stages.length} stages` : `${books.length} books`}
+            {showing === 'movement'
+              ? `${flucBooks.length} tracked · ${stages.length} stages`
+              : `${books.length} books${hasLadder ? ` · ${ladderLines.length} lines` : ''}`}
           </span>
         </div>
       </div>
@@ -1141,7 +1160,134 @@ function MarketCard<K extends string>({
           />
         ))
       )}
+      {showing === 'prices' && hasLadder && (
+        <LadderTable kind={kind} odds={odds} lines={ladderLines} outcomes={outcomes} />
+      )}
     </div>
+  )
+}
+
+/**
+ * Every alternate line a book quotes, one row per line.
+ *
+ * The feed now ships the whole ladder — up to 169 rungs on a single book — and
+ * the headline grid deliberately shows only each book's main line. This is the
+ * rest of it: collapsed by default because it is long, and rendered as one row
+ * per line rather than a table per line, which is the only shape that stays
+ * readable at that length.
+ */
+function LadderTable<K extends string>({
+  kind,
+  odds,
+  lines,
+  outcomes,
+}: {
+  kind: 'moneyline' | 'spread' | 'total'
+  odds: BookOdds[]
+  lines: number[]
+  outcomes: MarketOutcome<K>[]
+}) {
+  const [open, setOpen] = useState(false)
+  const [a, b] = outcomes
+  const fmtLineLabel = (n: number) => (kind === 'spread' ? fmtLine(n) : String(n))
+
+  // The ladder runs from -99.5 to +68.5 on a single AFL book, so opening it at
+  // the top lands on rungs nobody is pricing. Scroll to the line the books
+  // actually lead with — the modal main line — so it opens where the market is.
+  const focusLine = (() => {
+    const tally = new Map<number, number>()
+    for (const o of odds) if (o.mainLine != null) tally.set(o.mainLine, (tally.get(o.mainLine) ?? 0) + 1)
+    let best: number | null = null
+    for (const [line, n] of tally) if (best == null || n > (tally.get(best) ?? 0)) best = line
+    return best
+  })()
+  const focusRow = useRef<HTMLTableRowElement | null>(null)
+  useEffect(() => {
+    if (open) focusRow.current?.scrollIntoView({ block: 'center' })
+  }, [open])
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-1.5 border-t border-white/[0.05] bg-black/[0.15] px-4 py-2 text-left text-[11px] font-medium text-[color:var(--muted)] hover:text-gray-200"
+      >
+        {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        Alternate lines
+        <span className="text-[color:var(--muted-2)]">
+          · {lines.length} across {odds.length} {odds.length === 1 ? 'book' : 'books'}
+        </span>
+      </button>
+      {open && (
+        <div className="max-h-[28rem] overflow-auto">
+          <table className="w-full text-[12px]">
+            <thead className="sticky top-0 z-10 bg-[color:var(--panel)]">
+              <tr className="text-[10.5px] text-[color:var(--muted)]">
+                <th className="sticky left-0 z-20 bg-[color:var(--panel)] py-2 pl-4 pr-3 text-left font-medium">
+                  Line
+                </th>
+                {odds.map((o) => {
+                  const t = bookTint(o.book)
+                  return (
+                    <th key={o.book} colSpan={2} className="border-l border-white/[0.05] px-2 py-2 text-center font-normal">
+                      <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${t.text} ${t.bg} ${t.border}`}>
+                        {titleCaseBook(o.book)}
+                      </span>
+                    </th>
+                  )
+                })}
+              </tr>
+              <tr className="text-[10px] text-[color:var(--muted-2)]">
+                <th className="sticky left-0 z-20 bg-[color:var(--panel)] pb-1.5 pl-4" />
+                {odds.map((o) => (
+                  <Fragment key={o.book}>
+                    <th className="border-l border-white/[0.05] px-2 pb-1.5 text-right font-normal">
+                      {a?.label.slice(0, 10) ?? '—'}
+                    </th>
+                    <th className="px-2 pb-1.5 text-right font-normal">{b?.label.slice(0, 10) ?? '—'}</th>
+                  </Fragment>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="tabular-nums">
+              {lines.map((line) => (
+                <tr
+                  key={line}
+                  ref={line === focusLine ? focusRow : undefined}
+                  className="border-t border-white/[0.04] hover:bg-white/[0.02]"
+                >
+                  <td className="sticky left-0 z-10 bg-[color:var(--panel)] py-1.5 pl-4 pr-3 text-gray-200">
+                    {fmtLineLabel(line)}
+                  </td>
+                  {odds.map((o) => {
+                    const p = pricesAt(o, line)
+                    const isMain = o.mainLine === line
+                    const cell = (v: number | null | undefined) =>
+                      v == null ? (
+                        <span className="text-gray-700">·</span>
+                      ) : (
+                        <span className={isMain ? 'font-semibold text-gray-100' : 'text-gray-400'}>
+                          {v.toFixed(2)}
+                        </span>
+                      )
+                    return (
+                      <Fragment key={o.book}>
+                        <td className={`border-l border-white/[0.05] px-2 py-1.5 text-right ${isMain ? 'bg-white/[0.03]' : ''}`}>
+                          {cell(a ? p?.[a.key as keyof SidePrices] : null)}
+                        </td>
+                        <td className={`px-2 py-1.5 text-right ${isMain ? 'bg-white/[0.03]' : ''}`}>
+                          {cell(b ? p?.[b.key as keyof SidePrices] : null)}
+                        </td>
+                      </Fragment>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
   )
 }
 
