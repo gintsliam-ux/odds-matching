@@ -1188,23 +1188,35 @@ function LadderTable<K extends string>({
   outcomes: MarketOutcome<K>[]
 }) {
   const [open, setOpen] = useState(false)
+  const [shown, setShown] = useState(LADDER_PAGE)
   const [a, b] = outcomes
   const fmtLineLabel = (n: number) => (kind === 'spread' ? fmtLine(n) : String(n))
 
-  // The ladder runs from -99.5 to +68.5 on a single AFL book, so opening it at
-  // the top lands on rungs nobody is pricing. Scroll to the line the books
-  // actually lead with — the modal main line — so it opens where the market is.
-  const focusLine = (() => {
-    const tally = new Map<number, number>()
-    for (const o of odds) if (o.mainLine != null) tally.set(o.mainLine, (tally.get(o.mainLine) ?? 0) + 1)
-    let best: number | null = null
-    for (const [line, n] of tally) if (best == null || n > (tally.get(best) ?? 0)) best = line
-    return best
-  })()
-  const focusRow = useRef<HTMLTableRowElement | null>(null)
-  useEffect(() => {
-    if (open) focusRow.current?.scrollIntoView({ block: 'center' })
-  }, [open])
+  // Ordered by how EVEN the two sides are, not by line number.
+  //
+  // The ladder runs -99.5 to +68.5 on a single AFL book, and in line order it
+  // opens on rungs nobody is pricing (a 46.00 under at -99.5). The interesting
+  // rungs are the ones priced near even — that is where the market thinks the
+  // game actually is — so they sort to the top and the long shots fall away.
+  const ranked = useMemo(() => {
+    const score = (line: number) => {
+      let best = Infinity
+      for (const o of odds) {
+        const p = pricesAt(o, line)
+        if (!p) continue
+        const x = p.over ?? p.home
+        const y = p.under ?? p.away
+        // One-sided rungs have nothing to balance; rank them last but keep them.
+        if (x == null || y == null) continue
+        best = Math.min(best, Math.abs(x - y))
+      }
+      return best
+    }
+    return lines
+      .map((line) => ({ line, score: score(line) }))
+      .sort((m, n) => m.score - n.score || Math.abs(m.line) - Math.abs(n.line))
+  }, [lines, odds])
+  const visible = ranked.slice(0, shown)
 
   return (
     <>
@@ -1215,7 +1227,8 @@ function LadderTable<K extends string>({
         {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
         Alternate lines
         <span className="text-[color:var(--muted-2)]">
-          · {lines.length} across {odds.length} {odds.length === 1 ? 'book' : 'books'}
+          · {lines.length} across {odds.length} {odds.length === 1 ? 'book' : 'books'} · closest-priced
+          first
         </span>
       </button>
       {open && (
@@ -1250,12 +1263,8 @@ function LadderTable<K extends string>({
               </tr>
             </thead>
             <tbody className="tabular-nums">
-              {lines.map((line) => (
-                <tr
-                  key={line}
-                  ref={line === focusLine ? focusRow : undefined}
-                  className="border-t border-white/[0.04] hover:bg-white/[0.02]"
-                >
+              {visible.map(({ line }) => (
+                <tr key={line} className="border-t border-white/[0.04] hover:bg-white/[0.02]">
                   <td className="sticky left-0 z-10 bg-[color:var(--panel)] py-1.5 pl-4 pr-3 text-gray-200">
                     {fmtLineLabel(line)}
                   </td>
@@ -1285,6 +1294,15 @@ function LadderTable<K extends string>({
               ))}
             </tbody>
           </table>
+          {shown < ranked.length && (
+            <button
+              onClick={() => setShown((n) => n + LADDER_PAGE * 4)}
+              className="w-full border-t border-white/[0.05] bg-black/[0.2] py-2 text-[11px] font-medium text-[color:var(--muted)] hover:text-gray-200"
+            >
+              Load more · {ranked.length - shown} further{' '}
+              {ranked.length - shown === 1 ? 'line' : 'lines'}
+            </button>
+          )}
         </div>
       )}
     </>
@@ -1579,6 +1597,10 @@ function MovementTable<K extends string>({
     </div>
   )
 }
+
+/** Rungs of the alternate-lines ladder shown before "Load more" — enough to see
+ *  where the market is without the wall of long shots behind it. */
+const LADDER_PAGE = 5
 
 /** How often an open fixture re-reads its bets from each book. */
 const BETS_POLL_MS = 60_000
