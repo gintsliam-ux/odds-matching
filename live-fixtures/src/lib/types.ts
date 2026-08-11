@@ -80,6 +80,8 @@ export interface Fixture {
    */
   updatedAt: string | null
   bookmaker: string | null
+  /** Book behind the live in-play prices, when the feed names one. */
+  liveBookmaker: string | null
 
   liveH2h: OddsLine
   closingH2h: OddsLine

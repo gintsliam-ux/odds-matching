@@ -293,16 +293,16 @@ interface Row {
   is_live: boolean | null
   home_score: number | null
   away_score: number | null
-  closing_h2h_home: number | null
-  closing_h2h_draw: number | null
-  closing_h2h_away: number | null
-  closing_spread_line: number | null
-  closing_spread_home: number | null
-  closing_spread_away: number | null
-  closing_total_line: number | null
-  closing_total_over: number | null
-  closing_total_under: number | null
-  closing_bookmaker: string | null
+  /**
+   * The closing_* columns were DROPPED from live_fixtures. Everything they held
+   * now lives in pregame_odds (per book, per line), so the odds below are
+   * derived from that instead. Declared optional purely so a re-added column
+   * would still type-check.
+   */
+  closing_bookmaker?: string | null
+  /** Which book the live in-play prices come from. Not currently published by
+   *  the feed — see liveBookmaker in mapRow. */
+  live_bookmaker?: string | null
   live_h2h_home: number | null
   live_h2h_draw: number | null
   live_h2h_away: number | null
@@ -349,6 +349,34 @@ function numOrNull(v: unknown): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+/**
+ * A single representative h2h price per outcome, taken across the books in
+ * `pregame_odds` — the board's odds column and the "before kickoff" reference
+ * now that closing_h2h_* is gone.
+ *
+ * MEDIAN, not best and not a favoured book: the best price is an outlier by
+ * construction, and picking one book leaves the column blank whenever that book
+ * is absent (Pinnacle covers most fixtures but far from all).
+ */
+function consensusH2h(pregame: unknown): { home: number | null; draw: number | null; away: number | null } {
+  const h2h = (pregame as { h2h?: Record<string, unknown> } | null)?.h2h
+  const out = { home: null as number | null, draw: null as number | null, away: null as number | null }
+  if (!h2h || typeof h2h !== 'object') return out
+  for (const side of ['home', 'draw', 'away'] as const) {
+    const vals: number[] = []
+    for (const [book, v] of Object.entries(h2h)) {
+      if (book === 'line' || !v || typeof v !== 'object') continue
+      const n = (v as Record<string, unknown>)[side]
+      if (typeof n === 'number' && Number.isFinite(n)) vals.push(n)
+    }
+    if (!vals.length) continue
+    vals.sort((a, b) => a - b)
+    const mid = Math.floor(vals.length / 2)
+    out[side] = vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2
+  }
+  return out
+}
+
 function mapRow(r: Row, nowMs: number): Fixture {
   let status = normStatus(r.status, r.is_live)
 
@@ -365,17 +393,18 @@ function mapRow(r: Row, nowMs: number): Fixture {
     }
   }
   // Ghost upcoming fixtures: scheduled in the past with no actual_start, no
-  // pregame_odds, no closing line, no live data — game didn't happen. Mark
-  // completed so they fall out of upcoming counts and stop firing the
-  // "OPTIC still upcoming" notification.
+  // pregame_odds and no live data — game didn't happen. Mark completed so they
+  // fall out of upcoming counts and stop firing the "OPTIC still upcoming"
+  // notification. The closing-line arm of this test went with the columns; it
+  // was never load-bearing, since a fixture with a closing line always had
+  // pregame odds too.
   if (status === 'upcoming' && !r.actual_start && r.scheduled_start) {
     const overdueMs = nowMs - new Date(r.scheduled_start).getTime()
     if (overdueMs > STALE_GHOST_H * 3_600_000) {
       const noPregame =
         !r.pregame_odds || (typeof r.pregame_odds === 'object' && Object.keys(r.pregame_odds).length === 0)
-      const noClosing = r.closing_h2h_home == null && r.closing_bookmaker == null
       const noLive = r.live_h2h_home == null && r.live_updated_at == null
-      if (noPregame && noClosing && noLive) status = 'completed'
+      if (noPregame && noLive) status = 'completed'
     }
   }
   const live = status === 'live'
@@ -387,7 +416,11 @@ function mapRow(r: Row, nowMs: number): Fixture {
     new Date().toISOString()
 
   const liveH2h = { home: r.live_h2h_home, draw: r.live_h2h_draw, away: r.live_h2h_away }
-  const closingH2h = { home: r.closing_h2h_home, draw: r.closing_h2h_draw, away: r.closing_h2h_away }
+  // The last price we hold before kickoff, taken across the books in
+  // pregame_odds. It used to come from closing_h2h_*, which no longer exists —
+  // leaving the board's odds column blank on 486 of the 703 recent fixtures
+  // that have no live price but do have pregame books.
+  const closingH2h = consensusH2h(r.pregame_odds)
 
   // The feed's `sport` needs correcting from the league: generic `rugby` rows
   // mix Union + League, and a few leagues arrive filed under the wrong sport
@@ -423,18 +456,19 @@ function mapRow(r: Row, nowMs: number): Fixture {
     seasonType: r.season_type,
     liveUpdatedAt: r.live_updated_at,
     updatedAt: r.updated_at,
-    bookmaker: r.closing_bookmaker,
+    bookmaker: r.closing_bookmaker ?? null,
+    liveBookmaker: r.live_bookmaker ?? null,
     liveH2h,
     closingH2h,
     spread: {
-      line: r.closing_spread_line,
-      home: r.closing_spread_home,
-      away: r.closing_spread_away,
+      line: null,
+      home: null,
+      away: null,
     },
     total: {
-      line: r.closing_total_line,
-      over: r.closing_total_over,
-      under: r.closing_total_under,
+      line: null,
+      over: null,
+      under: null,
     },
     periods: parsePeriods(r.period_scores),
     pregameOdds: r.pregame_odds ?? null,

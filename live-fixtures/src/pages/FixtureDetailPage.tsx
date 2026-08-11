@@ -829,6 +829,7 @@ function MarketsTab({ fixture: f, now }: { fixture: Fixture; now: Date }) {
       .sort()
       .at(-1) ?? null
 
+  const hasLive = f.liveH2h.home != null || f.liveH2h.draw != null || f.liveH2h.away != null
   const h2hLive: Record<'home' | 'draw' | 'away', number | null> = {
     home: f.liveH2h.home,
     draw: f.liveH2h.draw,
@@ -839,11 +840,37 @@ function MarketsTab({ fixture: f, now }: { fixture: Fixture; now: Date }) {
     <>
       {/* feed-level metadata strip */}
       <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 border-t border-white/[0.05] bg-black/[0.12] px-5 py-2.5 text-[12px] text-[color:var(--muted)]">
+        {/* Who the LIVE prices come from, replacing the old "Primary" chip.
+            That chip read closing_bookmaker, a column since dropped from
+            live_fixtures, so it had been showing a permanent "—".
+
+            The feed does not currently name the live source either: there is no
+            column for it, and the live price matches a book's pregame main
+            price on only 45 of 997 fixtures — noise, not attribution. So say
+            plainly that it is unattributed rather than implying a book. Add a
+            `live_bookmaker` column and this names it with no further change. */}
         <span className="flex items-center gap-2">
-          Primary
-          <span className="rounded border border-[color:var(--line-soft)] bg-black/[0.3] px-1.5 py-0.5 text-[11px] font-medium text-gray-100">
-            {titleCaseBook(f.bookmaker ?? '—')}
-          </span>
+          Live odds
+          {hasLive ? (
+            <span
+              className={`rounded border px-1.5 py-0.5 text-[11px] font-medium ${
+                f.liveBookmaker
+                  ? 'border-[color:var(--line-soft)] bg-black/[0.3] text-gray-100'
+                  : 'border-[color:var(--line-soft)]/60 bg-black/[0.2] text-[color:var(--muted-2)]'
+              }`}
+              title={
+                f.liveBookmaker
+                  ? undefined
+                  : 'live_fixtures carries no column naming the live price source'
+              }
+            >
+              {f.liveBookmaker ? titleCaseBook(f.liveBookmaker) : 'source not published'}
+            </span>
+          ) : (
+            <span className="rounded border border-[color:var(--line-soft)]/60 bg-black/[0.2] px-1.5 py-0.5 text-[11px] font-medium text-[color:var(--muted-2)]">
+              none
+            </span>
+          )}
         </span>
         <span>
           Updated{' '}
