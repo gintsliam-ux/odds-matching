@@ -16,7 +16,7 @@ import { settleFromScore, type ScoreCtx } from '../lib/settleBet'
 import { leagueLabel, periodAbbrev, periodNoun, periodState } from '../lib/sports'
 import { Avatar } from '../components/Avatar'
 import { LeagueBadge } from '../components/LeagueBadge'
-import type { Fixture } from '../lib/types'
+import type { Fixture, FlucSnapshot } from '../lib/types'
 import { agoLabel, fmtDateTime, fmtLine, melbDateTime, melbDayTime, overdueMinutes, placementOffset, startsInLabel } from '../lib/format'
 import { fetchEventMappingsFor, fetchCompetitionMappings, type EventMapping, type CompetitionMapping } from '../lib/mappingData'
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
@@ -770,6 +770,20 @@ function MarketsTab({ fixture: f }: { fixture: Fixture }) {
               : '—'}
           </span>
         </span>
+        {(f.openAt || f.closeAt) && (
+          <span className="flex items-center gap-4">
+            {f.openAt && (
+              <span>
+                Opened <span className="ml-1 text-gray-200 tabular-nums">{fmtDateTime(f.openAt)}</span>
+              </span>
+            )}
+            {f.closeAt && (
+              <span>
+                Closed <span className="ml-1 text-gray-200 tabular-nums">{fmtDateTime(f.closeAt)}</span>
+              </span>
+            )}
+          </span>
+        )}
         {po && (
           <span className="ml-auto text-[color:var(--muted-2)]">
             {h2hBooks.length + spreadBooks.length + totalBooks.length} book rows ·{' '}
@@ -797,6 +811,7 @@ function MarketsTab({ fixture: f }: { fixture: Fixture }) {
               (po?.h2h?.[book] as { [k: string]: number | null | undefined })?.[k] ?? null
             }
             getLive={(k) => h2hLive[k]}
+            flucs={f.flucs?.h2h}
           />
         )}
 
@@ -815,6 +830,7 @@ function MarketsTab({ fixture: f }: { fixture: Fixture }) {
               (po?.spread?.[book] as { [k: string]: number | null | undefined })?.[k] ?? null
             }
             getLive={() => null}
+            flucs={f.flucs?.spread}
           />
         )}
 
@@ -833,6 +849,7 @@ function MarketsTab({ fixture: f }: { fixture: Fixture }) {
               (po?.total?.[book] as { [k: string]: number | null | undefined })?.[k] ?? null
             }
             getLive={() => null}
+            flucs={f.flucs?.total}
           />
         )}
 
@@ -881,6 +898,68 @@ interface MarketOutcome<K extends string> {
 
 /** One market card (H2H / Spread / Total) — header + outcome rows with the
  *  best-price chip, the per-book grid, and the live consensus column. */
+// ---------------------------------------------------------------------------
+// Flucs: what a book's price did on the way to the jump.
+//
+// The capture schedule lives in the feed, not here — currently open / 6h / 30m
+// / 10m / close, with a daily snapshot, 3h and 1h intended. So NOTHING below
+// hard-codes the stage list: stages are whatever the data carries, ordered by
+// the `at` timestamp each snapshot stamps itself with. A new stage shows up as
+// a new column on its own.
+
+/** Pretty label for a stage key. Unknown keys (a daily snapshot, say) fall back
+ *  to the key itself, so a new capture point is readable before it is known. */
+const FLUC_STAGE_LABEL: Record<string, string> = {
+  open: 'Open',
+  '6h': '6h out',
+  '3h': '3h out',
+  '1h': '1h out',
+  '30m': '30m',
+  '10m': '10m',
+  close: 'Close',
+}
+
+/** Open is always first and close always last regardless of clock: a book
+ *  re-listed after a suspension can stamp an `open` later than its own 6h. */
+function stageRank(stage: string): number {
+  if (stage === 'open') return -1
+  if (stage === 'close') return 1
+  return 0
+}
+
+/** Every stage any book recorded for this market, oldest first. */
+function stagesPresent(
+  byBook: Record<string, Partial<Record<string, FlucSnapshot>>> | undefined,
+): string[] {
+  if (!byBook) return []
+  const firstSeen = new Map<string, number>()
+  for (const stages of Object.values(byBook)) {
+    for (const [stage, snap] of Object.entries(stages ?? {})) {
+      const t = snap?.at ? Date.parse(snap.at) : NaN
+      const prev = firstSeen.get(stage)
+      if (prev == null || (Number.isFinite(t) && t < prev)) firstSeen.set(stage, Number.isFinite(t) ? t : (prev ?? Infinity))
+    }
+  }
+  return [...firstSeen.keys()].sort((a, b) => {
+    const r = stageRank(a) - stageRank(b)
+    if (r !== 0) return r
+    return (firstSeen.get(a) ?? Infinity) - (firstSeen.get(b) ?? Infinity)
+  })
+}
+
+/** Percentage move from the first recorded price to the last. */
+function drift(from: number | null | undefined, to: number | null | undefined): number | null {
+  if (from == null || to == null || from <= 0) return null
+  return ((to - from) / from) * 100
+}
+
+/** A book's margin on a market: sum of implied probabilities, less 1. Negative
+ *  across BEST prices is an arb — the whole reason to show it per book. */
+function overround(prices: Array<number | null>): number | null {
+  if (!prices.length || prices.some((p) => p == null || p <= 0)) return null
+  return (prices as number[]).reduce((sum, p) => sum + 1 / p, 0) - 1
+}
+
 function MarketCard<K extends string>({
   title,
   kind,
@@ -889,6 +968,7 @@ function MarketCard<K extends string>({
   outcomes,
   getPrice,
   getLive,
+  flucs,
 }: {
   title: string
   kind: 'moneyline' | 'spread' | 'total'
@@ -897,7 +977,10 @@ function MarketCard<K extends string>({
   outcomes: MarketOutcome<K>[]
   getPrice: (book: string, key: K) => number | null
   getLive: (key: K) => number | null
+  /** This market's price history, book → stage → snapshot. */
+  flucs?: Record<string, Partial<Record<string, FlucSnapshot>>>
 }) {
+  const [view, setView] = useState<'prices' | 'movement'>('prices')
   // Best (highest decimal) price + which book offered it, per outcome.
   const best = outcomes.map((o) => {
     let bestPrice = 0
@@ -912,6 +995,17 @@ function MarketCard<K extends string>({
     return { price: bestPrice, book: bestBook }
   })
   const hasLive = outcomes.some((o) => getLive(o.key) != null)
+
+  // Margin per book, and across the best prices — where a negative number is
+  // an arb rather than a rounding artefact.
+  const bookMargin = new Map<string, number | null>()
+  for (const b of books) bookMargin.set(b, overround(outcomes.map((o) => getPrice(b, o.key))))
+  const bestMargin = overround(best.map((x) => (x.price > 0 ? x.price : null)))
+
+  const stages = stagesPresent(flucs)
+  const flucBooks = flucs ? Object.keys(flucs).filter((b) => Object.keys(flucs[b] ?? {}).length > 0) : []
+  const hasFlucs = stages.length > 1 && flucBooks.length > 0
+  const showing = hasFlucs ? view : 'prices'
 
   const accent =
     kind === 'moneyline'
@@ -931,9 +1025,31 @@ function MarketCard<K extends string>({
             </span>
           )}
         </div>
-        <span className="text-[11.5px] text-[color:var(--muted-2)]">{books.length} books</span>
+        <div className="flex items-center gap-3">
+          {hasFlucs && (
+            <div className="flex items-center gap-0.5 rounded border border-[color:var(--line-soft)] bg-black/[0.25] p-0.5">
+              {(['prices', 'movement'] as const).map((v) => (
+                <button
+                  key={v}
+                  onClick={() => setView(v)}
+                  className={`rounded px-2 py-0.5 text-[10.5px] font-medium capitalize ${
+                    showing === v ? 'bg-white/10 text-gray-100' : 'text-[color:var(--muted-2)] hover:text-gray-300'
+                  }`}
+                >
+                  {v}
+                </button>
+              ))}
+            </div>
+          )}
+          <span className="text-[11.5px] text-[color:var(--muted-2)]">
+            {showing === 'movement' ? `${flucBooks.length} tracked · ${stages.length} stages` : `${books.length} books`}
+          </span>
+        </div>
       </div>
 
+      {showing === 'movement' ? (
+        <MovementTable outcomes={outcomes} stages={stages} books={flucBooks} flucs={flucs ?? {}} />
+      ) : (
       <div className="overflow-x-auto">
         <table className="w-full text-[12.5px]">
           <thead>
@@ -1023,8 +1139,154 @@ function MarketCard<K extends string>({
               )
             })}
           </tbody>
+          {/* Margin per book — the book's cut on this market. Across the BEST
+              column a negative number is a genuine arb, not rounding. */}
+          <tfoot>
+            <tr className="border-t border-white/[0.08] text-[11px]">
+              <th className="sticky left-0 z-10 bg-[color:var(--panel)] py-2 pl-4 pr-3 text-left font-medium text-[color:var(--muted)]">
+                Margin
+              </th>
+              {hasLive && <td />}
+              <td className="px-2 py-2 text-right tabular-nums">
+                {bestMargin == null ? (
+                  <span className="text-[color:var(--muted-2)]/60">—</span>
+                ) : (
+                  <span
+                    className={
+                      bestMargin < 0
+                        ? 'rounded bg-[color:var(--total)]/15 px-1.5 py-0.5 font-bold text-[color:var(--total)]'
+                        : 'text-[color:var(--muted)]'
+                    }
+                    title={bestMargin < 0 ? 'Negative across best prices — arb' : undefined}
+                  >
+                    {(bestMargin * 100).toFixed(1)}%
+                  </span>
+                )}
+              </td>
+              {books.map((b) => {
+                const m = bookMargin.get(b) ?? null
+                return (
+                  <td key={b} className="px-2 py-2 text-right tabular-nums text-[color:var(--muted)]">
+                    {m == null ? <span className="text-gray-700">—</span> : `${(m * 100).toFixed(1)}%`}
+                  </td>
+                )
+              })}
+            </tr>
+          </tfoot>
         </table>
       </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * How each book's price moved on the way to the jump: one row per book and
+ * outcome, one column per captured stage, oldest on the left.
+ *
+ * Stage columns come from the data, so when the feed starts capturing 3h, 1h
+ * or a daily snapshot they appear here without a change to this component.
+ */
+function MovementTable<K extends string>({
+  outcomes,
+  stages,
+  books,
+  flucs,
+}: {
+  outcomes: MarketOutcome<K>[]
+  stages: string[]
+  books: string[]
+  flucs: Record<string, Partial<Record<string, FlucSnapshot>>>
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-[12.5px]">
+        <thead>
+          <tr className="text-[11px] text-[color:var(--muted)]">
+            <th className="sticky left-0 z-10 bg-[color:var(--panel)] py-2.5 pl-4 pr-3 text-left font-medium">
+              Book
+            </th>
+            <th className="px-2 py-2.5 text-left font-medium">Outcome</th>
+            {stages.map((st) => (
+              <th key={st} className="px-2 py-2.5 text-right font-medium">
+                {FLUC_STAGE_LABEL[st] ?? st}
+              </th>
+            ))}
+            <th className="px-3 py-2.5 text-right font-medium">Drift</th>
+          </tr>
+        </thead>
+        <tbody className="tabular-nums">
+          {books.flatMap((b) => {
+            const byStage = flucs[b] ?? {}
+            return outcomes.map((o, oi) => {
+              const prices = stages.map((st) => {
+                const v = (byStage[st] as Record<string, number | null | undefined> | undefined)?.[o.key]
+                return typeof v === 'number' ? v : null
+              })
+              // Drift runs first-recorded → last-recorded, which is not always
+              // open → close: a book that only appeared at 30m still has a
+              // meaningful move from there.
+              const firstIdx = prices.findIndex((v) => v != null)
+              const lastIdx = prices.length - 1 - [...prices].reverse().findIndex((v) => v != null)
+              const d = firstIdx < 0 ? null : drift(prices[firstIdx], prices[lastIdx])
+              const t = bookTint(b)
+              return (
+                <tr
+                  key={`${b}-${o.key as string}`}
+                  className={`hover:bg-white/[0.02] ${oi === 0 ? 'border-t border-white/[0.06]' : ''}`}
+                >
+                  <td className="sticky left-0 z-10 bg-[color:var(--panel)] py-2 pl-4 pr-3">
+                    {oi === 0 && (
+                      <span
+                        className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${t.text} ${t.bg} ${t.border}`}
+                      >
+                        {titleCaseBook(b)}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-2 py-2 text-gray-100">{o.label}</td>
+                  {prices.map((v, i) => {
+                    const prev = prices.slice(0, i).reverse().find((x) => x != null) ?? null
+                    const moved = v != null && prev != null && v !== prev
+                    return (
+                      <td key={stages[i]} className="px-2 py-2 text-right">
+                        {v == null ? (
+                          <span className="text-gray-700">—</span>
+                        ) : (
+                          <span
+                            title={byStage[stages[i]]?.at ? fmtDateTime(byStage[stages[i]]?.at ?? null) : undefined}
+                            className={
+                              moved
+                                ? v > (prev as number)
+                                  ? 'text-[color:var(--total)]'
+                                  : 'text-[color:var(--live)]'
+                                : 'text-gray-100'
+                            }
+                          >
+                            {v.toFixed(2)}
+                          </span>
+                        )}
+                      </td>
+                    )
+                  })}
+                  <td className="px-3 py-2 text-right">
+                    {d == null ? (
+                      <span className="text-gray-700">—</span>
+                    ) : Math.abs(d) < 0.05 ? (
+                      <span className="text-[color:var(--muted-2)]">flat</span>
+                    ) : (
+                      <span className={d > 0 ? 'text-[color:var(--total)]' : 'text-[color:var(--live)]'}>
+                        {d > 0 ? '+' : ''}
+                        {d.toFixed(1)}%
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              )
+            })
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }

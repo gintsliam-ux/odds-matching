@@ -313,6 +313,9 @@ interface Row {
   season_type: string | null
   period_scores: { home?: Record<string, number | null>; away?: Record<string, number | null> } | null
   pregame_odds: import('./types').PregameOdds | null
+  flucs: import('./types').Flucs | null
+  open_at: string | null
+  close_at: string | null
   // Optional logo/headshot columns — not present yet, but read if the scraper
   // ever persists OpticOdds' team/player image URLs.
   home_team_logo?: string | null
@@ -435,6 +438,9 @@ function mapRow(r: Row, nowMs: number): Fixture {
     },
     periods: parsePeriods(r.period_scores),
     pregameOdds: r.pregame_odds ?? null,
+    flucs: r.flucs ?? null,
+    openAt: r.open_at ?? null,
+    closeAt: r.close_at ?? null,
   }
 }
 

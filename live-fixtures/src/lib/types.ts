@@ -95,6 +95,11 @@ export interface Fixture {
    * one nested object per bookmaker keyed by book name.
    */
   pregameOdds: PregameOdds | null
+  /** Per-book price history at fixed stages before the jump. */
+  flucs: Flucs | null
+  /** When the market first opened / was last priced before going off. */
+  openAt: string | null
+  closeAt: string | null
 }
 
 export interface PregameH2hBook {
@@ -114,6 +119,32 @@ export interface PregameOdds {
   h2h?: { line?: number | null } & Record<string, PregameH2hBook>
   spread?: { line?: number | null } & Record<string, PregameSpreadBook>
   total?: { line?: number | null } & Record<string, PregameTotalBook>
+}
+
+/** The stages a fluc is snapshotted at, oldest first. Not every stage exists on
+ *  every book — a book listed 20 minutes before the jump has no `6h`, and only
+ *  a fixture that has actually closed has a `close`. */
+export const FLUC_STAGES = ['open', '6h', '30m', '10m', 'close'] as const
+export type FlucStage = (typeof FLUC_STAGES)[number]
+
+/** One snapshot: the prices at that moment, plus when it was taken. Carries the
+ *  same outcome keys as the matching pregame_odds book, so h2h has home/away
+ *  (/draw), total has over/under and spread has home/away (+ its own line). */
+export interface FlucSnapshot {
+  at?: string | null
+  home?: number | null
+  away?: number | null
+  draw?: number | null
+  over?: number | null
+  under?: number | null
+  line?: number | null
+}
+
+/** live_fixtures.flucs — market → book → stage → snapshot. */
+export interface Flucs {
+  h2h?: Record<string, Partial<Record<FlucStage, FlucSnapshot>>>
+  spread?: Record<string, Partial<Record<FlucStage, FlucSnapshot>>>
+  total?: Record<string, Partial<Record<FlucStage, FlucSnapshot>>>
 }
 
 export type StatusFilter = 'all' | FixtureStatus
