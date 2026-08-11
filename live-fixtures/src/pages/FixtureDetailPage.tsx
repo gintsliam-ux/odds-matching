@@ -801,16 +801,16 @@ function MarketsTab({ fixture: f }: { fixture: Fixture }) {
             title="Head to Head"
             kind="moneyline"
             books={h2hBooks}
-            line={null}
             outcomes={[
               { label: f.homeName, key: 'home' },
-              ...(hasDraw ? [{ label: 'Draw', key: 'draw' as const }] : []),
+              ...(hasDraw ? [{ label: 'Draw', key: 'draw' }] : []),
               { label: f.awayName, key: 'away' },
             ]}
             getPrice={(book, k) =>
               (po?.h2h?.[book] as { [k: string]: number | null | undefined })?.[k] ?? null
             }
-            getLive={(k) => h2hLive[k]}
+            getLive={(k) => h2hLive[k as 'home' | 'draw' | 'away'] ?? null}
+            getLine={() => null}
             flucs={f.flucs?.h2h}
           />
         )}
@@ -821,15 +821,17 @@ function MarketsTab({ fixture: f }: { fixture: Fixture }) {
             title="Spread"
             kind="spread"
             books={spreadBooks}
-            line={po?.spread?.line ?? null}
             outcomes={[
-              { label: f.homeName, key: 'home', lineSuffix: fmtLine(po?.spread?.line ?? null) },
-              { label: f.awayName, key: 'away', lineSuffix: fmtLine(negate(po?.spread?.line ?? null)) },
+              { label: f.homeName, key: 'home' },
+              { label: f.awayName, key: 'away' },
             ]}
             getPrice={(book, k) =>
               (po?.spread?.[book] as { [k: string]: number | null | undefined })?.[k] ?? null
             }
             getLive={() => null}
+            getLine={(book) => bookLine(po?.spread, book)}
+            // The away side of a handicap is the home side negated.
+            lineSuffix={(k, line) => (line == null ? undefined : fmtLine(k === 'away' ? negate(line) : line))}
             flucs={f.flucs?.spread}
           />
         )}
@@ -840,15 +842,16 @@ function MarketsTab({ fixture: f }: { fixture: Fixture }) {
             title="Total"
             kind="total"
             books={totalBooks}
-            line={po?.total?.line ?? null}
             outcomes={[
-              { label: 'Over', key: 'over', lineSuffix: po?.total?.line != null ? `O ${po.total.line}` : undefined },
-              { label: 'Under', key: 'under', lineSuffix: po?.total?.line != null ? `U ${po.total.line}` : undefined },
+              { label: 'Over', key: 'over' },
+              { label: 'Under', key: 'under' },
             ]}
             getPrice={(book, k) =>
               (po?.total?.[book] as { [k: string]: number | null | undefined })?.[k] ?? null
             }
             getLive={() => null}
+            getLine={(book) => bookLine(po?.total, book)}
+            lineSuffix={(k, line) => (line == null ? undefined : `${k === 'over' ? 'O' : 'U'} ${line}`)}
             flucs={f.flucs?.total}
           />
         )}
@@ -893,7 +896,6 @@ function americanOdds(decimal: number): string {
 interface MarketOutcome<K extends string> {
   label: string
   key: K
-  lineSuffix?: string
 }
 
 /** One market card (H2H / Spread / Total) — header + outcome rows with the
@@ -947,6 +949,27 @@ function stagesPresent(
   })
 }
 
+/**
+ * The line a book is quoting on this market.
+ *
+ * The line lives PER BOOK — `spread.Pinnacle.line` is 1 while
+ * `spread.FanDuel.line` is 1.5 on the same game — and only some blocks carry a
+ * market-level `line` as well. Reading only the market-level key (as this page
+ * used to) dropped the line entirely on most fixtures AND silently compared
+ * books quoting different handicaps as if they were the same bet.
+ */
+function bookLine(block: Record<string, unknown> | undefined, book: string): number | null {
+  const b = block?.[book] as { line?: unknown } | undefined
+  if (typeof b?.line === 'number') return b.line
+  const marketLine = (block as { line?: unknown } | undefined)?.line
+  return typeof marketLine === 'number' ? marketLine : null
+}
+
+/** Stable key for grouping — `null` (no line quoted) is its own group. */
+function lineKey(line: number | null): string {
+  return line == null ? 'none' : String(line)
+}
+
 /** Percentage move from the first recorded price to the last. */
 function drift(from: number | null | undefined, to: number | null | undefined): number | null {
   if (from == null || to == null || from <= 0) return null
@@ -964,44 +987,50 @@ function MarketCard<K extends string>({
   title,
   kind,
   books,
-  line,
   outcomes,
   getPrice,
   getLive,
+  getLine,
+  lineSuffix,
   flucs,
 }: {
   title: string
   kind: 'moneyline' | 'spread' | 'total'
   books: string[]
-  line: number | null
   outcomes: MarketOutcome<K>[]
   getPrice: (book: string, key: K) => number | null
   getLive: (key: K) => number | null
+  /** The line this book quotes. Null for a market without one (h2h). */
+  getLine: (book: string) => number | null
+  /** How an outcome names the line — "+1.5" for a spread, "O 7.5" for a total. */
+  lineSuffix?: (key: K, line: number | null) => string | undefined
   /** This market's price history, book → stage → snapshot. */
   flucs?: Record<string, Partial<Record<string, FlucSnapshot>>>
 }) {
   const [view, setView] = useState<'prices' | 'movement'>('prices')
-  // Best (highest decimal) price + which book offered it, per outcome.
-  const best = outcomes.map((o) => {
-    let bestPrice = 0
-    let bestBook: string | null = null
+
+  // ONE TABLE PER LINE. Books do not agree on the handicap — Pinnacle quotes a
+  // baseball spread at 1 while FanDuel quotes 1.5 on the same game — and laying
+  // them side by side in one grid invites reading across two different bets.
+  // It also produced a false arb: a "best" 1.93 from the 1 line against a
+  // "best" 2.14 from the 1.5 line summed to a negative margin that no one
+  // could have taken.
+  const groups = (() => {
+    const byLine = new Map<string, { line: number | null; books: string[] }>()
     for (const b of books) {
-      const v = getPrice(b, o.key)
-      if (v != null && v > bestPrice) {
-        bestPrice = v
-        bestBook = b
-      }
+      const line = getLine(b)
+      const k = lineKey(line)
+      const g = byLine.get(k)
+      if (g) g.books.push(b)
+      else byLine.set(k, { line, books: [b] })
     }
-    return { price: bestPrice, book: bestBook }
-  })
+    // Most-quoted line first — that is the market everyone means.
+    return [...byLine.values()].sort(
+      (a, z) => z.books.length - a.books.length || (a.line ?? 0) - (z.line ?? 0),
+    )
+  })()
+
   const hasLive = outcomes.some((o) => getLive(o.key) != null)
-
-  // Margin per book, and across the best prices — where a negative number is
-  // an arb rather than a rounding artefact.
-  const bookMargin = new Map<string, number | null>()
-  for (const b of books) bookMargin.set(b, overround(outcomes.map((o) => getPrice(b, o.key))))
-  const bestMargin = overround(best.map((x) => (x.price > 0 ? x.price : null)))
-
   const stages = stagesPresent(flucs)
   const flucBooks = flucs ? Object.keys(flucs).filter((b) => Object.keys(flucs[b] ?? {}).length > 0) : []
   const hasFlucs = stages.length > 1 && flucBooks.length > 0
@@ -1019,9 +1048,9 @@ function MarketCard<K extends string>({
       <div className="flex items-center justify-between border-b border-white/[0.05] px-4 py-3">
         <div className="flex items-center gap-2.5">
           <span className="text-[14px] font-semibold text-gray-100">{title}</span>
-          {line != null && (
+          {groups.length > 1 && (
             <span className="rounded border border-[color:var(--line-soft)] bg-black/[0.2] px-2 py-0.5 text-[11px] font-medium text-gray-300">
-              Line {kind === 'spread' ? fmtLine(line) : line}
+              {groups.length} lines
             </span>
           )}
         </div>
@@ -1050,6 +1079,82 @@ function MarketCard<K extends string>({
       {showing === 'movement' ? (
         <MovementTable outcomes={outcomes} stages={stages} books={flucBooks} flucs={flucs ?? {}} />
       ) : (
+        groups.map((g, gi) => (
+          <PriceTable
+            key={lineKey(g.line)}
+            kind={kind}
+            line={g.line}
+            books={g.books}
+            outcomes={outcomes}
+            getPrice={getPrice}
+            getLive={getLive}
+            lineSuffix={lineSuffix}
+            // The live consensus is a single number for the fixture, not per
+            // line, so it belongs to the main (most-quoted) group only.
+            showLive={hasLive && gi === 0}
+            showLineHeader={groups.length > 1 || g.line != null}
+          />
+        ))
+      )}
+    </div>
+  )
+}
+
+/**
+ * The per-book price grid for ONE line of a market: outcomes down, books
+ * across, with the best price per outcome and each book's margin.
+ */
+function PriceTable<K extends string>({
+  kind,
+  line,
+  books,
+  outcomes,
+  getPrice,
+  getLive,
+  lineSuffix,
+  showLive,
+  showLineHeader,
+}: {
+  kind: 'moneyline' | 'spread' | 'total'
+  line: number | null
+  books: string[]
+  outcomes: MarketOutcome<K>[]
+  getPrice: (book: string, key: K) => number | null
+  getLive: (key: K) => number | null
+  lineSuffix?: (key: K, line: number | null) => string | undefined
+  showLive: boolean
+  showLineHeader: boolean
+}) {
+  // Best price per outcome, WITHIN this line — comparing across lines would be
+  // comparing different bets.
+  const best = outcomes.map((o) => {
+    let bestPrice = 0
+    let bestBook: string | null = null
+    for (const b of books) {
+      const v = getPrice(b, o.key)
+      if (v != null && v > bestPrice) {
+        bestPrice = v
+        bestBook = b
+      }
+    }
+    return { price: bestPrice, book: bestBook }
+  })
+  const bookMargin = new Map<string, number | null>()
+  for (const b of books) bookMargin.set(b, overround(outcomes.map((o) => getPrice(b, o.key))))
+  const bestMargin = overround(best.map((x) => (x.price > 0 ? x.price : null)))
+
+  return (
+    <>
+      {showLineHeader && (
+        <div className="flex items-center gap-2 border-t border-white/[0.05] bg-black/[0.15] px-4 py-1.5">
+          <span className="rounded border border-[color:var(--line-soft)] bg-black/[0.25] px-2 py-0.5 text-[10.5px] font-medium text-gray-300">
+            {line == null ? 'No line' : kind === 'spread' ? `Line ${fmtLine(line)}` : `Line ${line}`}
+          </span>
+          <span className="text-[10.5px] text-[color:var(--muted-2)]">
+            {books.length} {books.length === 1 ? 'book' : 'books'}
+          </span>
+        </div>
+      )}
       <div className="overflow-x-auto">
         <table className="w-full text-[12.5px]">
           <thead>
@@ -1057,7 +1162,7 @@ function MarketCard<K extends string>({
               <th className="sticky left-0 z-10 bg-[color:var(--panel)] py-2.5 pl-4 pr-3 text-left font-medium">
                 Outcome
               </th>
-              {hasLive && (
+              {showLive && (
                 <th className="px-2 py-2.5 text-right font-medium text-[color:var(--live)]">Live</th>
               )}
               <th className="px-2 py-2.5 text-right font-medium text-[color:var(--total)]">Best</th>
@@ -1079,19 +1184,20 @@ function MarketCard<K extends string>({
             {outcomes.map((o, i) => {
               const liveV = getLive(o.key)
               const bestThis = best[i]
+              const suffix = lineSuffix?.(o.key, line)
               return (
                 <tr key={o.key as string} className="border-t border-white/[0.04] hover:bg-white/[0.02]">
                   <td className="sticky left-0 z-10 bg-[color:var(--panel)] py-2.5 pl-4 pr-3">
                     <div className="flex items-center gap-2">
                       <span className="text-gray-100">{o.label}</span>
-                      {o.lineSuffix && (
+                      {suffix && (
                         <span className="rounded bg-black/[0.2] px-1.5 py-0.5 text-[10.5px] text-[color:var(--muted)]">
-                          {o.lineSuffix}
+                          {suffix}
                         </span>
                       )}
                     </div>
                   </td>
-                  {hasLive && (
+                  {showLive && (
                     <td className="px-2 py-2.5 text-right">
                       {liveV != null ? (
                         <span className="font-semibold text-[color:var(--live)]">{liveV.toFixed(2)}</span>
@@ -1139,14 +1245,14 @@ function MarketCard<K extends string>({
               )
             })}
           </tbody>
-          {/* Margin per book — the book's cut on this market. Across the BEST
-              column a negative number is a genuine arb, not rounding. */}
+          {/* Margin per book, and across the best prices on THIS line — where a
+              negative number is a real arb rather than two different bets. */}
           <tfoot>
             <tr className="border-t border-white/[0.08] text-[11px]">
               <th className="sticky left-0 z-10 bg-[color:var(--panel)] py-2 pl-4 pr-3 text-left font-medium text-[color:var(--muted)]">
                 Margin
               </th>
-              {hasLive && <td />}
+              {showLive && <td />}
               <td className="px-2 py-2 text-right tabular-nums">
                 {bestMargin == null ? (
                   <span className="text-[color:var(--muted-2)]/60">—</span>
@@ -1157,7 +1263,7 @@ function MarketCard<K extends string>({
                         ? 'rounded bg-[color:var(--total)]/15 px-1.5 py-0.5 font-bold text-[color:var(--total)]'
                         : 'text-[color:var(--muted)]'
                     }
-                    title={bestMargin < 0 ? 'Negative across best prices — arb' : undefined}
+                    title={bestMargin < 0 ? 'Negative across best prices on this line — arb' : undefined}
                   >
                     {(bestMargin * 100).toFixed(1)}%
                   </span>
@@ -1175,18 +1281,10 @@ function MarketCard<K extends string>({
           </tfoot>
         </table>
       </div>
-      )}
-    </div>
+    </>
   )
 }
 
-/**
- * How each book's price moved on the way to the jump: one row per book and
- * outcome, one column per captured stage, oldest on the left.
- *
- * Stage columns come from the data, so when the feed starts capturing 3h, 1h
- * or a daily snapshot they appear here without a change to this component.
- */
 function MovementTable<K extends string>({
   outcomes,
   stages,
