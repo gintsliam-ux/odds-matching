@@ -146,7 +146,13 @@ export function normaliseMarket(
     if (book === 'line' || book === 'at') continue
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
     const v = raw as Record<string, unknown>
-    const keys = Object.keys(v)
+    // A fluc snapshot carries its `at` timestamp as a SIBLING of the line keys
+    //   { at: "…", "0.5": {…}, "1": {…} }
+    // so testing "every key is a line" against the raw keys said "not nested",
+    // sent the book down the flat branch, found no top-level home/away and
+    // dropped it. That is why Movement never appeared for spread or total
+    // despite the feed carrying 2-8 stages for them on ~145 fixtures each.
+    const keys = Object.keys(v).filter((k) => k !== 'at')
     const nested = keys.length > 0 && keys.every(isLineKey)
 
     let lines: BookLine[]

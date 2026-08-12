@@ -1134,10 +1134,6 @@ function MarketCard<K extends string>({
   })()
 
   const hasLive = outcomes.some((o) => getLive(o.key) != null)
-  // The live market can sit on a line no book quoted before the jump — an
-  // in-play total drifts as the game goes. Rather than hide it (which is what
-  // pinning Live to the first group does), give it its own row.
-  const liveOrphan = hasLive && liveLine !== undefined && !groups.some((g) => g.line === liveLine)
   // A ladder only exists when some book quotes more than its main line.
   const ladderLines = allLines(odds)
   const hasLadder = odds.some((b) => b.lines.length > 1)
@@ -1191,8 +1187,8 @@ function MarketCard<K extends string>({
 
       {showing === 'movement' ? (
         <MovementTable outcomes={outcomes} stages={stages} books={flucBooks} flucs={flucs ?? {}} />
-      ) : (
-        groups.map((g, gi) => (
+      ) : kind === 'moneyline' ? (
+        groups.map((g) => (
           <PriceTable
             key={lineKey(g.line)}
             kind={kind}
@@ -1202,193 +1198,259 @@ function MarketCard<K extends string>({
             getPrice={getPrice}
             getLive={getLive}
             lineSuffix={lineSuffix}
-            // Live belongs to the group on the live market's line. For h2h
-            // (no line) that is the first group; when the live line matches no
-            // group it is rendered separately below instead.
-            showLive={hasLive && !liveOrphan && (liveLine === undefined ? gi === 0 : g.line === liveLine)}
-            showLineHeader={groups.length > 1 || g.line != null}
+            showLive={hasLive}
+            showLineHeader={false}
           />
         ))
-      )}
-      {showing === 'prices' && liveOrphan && (
-        <div className="border-t border-white/[0.05] bg-[color:var(--live)]/[0.05] px-4 py-2">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px]">
-            <span className="rounded border border-[color:var(--live)]/30 bg-[color:var(--live)]/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-[color:var(--live)]">
-              LIVE
-            </span>
-            <span className="text-[color:var(--muted)]">
-              {liveLine == null ? 'no line' : kind === 'spread' ? `Line ${fmtLine(liveLine)}` : `Line ${liveLine}`}
-            </span>
-            {outcomes.map((o) => {
-              const v = getLive(o.key)
-              return (
-                <span key={o.key as string} className="flex items-center gap-1.5">
-                  <span className="text-gray-300">{o.label}</span>
-                  <span className="font-semibold tabular-nums text-[color:var(--live)]">
-                    {v != null ? v.toFixed(2) : '—'}
-                  </span>
-                </span>
-              )
-            })}
-            <span className="text-[10.5px] text-[color:var(--muted-2)]">
-              no book quoted this line before the jump
-            </span>
-          </div>
-        </div>
-      )}
-      {showing === 'prices' && hasLadder && (
-        <LadderTable kind={kind} odds={odds} lines={ladderLines} outcomes={outcomes} />
+      ) : (
+        // A handicap or total is one market quoted at many lines, so it reads
+        // as a single grid of selections — "Marlins -1.5" above "Pirates +1.5",
+        // every line stacked — rather than a separate table per line with its
+        // own header and margin row.
+        <LinesTable
+          kind={kind}
+          odds={odds}
+          outcomes={outcomes}
+          books={books}
+          live={hasLive ? { line: liveLine ?? null, get: getLive } : null}
+        />
       )}
     </div>
   )
 }
 
 /**
- * Every alternate line a book quotes, one row per line.
+ * A handicap or total as one grid of selections, every line stacked.
  *
- * The feed now ships the whole ladder — up to 169 rungs on a single book — and
- * the headline grid deliberately shows only each book's main line. This is the
- * rest of it: collapsed by default because it is long, and rendered as one row
- * per line rather than a table per line, which is the only shape that stays
- * readable at that length.
+ * This is the shape an odds screen uses: a row per selection — "Marlins -1.5"
+ * with "Pirates +1.5" beneath it — for each line the books quote, best price
+ * badged, and a dash where a book isn't on that line. It replaces a table per
+ * line, each with its own header and margin row, which cost a screen of
+ * chrome to show three lines and buried the rest behind an expander.
+ *
+ * Order is deliberate: the LIVE line first while a game is in play (that is
+ * the market you are actually watching), then the line the books lead with,
+ * then whatever is priced closest to even. Five lines, then the rest on
+ * request — a single book can quote 169 of them.
  */
-function LadderTable<K extends string>({
+function LinesTable<K extends string>({
   kind,
   odds,
-  lines,
   outcomes,
+  books,
+  live,
 }: {
   kind: 'moneyline' | 'spread' | 'total'
   odds: BookOdds[]
-  lines: number[]
   outcomes: MarketOutcome<K>[]
+  books: string[]
+  live: { line: number | null; get: (key: K) => number | null } | null
 }) {
-  const [open, setOpen] = useState(false)
   const [shown, setShown] = useState(LADDER_PAGE)
-  const [a, b] = outcomes
-  const fmtLineLabel = (n: number) => (kind === 'spread' ? fmtLine(n) : String(n))
+  const byBook = useMemo(() => new Map(odds.map((o) => [o.book, o])), [odds])
+  // Hoisted: an optional-chained value in a dependency list defeats the
+  // compiler's memoization.
+  const liveLine = live?.line ?? null
 
-  // Ordered by how EVEN the two sides are, not by line number.
-  //
-  // The ladder runs -99.5 to +68.5 on a single AFL book, and in line order it
-  // opens on rungs nobody is pricing (a 46.00 under at -99.5). The interesting
-  // rungs are the ones priced near even — that is where the market thinks the
-  // game actually is — so they sort to the top and the long shots fall away.
-  const ranked = useMemo(() => {
-    const score = (line: number) => {
+  const ordered = useMemo(() => {
+    const all = allLines(odds)
+    // The live line may be one no book quoted before the jump; it still leads.
+    if (liveLine != null && !all.includes(liveLine)) all.push(liveLine)
+    const mainTally = new Map<number, number>()
+    for (const o of odds) if (o.mainLine != null) mainTally.set(o.mainLine, (mainTally.get(o.mainLine) ?? 0) + 1)
+    const balance = (line: number) => {
       let best = Infinity
       for (const o of odds) {
         const p = pricesAt(o, line)
-        if (!p) continue
-        const x = p.over ?? p.home
-        const y = p.under ?? p.away
-        // One-sided rungs have nothing to balance; rank them last but keep them.
+        const x = p?.over ?? p?.home
+        const y = p?.under ?? p?.away
         if (x == null || y == null) continue
         best = Math.min(best, Math.abs(x - y))
       }
       return best
     }
-    return lines
-      .map((line) => ({ line, score: score(line) }))
-      .sort((m, n) => m.score - n.score || Math.abs(m.line) - Math.abs(n.line))
-  }, [lines, odds])
-  const visible = ranked.slice(0, shown)
+    return all
+      .map((line) => ({
+        line,
+        isLive: liveLine != null && line === liveLine,
+        mains: mainTally.get(line) ?? 0,
+        balance: balance(line),
+      }))
+      .sort(
+        (a, b) =>
+          Number(b.isLive) - Number(a.isLive) ||
+          b.mains - a.mains ||
+          a.balance - b.balance ||
+          Math.abs(a.line) - Math.abs(b.line),
+      )
+  }, [odds, liveLine])
+
+  const visible = ordered.slice(0, shown)
+  const showLive = !!live
+  // A handicap names the away side by the negated line; a total names both
+  // sides by the same number.
+  const sideLine = (key: K, line: number) => (kind === 'spread' && key !== outcomes[0]?.key ? -line : line)
+  const label = (key: K, line: number) =>
+    kind === 'spread' ? fmtLine(sideLine(key, line)) : `${key === 'over' ? 'O' : 'U'} ${line}`
 
   return (
-    <>
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-1.5 border-t border-white/[0.05] bg-black/[0.15] px-4 py-2 text-left text-[11px] font-medium text-[color:var(--muted)] hover:text-gray-200"
-      >
-        {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-        Alternate lines
-        <span className="text-[color:var(--muted-2)]">
-          · {lines.length} across {odds.length} {odds.length === 1 ? 'book' : 'books'} · closest-priced
-          first
-        </span>
-      </button>
-      {open && (
-        <div className="max-h-[28rem] overflow-auto">
-          <table className="w-full text-[12px]">
-            <thead className="sticky top-0 z-10 bg-[color:var(--panel)]">
-              <tr className="text-[10.5px] text-[color:var(--muted)]">
-                <th className="sticky left-0 z-20 bg-[color:var(--panel)] py-2 pl-4 pr-3 text-left font-medium">
-                  Line
+    <div className="overflow-x-auto">
+      <table className="w-full text-[12.5px]">
+        <thead>
+          <tr className="text-[11px] text-[color:var(--muted)]">
+            <th className="sticky left-0 z-10 bg-[color:var(--panel)] py-2.5 pl-4 pr-3 text-left font-medium">
+              Selection
+            </th>
+            {showLive && (
+              <th className="px-2 py-2.5 text-right font-medium text-[color:var(--live)]">Live</th>
+            )}
+            <th className="px-2 py-2.5 text-right font-medium text-[color:var(--total)]">Best</th>
+            {books.map((b) => {
+              const t = bookTint(b)
+              return (
+                <th key={b} className="px-2 py-2.5 text-right font-normal">
+                  <span
+                    className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${t.text} ${t.bg} ${t.border}`}
+                  >
+                    {titleCaseBook(b)}
+                  </span>
                 </th>
-                {odds.map((o) => {
-                  const t = bookTint(o.book)
+              )
+            })}
+            <th className="px-3 py-2.5 text-right font-medium">Margin</th>
+          </tr>
+        </thead>
+        <tbody className="tabular-nums">
+          {visible.map(({ line, isLive }, li) => {
+            const priceOf = (book: string, key: K) =>
+              pricesAt(byBook.get(book) ?? { book, lines: [], mainLine: null, mainPrices: {} }, line)?.[
+                key as keyof SidePrices
+              ] ?? null
+            const best = outcomes.map((o) => {
+              let price = 0
+              let book: string | null = null
+              for (const b of books) {
+                const v = priceOf(b, o.key)
+                if (v != null && v > price) {
+                  price = v
+                  book = b
+                }
+              }
+              return { price, book }
+            })
+            const margin = overround(best.map((x) => (x.price > 0 ? x.price : null)))
+            return (
+              <Fragment key={line}>
+                {outcomes.map((o, oi) => {
+                  const bestThis = best[oi]
+                  const liveV = isLive ? live?.get(o.key) ?? null : null
                   return (
-                    <th key={o.book} colSpan={2} className="border-l border-white/[0.05] px-2 py-2 text-center font-normal">
-                      <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${t.text} ${t.bg} ${t.border}`}>
-                        {titleCaseBook(o.book)}
-                      </span>
-                    </th>
+                    <tr
+                      key={`${line}-${o.key as string}`}
+                      className={`${oi === 0 ? 'border-t border-white/[0.06]' : ''} ${
+                        isLive ? 'bg-[color:var(--live)]/[0.04]' : li === 0 ? '' : 'hover:bg-white/[0.02]'
+                      }`}
+                    >
+                      <td className="sticky left-0 z-10 bg-[color:var(--panel)] py-2 pl-4 pr-3">
+                        <div className="flex items-center gap-2">
+                          {isLive && oi === 0 && (
+                            <span className="rounded bg-[color:var(--live)]/15 px-1 py-0.5 text-[9.5px] font-bold text-[color:var(--live)]">
+                              LIVE
+                            </span>
+                          )}
+                          <span className="text-gray-100">{o.label}</span>
+                          <span className="rounded bg-black/[0.25] px-1.5 py-0.5 text-[10.5px] text-[color:var(--muted)]">
+                            {label(o.key, line)}
+                          </span>
+                        </div>
+                      </td>
+                      {showLive && (
+                        <td className="px-2 py-2 text-right">
+                          {liveV != null ? (
+                            <span className="font-semibold text-[color:var(--live)]">{liveV.toFixed(2)}</span>
+                          ) : (
+                            <span className="text-gray-700">–</span>
+                          )}
+                        </td>
+                      )}
+                      <td className="px-2 py-2 text-right">
+                        {bestThis.price > 0 ? (
+                          <span
+                            title={`${americanOdds(bestThis.price)} · ${impliedPct(bestThis.price)} implied · ${bestThis.book}`}
+                            className="inline-flex items-baseline gap-1.5 rounded bg-[color:var(--total)]/15 px-1.5 py-0.5 font-semibold text-[color:var(--total)]"
+                          >
+                            {bestThis.price.toFixed(2)}
+                            <span className="text-[10px] opacity-70">
+                              {titleCaseBook(bestThis.book ?? '').slice(0, 3)}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-gray-700">–</span>
+                        )}
+                      </td>
+                      {books.map((b) => {
+                        const v = priceOf(b, o.key)
+                        const isBest = bestThis.price > 0 && v === bestThis.price
+                        return (
+                          <td key={b} className="px-2 py-2 text-right">
+                            {v == null ? (
+                              <span className="text-gray-700">–</span>
+                            ) : (
+                              <span
+                                title={`${americanOdds(v)} · ${impliedPct(v)} implied`}
+                                className={
+                                  isBest
+                                    ? 'inline-block rounded bg-[var(--total)]/10 px-1.5 py-0.5 font-bold text-[var(--total)]'
+                                    : 'text-gray-100'
+                                }
+                              >
+                                {v.toFixed(2)}
+                              </span>
+                            )}
+                          </td>
+                        )
+                      })}
+                      {oi === 0 ? (
+                        <td
+                          rowSpan={outcomes.length}
+                          className="px-3 py-2 text-right align-middle text-[11px] tabular-nums"
+                        >
+                          {margin == null ? (
+                            <span className="text-gray-700">–</span>
+                          ) : (
+                            <span
+                              className={
+                                margin < 0
+                                  ? 'rounded bg-[color:var(--total)]/15 px-1.5 py-0.5 font-bold text-[color:var(--total)]'
+                                  : 'text-[color:var(--muted)]'
+                              }
+                              title={margin < 0 ? 'Negative across best prices on this line — arb' : undefined}
+                            >
+                              {(margin * 100).toFixed(1)}%
+                            </span>
+                          )}
+                        </td>
+                      ) : null}
+                    </tr>
                   )
                 })}
-              </tr>
-              <tr className="text-[10px] text-[color:var(--muted-2)]">
-                <th className="sticky left-0 z-20 bg-[color:var(--panel)] pb-1.5 pl-4" />
-                {odds.map((o) => (
-                  <Fragment key={o.book}>
-                    <th className="border-l border-white/[0.05] px-2 pb-1.5 text-right font-normal">
-                      {a?.label.slice(0, 10) ?? '—'}
-                    </th>
-                    <th className="px-2 pb-1.5 text-right font-normal">{b?.label.slice(0, 10) ?? '—'}</th>
-                  </Fragment>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="tabular-nums">
-              {visible.map(({ line }) => (
-                <tr key={line} className="border-t border-white/[0.04] hover:bg-white/[0.02]">
-                  <td className="sticky left-0 z-10 bg-[color:var(--panel)] py-1.5 pl-4 pr-3 text-gray-200">
-                    {fmtLineLabel(line)}
-                  </td>
-                  {odds.map((o) => {
-                    const p = pricesAt(o, line)
-                    const isMain = o.mainLine === line
-                    const cell = (v: number | null | undefined) =>
-                      v == null ? (
-                        <span className="text-gray-700">·</span>
-                      ) : (
-                        <span className={isMain ? 'font-semibold text-gray-100' : 'text-gray-400'}>
-                          {v.toFixed(2)}
-                        </span>
-                      )
-                    return (
-                      <Fragment key={o.book}>
-                        <td className={`border-l border-white/[0.05] px-2 py-1.5 text-right ${isMain ? 'bg-white/[0.03]' : ''}`}>
-                          {cell(a ? p?.[a.key as keyof SidePrices] : null)}
-                        </td>
-                        <td className={`px-2 py-1.5 text-right ${isMain ? 'bg-white/[0.03]' : ''}`}>
-                          {cell(b ? p?.[b.key as keyof SidePrices] : null)}
-                        </td>
-                      </Fragment>
-                    )
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {shown < ranked.length && (
-            <button
-              onClick={() => setShown((n) => n + LADDER_PAGE * 4)}
-              className="w-full border-t border-white/[0.05] bg-black/[0.2] py-2 text-[11px] font-medium text-[color:var(--muted)] hover:text-gray-200"
-            >
-              Load more · {ranked.length - shown} further{' '}
-              {ranked.length - shown === 1 ? 'line' : 'lines'}
-            </button>
-          )}
-        </div>
+              </Fragment>
+            )
+          })}
+        </tbody>
+      </table>
+      {shown < ordered.length && (
+        <button
+          onClick={() => setShown((n) => n + LADDER_PAGE * 4)}
+          className="w-full border-t border-white/[0.05] bg-black/[0.2] py-2 text-[11px] font-medium text-[color:var(--muted)] hover:text-gray-200"
+        >
+          Show more · {ordered.length - shown} further {ordered.length - shown === 1 ? 'line' : 'lines'}
+        </button>
       )}
-    </>
+    </div>
   )
 }
 
-/**
- * The per-book price grid for ONE line of a market: outcomes down, books
- * across, with the best price per outcome and each book's margin.
- */
 function PriceTable<K extends string>({
   kind,
   line,
