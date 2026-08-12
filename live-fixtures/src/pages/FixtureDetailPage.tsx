@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { backOr } from '../lib/nav'
 import { ArrowLeft, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
 import { useTerminal } from '../components/Layout'
-import { DetailSkeleton, PanelSkeleton } from '../components/Skeleton'
+import { BetsSkeleton, DetailSkeleton, PanelSkeleton } from '../components/Skeleton'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { fetchFixtureById } from '../lib/dataSource'
 import { fetchSwiftEvent, swiftEventUrl } from '../lib/swiftStatus'
@@ -24,6 +24,7 @@ import { getMybetCatalog, type MybetCompetition, type MybetEvent } from '../lib/
 import { fetchMybetEvent, mybetEventUrl, type MybetLiveEvent } from '../lib/mybetStatus'
 import { fixturePath, idFromParam } from '../lib/routes'
 import { bookLogo } from '../lib/bookLogos'
+import { BRAND_TONE } from '../lib/brand'
 import {
   allLines,
   normaliseFlucs,
@@ -200,6 +201,8 @@ export default function FixtureDetailPage() {
     }
   }, [id, homeName, awayName, urlTab, navigate])
 
+  // DetailSkeleton carries the page frame itself (max width, padding), so it
+  // replaces the whole return rather than sitting inside it.
   if (!f && loading) return <DetailSkeleton />
 
   return (
@@ -578,7 +581,7 @@ function OpticPanel({ fixture: f, now }: { fixture: Fixture; now: Date }) {
 
 function SwiftPanel({ info, verdict }: { info: MappingInfo; verdict: Verdict }) {
   if (info.loading) {
-    return <PanelSkeleton fields={10} />
+    return <PanelSkeleton fields={10} tone={BRAND_TONE.swift} />
   }
 
   const { evMap, swiftEvent, compMaps = [], swiftComps = [] } = info
@@ -663,7 +666,7 @@ function SwiftPanel({ info, verdict }: { info: MappingInfo; verdict: Verdict }) 
 
 function MybetPanel({ info, verdict }: { info: MappingInfo; verdict: Verdict }) {
   if (info.loading) {
-    return <PanelSkeleton fields={10} />
+    return <PanelSkeleton fields={10} tone={BRAND_TONE.mybet} />
   }
 
   const { mybetEvMap, mybetEvent, mybetCompMaps = [], mybetComps = [] } = info
@@ -2000,13 +2003,7 @@ function MybetBetsView({
       </div>
     )
   }
-  if (loading && !bets) {
-    return (
-      <div className="px-5 py-6">
-        <PanelSkeleton fields={6} />
-      </div>
-    )
-  }
+  if (loading && !bets) return <BetsSkeleton cols={11} />
   if (error) {
     return (
       <div className="px-5 py-6">
@@ -2384,13 +2381,7 @@ function BetsTab({
   error: string | null
   swiftActualStart: string | null
 }) {
-  if (loading && !bets) {
-    return (
-      <div className="px-5 py-6">
-        <PanelSkeleton fields={6} />
-      </div>
-    )
-  }
+  if (loading && !bets) return <BetsSkeleton cols={11} />
   if (error) {
     return (
       <div className="px-5 py-6">

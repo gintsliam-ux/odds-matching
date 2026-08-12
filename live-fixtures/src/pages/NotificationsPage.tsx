@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { fixturePath } from '../lib/routes'
+import { NotificationsSkeleton } from '../components/Skeleton'
 import { AlertTriangle, Bell, BellOff, ChevronDown, ChevronRight, ExternalLink, GitMerge } from 'lucide-react'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { useTerminal } from '../components/Layout'
@@ -104,9 +105,7 @@ export default function NotificationsPage() {
       </header>
 
       {loading && notifications.length === 0 ? (
-        <div className="rounded-lg bg-[color:var(--panel)]/40 p-8 text-sm text-[color:var(--muted-2)]">
-          Loading…
-        </div>
+        <NotificationsSkeleton />
       ) : notifications.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-3 rounded-lg bg-[color:var(--panel)]/40 p-12 text-center">
           <BellOff className="h-8 w-8 text-[color:var(--muted-2)]" />

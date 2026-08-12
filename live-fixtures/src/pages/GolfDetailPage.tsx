@@ -16,6 +16,7 @@ import { swiftEventUrl } from '../lib/swiftStatus'
 import { mybetEventUrl } from '../lib/mybetStatus'
 import { CopyButton, Field, Grid, SourcePanel } from '../components/SourcePanel'
 import { BrandSubTab, StatCard } from '../components/BetsChrome'
+import { BetsSkeleton, DetailSkeleton } from '../components/Skeleton'
 import { betSettlement, fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
 import { golfPath, idFromParam } from '../lib/routes'
 import { fetchMybetBets, mybetSettlement, type MybetBetRow } from '../lib/mybetBets'
@@ -264,9 +265,9 @@ export default function GolfDetailPage() {
     return [...set].sort()
   }, [prices])
 
-  if (loading) {
-    return <div className="px-5 py-8 text-sm text-[color:var(--muted-2)]">Loading…</div>
-  }
+  // Two panels, not three: golf has OPTIC + SWIFT + MYBET but no scoreboard,
+  // so the frame is the same shape as a fixture's.
+  if (loading) return <DetailSkeleton fullWidth />
   if (!tournament) {
     return (
       <div className="px-5 py-8">
@@ -666,11 +667,9 @@ function BetsView({ rows, loading, brand }: { rows: BetLine[]; loading: boolean;
   const pendingStake = rows.filter((r) => r.state === 'pending').reduce((s, r) => s + (r.stake ?? 0), 0)
 
   if (loading) {
-    return (
-      <div className="px-5 py-6 text-[13px] text-[color:var(--muted-2)]">
-        Resolving this tournament's {brand} outright…
-      </div>
-    )
+    // The wait here is genuinely long — mapping, then the outright market, then
+    // the bets join — so the reason stays under the placeholder.
+    return <BetsSkeleton note={`Resolving this tournament's ${brand} outright…`} />
   }
   if (rows.length === 0) {
     return <div className="px-5 py-6 text-[13px] text-[color:var(--muted-2)]">No {brand} bets on this outright.</div>
