@@ -251,3 +251,32 @@ export function normaliseFlucs(
   }
   return out
 }
+
+/**
+ * Append the CURRENT price as a final stage on each book's series.
+ *
+ * `pregame_odds` is not a snapshot — it tracks the live price, and it differs
+ * from the newest captured stage on a quarter of book-fixtures (and equals the
+ * `open` snapshot on almost none). So every event has a movement to show, even
+ * one whose only capture so far is `open`: open → current. Without this, a
+ * fixture two days out looked like it had no price history at all, when what
+ * it actually had was one snapshot and a price that had since moved.
+ *
+ * Stamped with the row's `updated_at` so it sorts after the captured stages and
+ * reports an honest age.
+ */
+export function withCurrent(
+  series: Record<string, Record<string, SidePrices & { at?: string | null; line?: number | null }>>,
+  current: BookOdds[],
+  updatedAt: string | null,
+): Record<string, Record<string, SidePrices & { at?: string | null; line?: number | null }>> {
+  const out = { ...series }
+  for (const b of current) {
+    if (!Object.keys(b.mainPrices).length) continue
+    out[b.book] = {
+      ...(out[b.book] ?? {}),
+      current: { ...b.mainPrices, line: b.mainLine, at: updatedAt },
+    }
+  }
+  return out
+}

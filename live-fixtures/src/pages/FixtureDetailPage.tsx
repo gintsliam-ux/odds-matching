@@ -29,6 +29,7 @@ import {
   normaliseFlucs,
   normaliseMarket,
   pricesAt,
+  withCurrent,
   type BookOdds,
   type SidePrices,
 } from '../lib/marketOdds'
@@ -809,9 +810,21 @@ function MarketsTab({ fixture: f, now }: { fixture: Fixture; now: Date }) {
   const h2hMap = byBook(h2h)
   const spreadMap = byBook(spread)
   const totalMap = byBook(total)
-  const flucsH2h = useMemo(() => normaliseFlucs(f.flucs?.h2h, 'h2h'), [f.flucs?.h2h])
-  const flucsSpread = useMemo(() => normaliseFlucs(f.flucs?.spread, 'spread'), [f.flucs?.spread])
-  const flucsTotal = useMemo(() => normaliseFlucs(f.flucs?.total, 'total'), [f.flucs?.total])
+  // Each series ends with the CURRENT price from pregame_odds, so every event
+  // has a movement — open → current — rather than only those with two captures.
+  const rowUpdatedAt = f.updatedAt
+  const flucsH2h = useMemo(
+    () => withCurrent(normaliseFlucs(f.flucs?.h2h, 'h2h'), h2h, rowUpdatedAt),
+    [f.flucs?.h2h, h2h, rowUpdatedAt],
+  )
+  const flucsSpread = useMemo(
+    () => withCurrent(normaliseFlucs(f.flucs?.spread, 'spread'), spread, rowUpdatedAt),
+    [f.flucs?.spread, spread, rowUpdatedAt],
+  )
+  const flucsTotal = useMemo(
+    () => withCurrent(normaliseFlucs(f.flucs?.total, 'total'), total, rowUpdatedAt),
+    [f.flucs?.total, total, rowUpdatedAt],
+  )
 
   // "Updated" has to survive an UPCOMING fixture, where live_updated_at is null
   // and the row would otherwise read "—" despite carrying fresh prices. Newest
@@ -1076,6 +1089,7 @@ const FLUC_STAGE_LABEL: Record<string, string> = {
   '30m': '30m',
   '10m': '10m',
   close: 'Close',
+  current: 'Current',
 }
 
 /** The daily stage arrives as "9am 08-12" once normaliseFlucs has split the
@@ -1090,8 +1104,10 @@ function stageLabel(stage: string): string {
 /** Open is always first and close always last regardless of clock: a book
  *  re-listed after a suspension can stamp an `open` later than its own 6h. */
 function stageRank(stage: string): number {
-  if (stage === 'open') return -1
+  if (stage === 'open') return -2
   if (stage === 'close') return 1
+  // `current` is the live price, so it always sits to the right of `close`.
+  if (stage === 'current') return 2
   return 0
 }
 
