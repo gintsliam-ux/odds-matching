@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "resolve-logos": "node scripts/resolve-logos.mjs",
-    "build-mapping": "node scripts/build-mapping.mjs"
+    "build-mapping": "node scripts/build-mapping.mjs",
+    "fetch-book-logos": "node scripts/fetch-book-logos.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.0",

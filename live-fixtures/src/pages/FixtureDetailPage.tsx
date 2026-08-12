@@ -23,6 +23,7 @@ import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/
 import { getMybetCatalog, type MybetCompetition, type MybetEvent } from '../lib/mybetCatalog'
 import { fetchMybetEvent, mybetEventUrl, type MybetLiveEvent } from '../lib/mybetStatus'
 import { fixturePath, idFromParam } from '../lib/routes'
+import { bookLogo } from '../lib/bookLogos'
 import {
   allLines,
   normaliseFlucs,
@@ -977,6 +978,35 @@ function MarketsTab({ fixture: f, now }: { fixture: Fixture; now: Date }) {
   )
 }
 
+/**
+ * A book's column mark: its logo where we have one, its name where we don't.
+ *
+ * The name still renders alongside the logo rather than being replaced by it —
+ * a 16px favicon is recognisable for bet365 or Pinnacle and completely opaque
+ * for Ozoon or Four Winds, and the column has room.
+ */
+function BookBadge({ book }: { book: string }) {
+  const t = bookTint(book)
+  const logo = bookLogo(book)
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium ${t.text} ${t.bg} ${t.border}`}
+      title={book}
+    >
+      {logo && (
+        <img
+          src={logo}
+          alt=""
+          aria-hidden
+          loading="lazy"
+          className="h-3 w-3 shrink-0 rounded-[2px] object-contain"
+        />
+      )}
+      {titleCaseBook(book)}
+    </span>
+  )
+}
+
 function bookTint(book: string) {
   return BOOK_TINT[book.toLowerCase()] ?? {
     text: 'text-gray-300',
@@ -1306,14 +1336,9 @@ function LinesTable<K extends string>({
             )}
             <th className="px-2 py-2.5 text-right font-medium text-[color:var(--total)]">Best</th>
             {books.map((b) => {
-              const t = bookTint(b)
               return (
                 <th key={b} className="px-2 py-2.5 text-right font-normal">
-                  <span
-                    className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${t.text} ${t.bg} ${t.border}`}
-                  >
-                    {titleCaseBook(b)}
-                  </span>
+                  <BookBadge book={b} />
                 </th>
               )
             })}
@@ -1514,14 +1539,9 @@ function PriceTable<K extends string>({
               )}
               <th className="px-2 py-2.5 text-right font-medium text-[color:var(--total)]">Best</th>
               {books.map((b) => {
-                const t = bookTint(b)
                 return (
                   <th key={b} className="px-2 py-2.5 text-right font-normal">
-                    <span
-                      className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${t.text} ${t.bg} ${t.border}`}
-                    >
-                      {titleCaseBook(b)}
-                    </span>
+                    <BookBadge book={b} />
                   </th>
                 )
               })}
@@ -1674,20 +1694,13 @@ function MovementTable<K extends string>({
               const firstIdx = prices.findIndex((v) => v != null)
               const lastIdx = prices.length - 1 - [...prices].reverse().findIndex((v) => v != null)
               const d = firstIdx < 0 ? null : drift(prices[firstIdx], prices[lastIdx])
-              const t = bookTint(b)
               return (
                 <tr
                   key={`${b}-${o.key as string}`}
                   className={`hover:bg-white/[0.02] ${oi === 0 ? 'border-t border-white/[0.06]' : ''}`}
                 >
                   <td className="sticky left-0 z-10 bg-[color:var(--panel)] py-2 pl-4 pr-3">
-                    {oi === 0 && (
-                      <span
-                        className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${t.text} ${t.bg} ${t.border}`}
-                      >
-                        {titleCaseBook(b)}
-                      </span>
-                    )}
+                    {oi === 0 && <BookBadge book={b} />}
                   </td>
                   <td className="px-2 py-2 text-gray-100">{o.label}</td>
                   {prices.map((v, i) => {
