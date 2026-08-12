@@ -6,9 +6,10 @@
 // the render path of the board. It also keeps the app working offline and free
 // of third-party requests at runtime.
 //
-// Google's favicon service is the source. It answers for essentially every
-// domain, returns a PNG, needs no key, and 128px is plenty for a 16px header
-// mark. Books we have no domain for simply keep the text badge.
+// Two sources, tried in order. DuckDuckGo's icon service first: it serves the
+// site's real favicon and has a mark for domains Google answers with a generic
+// globe (Betfair among them). Google's is the fallback, at 128px. Books we have
+// no domain for simply keep the text badge.
 //
 // Usage:  node scripts/fetch-book-logos.mjs           (only missing ones)
 //         node scripts/fetch-book-logos.mjs --force   (re-download everything)
@@ -57,8 +58,9 @@ const DOMAINS = {
   bwin: 'bwin.com',
   betsson: 'betsson.com',
   rivalry: 'rivalry.com',
-  sugarhouse: 'sugarhouse.com',
+  sugarhouse: 'playsugarhouse.com',
   ibet: 'ibet.com.au',
+  'saba sports': 'sabasports.com',
   neds: 'neds.com.au',
   '888sport': '888sport.com',
   casumo: 'casumo.com',
@@ -77,10 +79,10 @@ const DOMAINS = {
   betonline: 'betonline.ag',
   thescore: 'thescore.bet',
   sbobet: 'sbobet.com',
-  batery: 'batery.com',
+  batery: 'batery.bet',
   midnite: 'midnite.com',
   betrivers: 'betrivers.com',
-  'world sports betting': 'wsb.co.za',
+  'world sports betting': 'worldsportsbetting.co.za',
   'danske spil': 'danskespil.dk',
   'galera.bet': 'galera.bet',
   proline: 'proline.ca',
@@ -89,7 +91,6 @@ const DOMAINS = {
   'jazz sports': 'jazzsports.ag',
   'desert diamond': 'ddcaz.com',
   'four winds': 'fourwindscasino.com',
-  'saba sports': 'sabasport.com',
   'opticodds ai': 'opticodds.com',
   bet105: 'bet105.com',
   betdex: 'betdex.com',
@@ -194,16 +195,33 @@ async function main() {
       skipped++
       continue
     }
+    const sources = [
+      `https://icons.duckduckgo.com/ip3/${encodeURIComponent(domain)}.ico`,
+      `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=128`,
+    ]
     try {
-      const res = await fetch(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=128`)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const buf = Buffer.from(await res.arrayBuffer())
-      // Validate the MAGIC BYTES, not the length. Once this script has made a
-      // few dozen requests the service starts answering with an HTML error
-      // page of roughly the same size as a small icon, and a size-only check
-      // happily writes that to disk as a .png.
+      let buf = null
+      let lastErr = 'no source answered'
+      for (const url of sources) {
+        try {
+          const res = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0' } })
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const b = Buffer.from(await res.arrayBuffer())
+          if (!imageKind(b)) throw new Error(`not an image (${b.length}b)`)
+          // DuckDuckGo returns a 1x1 or tiny stub for domains it doesn't know.
+          if (b.length < 200) throw new Error(`stub (${b.length}b)`)
+          buf = b
+          break
+        } catch (e) {
+          lastErr = e.message
+        }
+      }
+      if (!buf) throw new Error(lastErr)
+      // Magic bytes are checked per-source above, not by size: once this
+      // script has made a few dozen requests Google starts answering with an
+      // HTML error page about the size of a small icon, and a length-only
+      // check writes that to disk as a .png.
       const kind = imageKind(buf)
-      if (!kind) throw new Error(`not an image (${buf.length} bytes, starts "${buf.subarray(0, 12).toString('latin1').replace(/[^\x20-\x7e]/g, '.')}")`)
       writeFileSync(file, buf)
       saved++
       console.log(`  ${String(buf.length).padStart(6)}b  ${kind.padEnd(4)} ${bookSlug(example)}.png  (${domain})`)

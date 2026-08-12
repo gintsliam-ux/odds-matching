@@ -985,6 +985,30 @@ function MarketsTab({ fixture: f, now }: { fixture: Fixture; now: Date }) {
  * a 16px favicon is recognisable for bet365 or Pinnacle and completely opaque
  * for Ozoon or Four Winds, and the column has room.
  */
+/**
+ * The best price, marked with the book that is offering it.
+ *
+ * The mark is the book's logo where we have one, falling back to a three-letter
+ * abbreviation — which is all this used to show, and which cannot separate
+ * "Bet365" from "Betano", "Betway", "Betsafe" or "Betsson" at three characters.
+ */
+function BestPrice({ price, book }: { price: number; book: string | null }) {
+  const logo = bookLogo(book)
+  return (
+    <span
+      title={`${americanOdds(price)} · ${impliedPct(price)} implied · ${book ?? ''}`}
+      className="inline-flex items-center gap-1.5 rounded bg-[color:var(--total)]/15 px-1.5 py-0.5 font-semibold text-[color:var(--total)]"
+    >
+      {price.toFixed(2)}
+      {logo ? (
+        <img src={logo} alt={book ?? ''} loading="lazy" className="h-3.5 w-3.5 rounded-[2px] object-contain" />
+      ) : (
+        <span className="text-[10px] opacity-70">{titleCaseBook(book ?? '').slice(0, 3)}</span>
+      )}
+    </span>
+  )
+}
+
 function BookBadge({ book }: { book: string }) {
   const t = bookTint(book)
   const logo = bookLogo(book)
@@ -1400,15 +1424,7 @@ function LinesTable<K extends string>({
                       )}
                       <td className="px-2 py-2 text-right">
                         {bestThis.price > 0 ? (
-                          <span
-                            title={`${americanOdds(bestThis.price)} · ${impliedPct(bestThis.price)} implied · ${bestThis.book}`}
-                            className="inline-flex items-baseline gap-1.5 rounded bg-[color:var(--total)]/15 px-1.5 py-0.5 font-semibold text-[color:var(--total)]"
-                          >
-                            {bestThis.price.toFixed(2)}
-                            <span className="text-[10px] opacity-70">
-                              {titleCaseBook(bestThis.book ?? '').slice(0, 3)}
-                            </span>
-                          </span>
+                          <BestPrice price={bestThis.price} book={bestThis.book} />
                         ) : (
                           <span className="text-gray-700">–</span>
                         )}
@@ -1575,13 +1591,7 @@ function PriceTable<K extends string>({
                   )}
                   <td className="px-2 py-2.5 text-right">
                     {bestThis.price > 0 ? (
-                      <span
-                        title={`${americanOdds(bestThis.price)} · ${impliedPct(bestThis.price)} implied · ${bestThis.book}`}
-                        className="inline-flex items-baseline gap-1.5 rounded bg-[color:var(--total)]/15 px-1.5 py-0.5 font-semibold text-[color:var(--total)]"
-                      >
-                        {bestThis.price.toFixed(2)}
-                        <span className="text-[10px] opacity-70">{titleCaseBook(bestThis.book ?? '').slice(0, 3)}</span>
-                      </span>
+                      <BestPrice price={bestThis.price} book={bestThis.book} />
                     ) : (
                       <span className="text-[color:var(--muted-2)]/60">—</span>
                     )}

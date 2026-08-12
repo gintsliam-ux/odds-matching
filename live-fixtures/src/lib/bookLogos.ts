@@ -22,14 +22,15 @@ function bookSlug(name: string): string {
 
 /** Slugs present in public/books/. Keep in step with the fetch script's output. */
 const HAVE = new Set([
-  '1xbet', '888sport', 'bc-game', 'bet365', 'betano', 'betdex', 'betmgm', 'betonline',
-  'betplay', 'betrivers', 'betsafe', 'betsson', 'betway', 'bodog', 'bovada', 'bwin',
-  'caesars', 'casumo', 'coolbet', 'dafabet', 'danske-spil', 'desert-diamond', 'draftkings',
-  'duel', 'fanatics', 'fanduel', 'fonbet', 'four-winds', 'galera-bet', 'heritage', 'jazz-sports',
-  'jugabet', 'kalshi', 'ladbrokes', 'midnite', 'neds', 'ninja-casino', 'opticodds-ai', 'ozoon',
-  'pinnacle', 'polymarket', 'proline', 'rivalry', 'rizk', 'rushbet', 'sbobet', 'sportingbet',
-  'sports-interaction', 'sportsbet', 'sportsbetting-ag', 'sportzino', 'stake', 'superbet',
-  'tabtouch', 'thescore', 'twinspires', 'unibet', 'william-hill',
+  '1xbet', '888sport', 'batery', 'bc-game', 'bet105', 'bet365', 'betano', 'betdex', 'betfair',
+  'betfair-exchange', 'betmgm', 'betonline', 'betplay', 'betrivers', 'betsafe', 'betsson',
+  'betway', 'bodog', 'bovada', 'bwin', 'caesars', 'casumo', 'coolbet', 'dafabet', 'danske-spil',
+  'desert-diamond', 'draftkings', 'duel', 'fanatics', 'fanduel', 'fonbet', 'four-winds',
+  'galera-bet', 'heritage', 'jazz-sports', 'jugabet', 'kalshi', 'ladbrokes', 'midnite', 'neds',
+  'ninja-casino', 'opticodds-ai', 'ozoon', 'parimatch', 'pinnacle', 'polymarket', 'proline',
+  'rivalry', 'rizk', 'rushbet', 'saba-sports', 'sbobet', 'sportingbet', 'sports-interaction',
+  'sportsbet', 'sportsbetting-ag', 'sportzino', 'stake', 'sugarhouse', 'superbet', 'tabtouch',
+  'thescore', 'twinspires', 'unibet', 'william-hill', 'world-sports-betting',
 ])
 
 /** URL of the book's mark, or null when we don't have one (caller shows text). */
