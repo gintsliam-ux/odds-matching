@@ -84,6 +84,10 @@ export interface Fixture {
   liveBookmaker: string | null
 
   liveH2h: OddsLine
+  /** In-play spread and total. Each carries its own line, which need not match
+   *  any line the books quoted before the jump. */
+  liveSpread: { line: number | null; home: number | null; away: number | null }
+  liveTotal: { line: number | null; over: number | null; under: number | null }
   closingH2h: OddsLine
   spread: SpreadMarket
   total: TotalMarket

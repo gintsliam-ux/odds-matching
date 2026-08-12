@@ -815,17 +815,20 @@ function MarketsTab({ fixture: f, now }: { fixture: Fixture; now: Date }) {
   // "Updated" has to survive an UPCOMING fixture, where live_updated_at is null
   // and the row would otherwise read "—" despite carrying fresh prices. Newest
   // fluc snapshot first, since that is literally when a price was last written.
+  //
+  // Read the stamps off the NORMALISED flucs, not the raw ones. The daily stage
+  // is an array, so `snap.at` on the raw value resolved to Array.prototype.at —
+  // a function, which is truthy — and sorted to the end, leaving the header
+  // reading "Updated — (NaNm ago)".
   const lastPriced =
     [
-      ...Object.values(f.flucs ?? {}).flatMap((byBookF) =>
-        Object.values(byBookF ?? {}).flatMap((byStage) =>
-          Object.values(byStage ?? {}).map((snap) => (snap as { at?: string | null })?.at ?? null),
-        ),
+      ...[flucsH2h, flucsSpread, flucsTotal].flatMap((m) =>
+        Object.values(m).flatMap((byStage) => Object.values(byStage).map((snap) => snap.at ?? null)),
       ),
       f.liveUpdatedAt,
       f.updatedAt,
     ]
-      .filter((t): t is string => !!t)
+      .filter((t): t is string => typeof t === 'string' && Number.isFinite(Date.parse(t)))
       .sort()
       .at(-1) ?? null
 
@@ -924,7 +927,7 @@ function MarketsTab({ fixture: f, now }: { fixture: Fixture; now: Date }) {
         )}
 
         {/* Spread */}
-        {spreadBooks.length > 0 && (
+        {(spreadBooks.length > 0 || f.liveSpread.home != null || f.liveSpread.away != null) && (
           <MarketCard
             title="Spread"
             kind="spread"
@@ -934,7 +937,8 @@ function MarketsTab({ fixture: f, now }: { fixture: Fixture; now: Date }) {
               { label: f.awayName, key: 'away' },
             ]}
             getPrice={(book, k) => spreadMap.get(book)?.mainPrices[k as keyof SidePrices] ?? null}
-            getLive={() => null}
+            getLive={(k) => (k === 'home' ? f.liveSpread.home : f.liveSpread.away)}
+            liveLine={f.liveSpread.line}
             getLine={(book) => spreadMap.get(book)?.mainLine ?? null}
             // The line is the HOME handicap, so the away side is its negation.
             lineSuffix={(k, line) => (line == null ? undefined : fmtLine(k === 'away' ? negate(line) : line))}
@@ -944,7 +948,7 @@ function MarketsTab({ fixture: f, now }: { fixture: Fixture; now: Date }) {
         )}
 
         {/* Total */}
-        {totalBooks.length > 0 && (
+        {(totalBooks.length > 0 || f.liveTotal.over != null || f.liveTotal.under != null) && (
           <MarketCard
             title="Total"
             kind="total"
@@ -954,7 +958,8 @@ function MarketsTab({ fixture: f, now }: { fixture: Fixture; now: Date }) {
               { label: 'Under', key: 'under' },
             ]}
             getPrice={(book, k) => totalMap.get(book)?.mainPrices[k as keyof SidePrices] ?? null}
-            getLive={() => null}
+            getLive={(k) => (k === 'over' ? f.liveTotal.over : f.liveTotal.under)}
+            liveLine={f.liveTotal.line}
             getLine={(book) => totalMap.get(book)?.mainLine ?? null}
             lineSuffix={(k, line) => (line == null ? undefined : `${k === 'over' ? 'O' : 'U'} ${line}`)}
             odds={total}
@@ -1019,6 +1024,15 @@ const FLUC_STAGE_LABEL: Record<string, string> = {
   close: 'Close',
 }
 
+/** The daily stage arrives as "9am 08-12" once normaliseFlucs has split the
+ *  array into one entry per captured day. Show it as "9am · 08-12". */
+function stageLabel(stage: string): string {
+  const known = FLUC_STAGE_LABEL[stage]
+  if (known) return known
+  const daily = /^(\S+)\s+(\d{2}-\d{2})$/.exec(stage)
+  return daily ? `${daily[1]} · ${daily[2]}` : stage
+}
+
 /** Open is always first and close always last regardless of clock: a book
  *  re-listed after a suspension can stamp an `open` later than its own 6h. */
 function stageRank(stage: string): number {
@@ -1072,6 +1086,7 @@ function MarketCard<K extends string>({
   outcomes,
   getPrice,
   getLive,
+  liveLine,
   getLine,
   odds,
   lineSuffix,
@@ -1083,6 +1098,9 @@ function MarketCard<K extends string>({
   outcomes: MarketOutcome<K>[]
   getPrice: (book: string, key: K) => number | null
   getLive: (key: K) => number | null
+  /** The line the LIVE market is on. In-play spread/total move their line, so
+   *  it often matches no pregame group — see liveOrphan below. */
+  liveLine?: number | null
   /** The line this book quotes. Null for a market without one (h2h). */
   getLine: (book: string) => number | null
   /** Normalised odds, so the card can offer the full alternate-lines ladder. */
@@ -1116,6 +1134,10 @@ function MarketCard<K extends string>({
   })()
 
   const hasLive = outcomes.some((o) => getLive(o.key) != null)
+  // The live market can sit on a line no book quoted before the jump — an
+  // in-play total drifts as the game goes. Rather than hide it (which is what
+  // pinning Live to the first group does), give it its own row.
+  const liveOrphan = hasLive && liveLine !== undefined && !groups.some((g) => g.line === liveLine)
   // A ladder only exists when some book quotes more than its main line.
   const ladderLines = allLines(odds)
   const hasLadder = odds.some((b) => b.lines.length > 1)
@@ -1180,12 +1202,39 @@ function MarketCard<K extends string>({
             getPrice={getPrice}
             getLive={getLive}
             lineSuffix={lineSuffix}
-            // The live consensus is a single number for the fixture, not per
-            // line, so it belongs to the main (most-quoted) group only.
-            showLive={hasLive && gi === 0}
+            // Live belongs to the group on the live market's line. For h2h
+            // (no line) that is the first group; when the live line matches no
+            // group it is rendered separately below instead.
+            showLive={hasLive && !liveOrphan && (liveLine === undefined ? gi === 0 : g.line === liveLine)}
             showLineHeader={groups.length > 1 || g.line != null}
           />
         ))
+      )}
+      {showing === 'prices' && liveOrphan && (
+        <div className="border-t border-white/[0.05] bg-[color:var(--live)]/[0.05] px-4 py-2">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px]">
+            <span className="rounded border border-[color:var(--live)]/30 bg-[color:var(--live)]/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-[color:var(--live)]">
+              LIVE
+            </span>
+            <span className="text-[color:var(--muted)]">
+              {liveLine == null ? 'no line' : kind === 'spread' ? `Line ${fmtLine(liveLine)}` : `Line ${liveLine}`}
+            </span>
+            {outcomes.map((o) => {
+              const v = getLive(o.key)
+              return (
+                <span key={o.key as string} className="flex items-center gap-1.5">
+                  <span className="text-gray-300">{o.label}</span>
+                  <span className="font-semibold tabular-nums text-[color:var(--live)]">
+                    {v != null ? v.toFixed(2) : '—'}
+                  </span>
+                </span>
+              )
+            })}
+            <span className="text-[10.5px] text-[color:var(--muted-2)]">
+              no book quoted this line before the jump
+            </span>
+          </div>
+        </div>
       )}
       {showing === 'prices' && hasLadder && (
         <LadderTable kind={kind} odds={odds} lines={ladderLines} outcomes={outcomes} />
@@ -1543,7 +1592,7 @@ function MovementTable<K extends string>({
             <th className="px-2 py-2.5 text-left font-medium">Outcome</th>
             {stages.map((st) => (
               <th key={st} className="px-2 py-2.5 text-right font-medium">
-                {FLUC_STAGE_LABEL[st] ?? st}
+                {stageLabel(st)}
               </th>
             ))}
             <th className="px-3 py-2.5 text-right font-medium">Drift</th>

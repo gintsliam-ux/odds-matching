@@ -216,17 +216,30 @@ export function normaliseFlucs(
   const out: Record<string, Record<string, SidePrices & { at?: string | null; line?: number | null }>> = {}
   for (const [book, byStage] of Object.entries(marketFlucs ?? {})) {
     if (!byStage || typeof byStage !== 'object') continue
-    for (const [stage, snap] of Object.entries(byStage as Record<string, unknown>)) {
-      if (!snap || typeof snap !== 'object') continue
-      const s = snap as Record<string, unknown>
+    for (const [stage, raw] of Object.entries(byStage as Record<string, unknown>)) {
+      if (!raw || typeof raw !== 'object') continue
+      // The daily stage is an ARRAY of snapshots, one per day it was captured:
+      //   "9am": [{ at, date: "2026-08-12", home, away }, …]
+      // Expand each day into its own stage so a week of 9am captures becomes a
+      // week of columns rather than collapsing to one.
+      const entries: Array<[string, Record<string, unknown>]> = Array.isArray(raw)
+        ? raw
+            .filter((e): e is Record<string, unknown> => !!e && typeof e === 'object')
+            .map((e) => [
+              typeof e.date === 'string' ? `${stage} ${String(e.date).slice(5)}` : stage,
+              e,
+            ])
+        : [[stage, raw as Record<string, unknown>]]
+      for (const [stageKey, s] of entries) {
       // Normalise the snapshot as a one-book market so both shapes flow through
       // the same pairing/main-line logic.
-      const [norm] = normaliseMarket({ [book]: s }, kind)
-      if (!norm) continue
-      ;(out[book] ??= {})[stage] = {
-        ...norm.mainPrices,
-        line: norm.mainLine,
-        at: typeof s.at === 'string' ? s.at : null,
+        const [norm] = normaliseMarket({ [book]: s }, kind)
+        if (!norm) continue
+        ;(out[book] ??= {})[stageKey] = {
+          ...norm.mainPrices,
+          line: norm.mainLine,
+          at: typeof s.at === 'string' ? s.at : null,
+        }
       }
     }
   }

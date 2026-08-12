@@ -300,9 +300,16 @@ interface Row {
    * would still type-check.
    */
   closing_bookmaker?: string | null
-  /** Which book the live in-play prices come from. Not currently published by
-   *  the feed — see liveBookmaker in mapRow. */
+  /** Which book the live in-play prices come from. */
   live_bookmaker?: string | null
+  /** The live (in-play) spread and total, added alongside live_bookmaker.
+   *  Each carries its OWN line, which need not match any pregame line. */
+  live_spread_line?: number | null
+  live_spread_home?: number | null
+  live_spread_away?: number | null
+  live_total_line?: number | null
+  live_total_over?: number | null
+  live_total_under?: number | null
   live_h2h_home: number | null
   live_h2h_draw: number | null
   live_h2h_away: number | null
@@ -459,6 +466,16 @@ function mapRow(r: Row, nowMs: number): Fixture {
     bookmaker: r.closing_bookmaker ?? null,
     liveBookmaker: r.live_bookmaker ?? null,
     liveH2h,
+    liveSpread: {
+      line: r.live_spread_line ?? null,
+      home: r.live_spread_home ?? null,
+      away: r.live_spread_away ?? null,
+    },
+    liveTotal: {
+      line: r.live_total_line ?? null,
+      over: r.live_total_over ?? null,
+      under: r.live_total_under ?? null,
+    },
     closingH2h,
     spread: {
       line: null,
