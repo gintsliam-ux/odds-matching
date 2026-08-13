@@ -27,7 +27,7 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
   const universe = useSportUniverse()
   // Golf isn't in live_fixtures, so the universe can't see it — seed it here or
   // the sport never appears in the rail or the expanded list.
-  const { active: golfActive } = useGolfTournaments()
+  const { active: golfActive, loading: golfLoading } = useGolfTournaments()
   const [editing, setEditing] = useState<Favourite | 'new' | null>(null)
 
   const counts = useMemo(() => {
@@ -73,7 +73,15 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
     // outright table because it has no rows in live_fixtures at all — and set
     // AFTER the max above, which would otherwise reset it to 0 (activeBySport
     // has no golf entry to max against).
-    if (golfActive.length > 0) seed('golf').total = golfActive.length
+    //
+    // Seeded UNCONDITIONALLY, unlike every other sport, which the fixtures
+    // universe supplies. Gating this on `golfActive.length > 0` meant that when
+    // the golf tables went empty the sport did not read "Golf 0" the way
+    // Badminton or Volleyball do — it disappeared from the nav entirely, which
+    // looks like the terminal dropped a feature rather than like missing data.
+    // Only skipped while the first load is still in flight, so it doesn't flash
+    // a 0 it is about to fill.
+    if (!golfLoading) seed('golf').total = golfActive.length
     return [...m.entries()]
       .map(([key, v]) => ({ key, ...v }))
       .sort(
@@ -83,7 +91,7 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
           b.total - a.total ||
           a.label.localeCompare(b.label),
       )
-  }, [fixtures, universe, golfActive])
+  }, [fixtures, universe, golfActive, golfLoading])
 
   const favStats = useMemo(() => {
     const map = new Map<string, { total: number; live: number }>()
