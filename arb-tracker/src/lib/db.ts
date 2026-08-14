@@ -22,6 +22,7 @@ export interface SportConfig {
 
 export const SPORTS: SportConfig[] = [
   { key: 'afl', league: 'AFL', sport: 'Aussie Rules', eventsTable: 'afl_events', oddsTable: 'afl_odds' },
+  { key: 'aflw', league: 'AFLW', sport: 'Aussie Rules', eventsTable: 'aflw_events', oddsTable: 'aflw_odds' },
   { key: 'nrl', league: 'NRL', sport: 'Rugby League', eventsTable: 'nrl_events', oddsTable: 'nrl_odds' },
   { key: 'mlb', league: 'MLB', sport: 'Baseball', eventsTable: 'mlb_events', oddsTable: 'mlb_odds' },
   { key: 'wnba', league: 'WNBA', sport: 'Basketball', eventsTable: 'wnba_events', oddsTable: 'wnba_odds' },
