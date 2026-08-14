@@ -585,10 +585,54 @@
     background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 50%, var(--surface) 75%);
     background-size: 1000px 100%; animation: shimmer 1.4s infinite linear; border-radius: var(--r-md);
   }
-  .skel-card { border: 1px solid var(--line); border-radius: var(--r-md); height: 108px; }
-  .skel-header { height: 96px; border-radius: var(--r-lg); margin-bottom: 18px; }
-  .skel-tabs { height: 38px; border-radius: var(--r-sm); margin-bottom: 18px; width: 60%; }
-  .skel-table { height: 260px; border-radius: var(--r-md); }
+  /* A skeleton is the shape of the thing arriving, at the size it will arrive.
+     So the placeholders below reuse the real frames (.match-card, .detail-header,
+     .tp-item, .error-log-item …) and only swap the text for bars — nothing
+     resizes or reflows at the moment data lands. */
+  .skel-bar { border-radius: 4px; flex-shrink: 0; }
+
+  /* Match card — same frame, padding and row rhythm as .match-card */
+  .skel-card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+    padding: 12px 14px; display: flex; flex-direction: column; gap: 7px;
+  }
+  .skel-card .skel-row { display: flex; align-items: center; gap: 8px; }
+  .skel-card .skel-chips { display: flex; gap: 4px; }
+
+  /* Detail header — matches .detail-header's frame so the swap is invisible */
+  .skel-detail-header {
+    background: linear-gradient(135deg, var(--surface) 0%, var(--surface-2) 100%);
+    border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 20px 22px; margin-bottom: 18px;
+    display: flex; align-items: center; gap: 20px;
+  }
+  .skel-detail-header .sdh-main { flex: 1; display: flex; flex-direction: column; gap: 9px; }
+  .skel-detail-header .sdh-meta { display: flex; gap: 14px; }
+
+  /* Market tab strip — same height and underline as .mkt-tabs */
+  .skel-mkt-tabs {
+    display: flex; gap: 4px; border-bottom: 1px solid var(--line);
+    margin-bottom: 18px; padding: 9px 0 10px;
+  }
+  .skel-mkt-tabs .skel-bar { margin: 0 10px; }
+
+  /* Odds table — real wrapper, a header band, then rows on the same 7px rhythm */
+  .skel-table-wrap {
+    border: 1px solid var(--line); border-radius: var(--r-md);
+    background: var(--surface); overflow: hidden;
+  }
+  .skel-thead {
+    display: flex; gap: 24px; padding: 9px 12px;
+    background: var(--surface-2); border-bottom: 1px solid var(--line);
+  }
+  .skel-trow {
+    display: flex; gap: 24px; padding: 7px 12px; border-bottom: 1px solid var(--line-soft);
+  }
+  .skel-trow:last-child { border-bottom: 0; }
+
+  /* Sidebar tournament rows while the sport's list is being enumerated */
+  .skel-tourn { padding: 5px 9px; }
+
   .skel-line { height: 14px; border-radius: 4px; margin-bottom: 8px; }
   .skel-line.w60 { width: 60%; } .skel-line.w40 { width: 40%; } .skel-line.w80 { width: 80%; }
   .section-header { font-size: 16px; margin-bottom: 14px; color: #fff; display: flex; align-items: center; gap: 8px; }
@@ -644,6 +688,25 @@
   .sb-chev:hover { background: rgba(255,255,255,0.08); color: var(--text); }
   .sb-tourn.muted { opacity: .45; cursor: default; }
   .sb-tourn.muted:hover { background: transparent; color: var(--text-3); }
+  /* Tournaments the sport runs, but not in the month on screen — still one click away. */
+  .sb-tourn.dim { color: #4a5772; }
+  .sb-tourn.dim:hover { color: var(--text-2); }
+  .sb-tourn.dim.active { color: var(--accent-2); }
+
+  .sb-tourn-wrap { padding: 3px 0 5px 12px; margin: 2px 0 4px 8px; border-left: 1px solid var(--line-soft); }
+  .sb-tourn-wrap .sb-tourns { padding: 0; margin: 0; border: 0; max-height: 340px; overflow-y: auto; }
+  .sb-tourn-filter {
+    width: calc(100% - 9px); margin: 2px 0 5px; background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: var(--r-sm);
+    padding: 5px 8px; font-size: 11.5px; color: var(--text); outline: none;
+  }
+  .sb-tourn-filter:focus { border-color: var(--accent-line); }
+  .sb-tourn-filter::placeholder { color: var(--text-3); }
+  .sb-tourn-sect {
+    font-size: 9px; font-weight: 700; letter-spacing: .7px; text-transform: uppercase;
+    color: var(--text-3); padding: 8px 9px 4px; display: flex; gap: 6px;
+  }
+  .sb-tourn-sect span { opacity: .7; font-weight: 600; letter-spacing: 0; }
 
   /* ============================================================
      Tournament picker (shown when a month is too big to load whole)
@@ -770,7 +833,7 @@
     </div>
   </div>
   <div class="error-log-list" id="error-log-list">
-    <div class="error-log-empty">Loading…</div>
+    <div class="error-log-empty">Pick a sport to scan for discrepancies.</div>
   </div>
 </aside>
 
@@ -1288,24 +1351,173 @@ function toggleNavGroup(key, ev) {
   renderSidebar();
 }
 
-function renderNavTournaments(key) {
-  const d = sportData[key] || {};
-  const tours = d.tournaments || [];
-  if (!tours.length) {
-    return '<div class="sb-tourns"><div class="sb-tourn-empty">No tournaments this period</div></div>';
+/* Every tournament the sport has ever run, not just the ones in the selected
+   month. The month index still leads the list — those are the ones with data in
+   front of you — but the rest stay reachable, dimmed, and one click away.
+
+   The all-time list comes from a keyset walk over distinct `tournament` values
+   (one request per distinct name). That is ~1s for most sports but ~60s for
+   soccer's 222 and tennis's 294, so it renders progressively as names arrive and
+   is cached in localStorage afterwards. */
+const TOURNAMENT_CACHE_TTL = 7 * 86400000;
+const TOURNAMENT_SCAN_CAP = 600;
+let navFilter = '';
+
+function tournamentCacheKey(key) { return `ol.tourns.v1.${key}`; }
+
+function readTournamentCache(key) {
+  try {
+    const o = JSON.parse(localStorage.getItem(tournamentCacheKey(key)) || 'null');
+    if (!o || !Array.isArray(o.names)) return null;
+    if (Date.now() - o.at > TOURNAMENT_CACHE_TTL) return null;
+    return o.names;
+  } catch { return null; }
+}
+function writeTournamentCache(key, names) {
+  try {
+    localStorage.setItem(tournamentCacheKey(key), JSON.stringify({ at: Date.now(), names }));
+  } catch { /* private mode / quota — the list still works, just uncached */ }
+}
+
+async function loadAllTournaments(key) {
+  const d = (sportData[key] = sportData[key] || {});
+  if (d.tournamentScan === 'running') return d.allTournaments || [];   // already walking
+  if (d.allTournaments && d.tournamentScan === 'done') return d.allTournaments;
+
+  const cached = readTournamentCache(key);
+  if (cached) {
+    d.allTournaments = cached;
+    d.tournamentScan = 'done';
+    refreshNavTournaments(key);
+    return cached;
   }
+
+  const cfg = SPORTS[key];
+  const names = [];
+  let last = null;
+  d.tournamentScan = 'running';
+  refreshNavTournaments(key);
+
+  try {
+    for (let i = 0; i < TOURNAMENT_SCAN_CAP; i++) {
+      if (activeSport !== key) { d.tournamentScan = 'aborted'; return names; }  // moved on
+      let params = 'select=tournament&order=tournament.asc&limit=1';
+      if (last != null) params += `&tournament=gt.${encodeURIComponent(last)}`;
+      const rows = await qOdds(cfg.table, params);
+      // NULL tournaments sort last, so a null means the walk is finished.
+      if (!rows.length || rows[0].tournament == null) break;
+      last = rows[0].tournament;
+      names.push(last);
+      d.allTournaments = names.slice();
+      if (names.length % 8 === 0) refreshNavTournaments(key);
+    }
+    d.tournamentScan = 'done';
+    writeTournamentCache(key, names);
+  } catch (err) {
+    d.tournamentScan = 'failed';
+    console.error('tournament scan', err);
+  }
+  d.allTournaments = names;
+  refreshNavTournaments(key);
+  return names;
+}
+
+// Swap just the rows, never the whole sidebar: the filter box sits outside this
+// container so typing survives the progressive updates during a scan.
+function refreshNavTournaments(key) {
+  if (key !== activeSport) return;
+  const el = document.getElementById('sb-tourns');
+  if (!el) return;
+  el.innerHTML = navTournamentRows(key);
+
+  // A scan can push the list past the point where a filter earns its place;
+  // add or drop the box to match, but never yank it while it's being typed in.
+  const wrap = el.parentElement;
+  const input = wrap.querySelector('.sb-tourn-filter');
+  const needed = navTournamentCount(key) > 14;
+  if (needed && !input) {
+    el.insertAdjacentHTML('beforebegin', navFilterHtml());
+  } else if (!needed && input && document.activeElement !== input) {
+    input.remove();
+  }
+  applyNavFilter();
+}
+
+function navTournamentCount(key) {
+  const d = sportData[key] || {};
+  return (d.allTournaments || []).length + (d.tournaments || []).length;
+}
+function navFilterHtml() {
+  return `<input class="sb-tourn-filter" type="text" placeholder="Filter tournaments…" value="${escAttr(navFilter)}"
+    oninput="navFilter=this.value; applyNavFilter()" autocomplete="off">`;
+}
+
+function navTournamentRows(key) {
+  const d = sportData[key] || {};
+  const inMonth = d.tournaments || [];
+  const all = d.allTournaments || [];
+  const scanning = d.tournamentScan === 'running';
   const canLoadAll = (d.monthRows || 0) <= MONTH_ROW_BUDGET;
-  let html = '<div class="sb-tourns">';
-  html += `<div class="sb-tourn ${selectedSubTournament ? '' : 'active'} ${canLoadAll ? '' : 'muted'}"
+
+  const row = (name, dim) => `<div class="sb-tourn ${selectedSubTournament === name ? 'active' : ''} ${dim ? 'dim' : ''}"
+      data-name="${escAttr(name.toLowerCase())}" title="${escAttr(name)}${dim ? ' — no data in this period' : ''}"
+      onclick="selectTournament('${jsStr(name)}')">${escHtml(name)}</div>`;
+
+  let html = `<div class="sb-tourn ${selectedSubTournament ? '' : 'active'} ${canLoadAll ? '' : 'muted'}"
+      data-name="all tournaments"
       title="${canLoadAll ? 'Every tournament this month' : 'Too much data to load at once — pick a tournament'}"
       onclick="${canLoadAll ? 'selectTournament(null)' : ''}">All tournaments</div>`;
-  for (const t of tours) {
-    html += `<div class="sb-tourn ${selectedSubTournament === t.name ? 'active' : ''}" title="${escAttr(t.name)}"
-        onclick="selectTournament('${jsStr(t.name)}')">
-        <span class="sb-tourn-name">${escHtml(t.name)}</span>
-      </div>`;
+
+  if (inMonth.length) {
+    html += `<div class="sb-tourn-sect">${escHtml(periodLabel())}</div>`;
+    for (const t of inMonth) html += row(t.name, false);
   }
-  return html + '</div>';
+
+  const seen = new Set(inMonth.map(t => t.name));
+  const rest = all.filter(n => !seen.has(n));
+  if (rest.length || scanning) {
+    html += `<div class="sb-tourn-sect">Other periods${rest.length ? ` <span>${rest.length}</span>` : ''}</div>`;
+    for (const n of rest) html += row(n, true);
+    if (scanning) html += skeletonTournaments(4);
+  } else if (!inMonth.length) {
+    html += '<div class="sb-tourn-empty">No tournaments found</div>';
+  }
+  return html;
+}
+
+function renderNavTournaments(key) {
+  const filterBox = navTournamentCount(key) > 14 ? navFilterHtml() : '';
+  return `<div class="sb-tourn-wrap">${filterBox}
+      <div class="sb-tourns" id="sb-tourns">${navTournamentRows(key)}</div>
+    </div>`;
+}
+
+// Filter by hiding rows rather than re-rendering, so the input keeps focus.
+function applyNavFilter() {
+  const el = document.getElementById('sb-tourns');
+  if (!el) return;
+  const q = navFilter.trim().toLowerCase();
+  let anyVisible = false;
+  for (const row of el.querySelectorAll('.sb-tourn')) {
+    const hit = !q || (row.dataset.name || '').includes(q);
+    row.style.display = hit ? '' : 'none';
+    if (hit) anyVisible = true;
+  }
+  // Section headings are noise once their rows are filtered away.
+  for (const sect of el.querySelectorAll('.sb-tourn-sect')) {
+    let next = sect.nextElementSibling, shows = false;
+    while (next && !next.classList.contains('sb-tourn-sect')) {
+      if (next.classList.contains('sb-tourn') && next.style.display !== 'none') { shows = true; break; }
+      next = next.nextElementSibling;
+    }
+    sect.style.display = shows ? '' : 'none';
+  }
+  const empty = el.querySelector('.sb-tourn-nohit');
+  if (q && !anyVisible) {
+    if (!empty) el.insertAdjacentHTML('beforeend', '<div class="sb-tourn-empty sb-tourn-nohit">No match</div>');
+  } else if (empty) {
+    empty.remove();
+  }
 }
 
 function renderSidebar() {
@@ -1426,7 +1638,7 @@ async function setDateFilter(year, month) {
   dv.classList.remove('active');
   dv.innerHTML = '';
 
-  showLoading(true);
+  showLoading('list');
   try {
     await loadTournamentIndex(activeSport, selectedYear, selectedMonth);
     // The tournament we were on may not run in the new month.
@@ -1436,7 +1648,7 @@ async function setDateFilter(year, month) {
   } catch (err) {
     console.error(err);
   }
-  showLoading(false);
+  showLoading(null);
 
   // Keep the URL honest: drop the event slug, keep the tournament if it survived.
   const tSlug = currentTournamentSlug();
@@ -1527,6 +1739,13 @@ function renderErrorLog() {
 
   const data = sportData[activeSport];
   const cfg = SPORTS[activeSport];
+  if (activeSport && loadingKind) {
+    // Mid-load: rows are coming, so show their shape rather than "no results".
+    listEl.innerHTML = skeletonDiscList();
+    if (scopeEl) scopeEl.innerHTML = 'Scanning…';
+    setDiscCount(null);
+    return;
+  }
   if (!activeSport || !data || !data.grouped) {
     listEl.innerHTML = '<div class="error-log-empty">Pick a sport to scan for discrepancies.</div>';
     setDiscCount(0);
@@ -1591,15 +1810,18 @@ function renderErrorLog() {
   listEl.innerHTML = html;
 }
 
+// `null` means "not counted yet" — shown as a dash, so a stale number from the
+// previous sport never reads as this one's result.
 function setDiscCount(n) {
-  discCount = n;
+  discCount = n == null ? 0 : n;
+  const label = n == null ? '–' : String(n);
   const btn = document.getElementById('disc-btn-count');
   if (btn) {
-    btn.textContent = n;
-    btn.classList.toggle('zero', n === 0);
+    btn.textContent = label;
+    btn.classList.toggle('zero', n == null || n === 0);
   }
   const head = document.getElementById('error-count');
-  if (head) head.textContent = n;
+  if (head) head.textContent = label;
 }
 
 /* ===========================================================================
@@ -1627,9 +1849,21 @@ function renderHomeView() {
   });
 
   const fmtMonth = (s) => s ? new Date(s + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' }) : '—';
+  // A tile whose date range hasn't landed keeps the real frame, icon and name —
+  // only the two data lines are bars. Nothing moves when the range arrives.
   const tile = (t) => {
-    const status = !t.hasData ? { cls: 'unknown', text: 'Loading' }
-      : t.isActive ? { cls: 'active', text: 'Active' } : { cls: 'off', text: 'Off-season' };
+    if (!t.hasData) {
+      return `<a class="home-tile ${t.isActive ? '' : 'off'}" href="#/${t.key}">
+        <div class="ht-head">
+          ${sportIconHtml(t.key, 'ht-icon')}
+          <div class="ht-name">${escHtml(t.cfg.label)}</div>
+          ${bar('58px', 17, '999px')}
+        </div>
+        ${bar('136px', 16)}
+        <div class="ht-foot">${bar('82px', 12)}${bar('66px', 12)}</div>
+      </a>`;
+    }
+    const status = t.isActive ? { cls: 'active', text: 'Active' } : { cls: 'off', text: 'Off-season' };
     return `<a class="home-tile ${t.isActive ? '' : 'off'}" href="#/${t.key}">
       <div class="ht-head">
         ${sportIconHtml(t.key, 'ht-icon')}
@@ -2089,7 +2323,7 @@ function handleTeamSearch(query) {
 
 async function runTeamSearch(q) {
   const container = document.getElementById('search-results');
-  container.innerHTML = '<div class="search-no-results">Searching…</div>';
+  container.innerHTML = skeletonSearch();
 
   const vsParts = q.split(/\s+vs?\.?\s+/i).map(s => s.trim()).filter(Boolean);
   const twoTeam = vsParts.length >= 2;
@@ -2243,6 +2477,7 @@ async function handleRoute() {
     if (sportChanged) {
       currentSlug = null;
       selectedSubTournament = null;
+      navFilter = '';
       selectedYear = null; selectedMonth = null;
       activeMarketType = null;
       const dv = document.getElementById('detail-view');
@@ -2253,11 +2488,11 @@ async function handleRoute() {
     // A deep-linked event may live in a different month than the default.
     const slugDate = extractDateFromSlug(slug);
 
-    showLoading(true);
+    showLoading(slug ? 'detail' : 'list');
     try {
       const range = sportData[sport]?.dateRange || await loadDateRange(sport);
       if (!range.combos.length) {
-        showLoading(false);
+        showLoading(null);
         document.getElementById('match-list-view').innerHTML =
           `<div class="notice">No data captured for ${escHtml(SPORTS[sport].label)} yet.</div>`;
         document.getElementById('match-list-view').style.display = '';
@@ -2272,9 +2507,14 @@ async function handleRoute() {
 
       await loadTournamentIndex(sport, selectedYear, selectedMonth);
       selectedSubTournament = tournament ? findTournamentBySlug(sport, tournament) : null;
+      renderSidebar();
+      // The row count is in now, so we know which shape is actually coming.
+      if (!slug && !selectedSubTournament && (sportData[sport].monthRows || 0) > MONTH_ROW_BUDGET) {
+        showLoading('picker');
+      }
       await loadScoped(sport);
     } catch (err) {
-      showLoading(false);
+      showLoading(null);
       document.getElementById('match-list-view').innerHTML =
         `<div class="notice" style="color:var(--neg)">Error loading ${escHtml(SPORTS[sport].label)}: ${escHtml(err.message)}</div>`;
       document.getElementById('match-list-view').style.display = '';
@@ -2282,10 +2522,14 @@ async function handleRoute() {
       renderSidebar(); renderTopbar();
       return;
     }
-    showLoading(false);
+    showLoading(null);
 
     renderSidebar();
     renderMatchList();
+
+    // Non-blocking: the nav shows this month's tournaments straight away and
+    // fills in the sport's full history as the scan walks it.
+    loadAllTournaments(sport);
 
     if (slug) {
       openDetailDirect(slug);
@@ -2315,26 +2559,110 @@ document.addEventListener('keydown', (e) => {
 /* ===========================================================================
    Loading states
    =========================================================================== */
-function showLoading(show) {
+/* One shimmer bar. Sizes are given in the units the real element uses, so a
+   skeleton can be written by reading the markup it stands in for. */
+function bar(w, h, r) {
+  return `<div class="skeleton skel-bar" style="width:${w};height:${h}px${r ? `;border-radius:${r}` : ''}"></div>`;
+}
+// Deterministic pseudo-random width so rows look like text, not a grid, but
+// don't reshuffle on every re-render.
+function vary(i, lo, hi) { return lo + ((i * 37) % (hi - lo + 1)); }
+
+/* `loadingKind` lets the other renderers (sidebar, drawer) tell "nothing here"
+   apart from "not here yet" — the two used to look identical. */
+let loadingKind = null;
+
+function showLoading(kind) {
   const el = document.getElementById('loading');
-  if (show) {
-    el.style.display = '';
-    el.innerHTML = skeletonMatchList();
-    document.getElementById('match-list-view').style.display = 'none';
-    document.getElementById('detail-view').classList.remove('active');
-  } else {
-    el.style.display = 'none';
-  }
+  loadingKind = kind || null;
+  if (!kind) { el.style.display = 'none'; return; }
+
+  el.style.display = '';
+  el.innerHTML = kind === 'detail' ? skeletonDetail()
+    : kind === 'picker' ? skeletonPicker()
+    : skeletonMatchList();
+  document.getElementById('match-list-view').style.display = 'none';
+  document.getElementById('detail-view').classList.remove('active');
+  // The drawer is scoped to whatever is loading, so it has to follow along —
+  // otherwise it sits there showing the previous sport's findings.
+  renderErrorLog();
 }
 
+// The list head + day-grouped card grid that renderMatchList lands.
 function skeletonMatchList() {
-  let cards = '';
-  for (let i = 0; i < 9; i++) cards += '<div class="skeleton skel-card"></div>';
-  return `<div class="list-head">
-      <div class="skeleton skel-line" style="height:22px;width:180px;margin:0"></div>
+  const card = (i) => `<div class="skel-card">
+      <div class="skel-row">${bar(vary(i, 46, 78) + 'px', 10)}<div style="flex:1"></div>${bar('58px', 16, '999px')}</div>
+      ${bar(vary(i, 62, 88) + '%', 15)}
+      <div class="skel-row">${bar('54px', 13)}</div>
+      <div class="skel-chips">${bar('58px', 15, '6px')}${bar('50px', 15, '6px')}${bar('42px', 15, '6px')}</div>
+    </div>`;
+  const group = (n, from) => `<div class="day-head">${bar('124px', 11)}</div>
+    <div class="match-grid">${Array.from({ length: n }, (_, i) => card(from + i)).join('')}</div>`;
+
+  return `<div class="list-head">${bar('190px', 22)}<div style="flex:1"></div>${bar('130px', 13)}</div>
+    <div class="load-msg" id="load-msg">Loading…</div>
+    ${group(4, 0)}${group(3, 4)}`;
+}
+
+// The header, tab strip and odds table that openDetailDirect lands. Without
+// this a deep-linked event showed a grid of cards where a wide table was coming.
+function skeletonDetail() {
+  const COLS = [150, 120, 70, 70, 70, 70, 70, 70, 60, 60];
+  const head = `<div class="skel-thead">${COLS.map(w => bar(w + 'px', 10)).join('')}</div>`;
+  const row = (i) => `<div class="skel-trow">${COLS.map((w, c) =>
+    bar((c < 2 ? vary(i + c, 60, 100) * w / 100 : w) + 'px', 12)).join('')}</div>`;
+
+  return `<div class="detail-top">${bar('84px', 32, '10px')}</div>
+    <div class="skel-detail-header">
+      <div class="sdh-main">
+        <div class="skel-row" style="display:flex;gap:8px;align-items:center">${bar('18px', 18, '5px')}${bar('130px', 10)}</div>
+        ${bar('340px', 26)}
+        <div class="sdh-meta">${bar('150px', 12)}${bar('58px', 12)}${bar('90px', 12)}</div>
+      </div>
+      ${bar('72px', 40, '8px')}
     </div>
     <div class="load-msg" id="load-msg">Loading…</div>
-    <div class="match-grid">${cards}</div>`;
+    <div class="skel-mkt-tabs">${[92, 78, 62, 104, 96].map(w => bar(w + 'px', 15)).join('')}</div>
+    <div class="market-panel-head">${bar('120px', 16)}</div>
+    <div class="skel-table-wrap">${head}${Array.from({ length: 10 }, (_, i) => row(i)).join('')}</div>`;
+}
+
+// The "pick a tournament" panel a sport lands on when its month is too big to
+// load whole — a card grid would be the wrong shape entirely.
+function skeletonPicker() {
+  const item = (i) => `<div class="tp-item">${bar(vary(i, 55, 90) + '%', 13)}<div style="flex:1"></div>${bar('34px', 11)}</div>`;
+  return `<div class="list-head">${bar('190px', 22)}<div style="flex:1"></div>${bar('130px', 13)}</div>
+    <div class="load-msg" id="load-msg">Loading…</div>
+    <div class="tp-wrap">
+      <div class="tp-head">${bar('170px', 15)}<div style="height:6px"></div>${bar('420px', 12)}</div>
+      <div class="tp-grid">${Array.from({ length: 12 }, (_, i) => item(i)).join('')}</div>
+    </div>`;
+}
+
+// Sidebar tournament rows, at .sb-tourn's height.
+function skeletonTournaments(n = 7) {
+  return `<div class="sb-tourns">${Array.from({ length: n }, (_, i) =>
+    `<div class="skel-tourn">${bar(vary(i, 45, 92) + '%', 11)}</div>`).join('')}</div>`;
+}
+
+// Discrepancy rows, in .error-log-item's frame.
+function skeletonDiscList(n = 5) {
+  return Array.from({ length: n }, (_, i) => `<div class="error-log-item" style="cursor:default">
+      ${bar(vary(i, 52, 86) + '%', 12)}
+      <div style="height:6px"></div>
+      ${bar(vary(i + 3, 60, 94) + '%', 10)}
+      <div style="height:5px"></div>
+      ${bar(vary(i + 1, 40, 70) + '%', 10)}
+    </div>`).join('');
+}
+
+// Search results, in .search-result-item's frame.
+function skeletonSearch(n = 4) {
+  return Array.from({ length: n }, (_, i) => `<div class="search-result-item" style="cursor:default">
+      ${bar(vary(i, 55, 92) + '%', 12)}
+      <div style="height:5px"></div>
+      ${bar(vary(i + 2, 40, 75) + '%', 9)}
+    </div>`).join('');
 }
 
 /* ===========================================================================
