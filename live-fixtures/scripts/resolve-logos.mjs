@@ -6,6 +6,8 @@
 // Usage:  node scripts/resolve-logos.mjs              (only unresolved names)
 //         node scripts/resolve-logos.mjs --force      (re-resolve everything)
 //         node scripts/resolve-logos.mjs --retry-null (re-try cached misses)
+//         node scripts/resolve-logos.mjs --sport=aussierules,ucl
+//                                                (re-resolve just these sports)
 //
 // Also imported by api/cron/resolve-logos.ts, which calls `runResolver()` with a
 // deadline so the daily run fits inside the function's maxDuration. Nothing may
@@ -53,6 +55,16 @@ const SPORT_HINT = {
   boxing: 'boxer',
   darts: 'darts player',
   afl: 'australian football club',
+  // The feed also files Australian football under `aussierules`, and buckets
+  // several leagues as their own "sport". Any value missing here searches with
+  // NO hint, which is how the WAFL's suburb-named clubs — Perth, Subiaco,
+  // Claremont, East Fremantle — resolved to the suburbs themselves: a town
+  // hall, a street, and a photo of the Perth skyline.
+  aussierules: 'australian football club',
+  ucl: 'football club',
+  laliga: 'football club',
+  nrl: 'rugby league club',
+  motorsport: 'racing driver',
   amfootball: 'college football team',
   americanfootball: 'college football team',
   volleyball: 'volleyball team',
@@ -65,14 +77,29 @@ const SPORT_HINT = {
   badminton: 'badminton player',
 }
 
-// Images that are almost never a team logo/headshot — usually a wrong match on a
-// geographic/civic page (e.g. "Alabama" → flag of the state).
-const REJECT = /Flag_of|Coat_of_arms|Map_of|Locator|Seal_of|_map[._]|Orthographic/i
+// Images that are almost never a team logo/headshot — usually a wrong match on
+// a geographic/civic page (e.g. "Alabama" → flag of the state).
+//
+// The second group is for suburb-named clubs. The token guard below passes
+// "East Fremantle Town Hall" for "East Fremantle" — they do share a token — so
+// the picture has to be rejected on what it IS. These are the shapes Wikipedia
+// leads a place article with: a civic building, a skyline, a street view.
+const REJECT =
+  /Flag_of|Coat_of_arms|Map_of|Locator|Seal_of|_map[._]|Orthographic/i
+const REJECT_PLACE =
+  /Town_Hall|City_Hall|Skyline|_CBD|Street|Railway_station|Post_Office|Courthouse|Library|Bridge|Beach|Aerial|Panorama|Church|Cathedral|Museum/i
 
 // CLI entry — only when invoked directly, never on import.
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   runResolver({
     force: process.argv.includes('--force'),
+    // --sport=aussierules,ucl : re-resolve just these sports, cached or not.
+    // Fixing a hint should not mean re-running all 10k names through Wikipedia.
+    sports: (process.argv.find((a) => a.startsWith('--sport=')) ?? '')
+      .replace('--sport=', '')
+      .split(',')
+      .map((x) => x.trim().toLowerCase())
+      .filter(Boolean),
     // Re-resolve only rows whose previous attempt produced no logo. Useful when
     // the resolver itself has been improved (e.g. added the REST summary
     // fallback) without paying the cost of redoing every working row.
@@ -96,7 +123,8 @@ if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
  * @returns {Promise<{scanned:number, resolved:number, missed:number, failed:number, remaining:number, timedOut:boolean, ms:number}>}
  */
 export async function runResolver(opts = {}) {
-  const { force = false, retryNull = false, deadlineMs = Infinity, log = () => {} } = opts
+  const { force = false, retryNull = false, sports = [], deadlineMs = Infinity, log = () => {} } = opts
+  const only = new Set(sports)
   const started = Date.now()
   const expired = () => Date.now() - started >= deadlineMs
   ;({ REST, H } = credentials())
@@ -113,12 +141,15 @@ export async function runResolver(opts = {}) {
       const sport = (r.sport || '').toLowerCase()
       const league = (r.league || '').toLowerCase()
       if (MAJOR_LEAGUES.has(league) || MAJOR_LEAGUES.has(sport)) continue
+      if (only.size && !only.has(sport)) continue
       wanted.set(`${sport}|${name}`, { sport, name })
     }
   }
   log(`${wanted.size} distinct non-major names.`)
 
-  if (!force) {
+  // A --sport run is a repair: whatever is cached for those sports was resolved
+  // under the old hint and is exactly what needs replacing.
+  if (!force && only.size === 0) {
     const existing = await getAll('entity_logos?select=sport,name,logo_url').catch((e) => {
       log('Could not read entity_logos — did you run scripts/entity_logos.sql?')
       throw e
@@ -190,7 +221,7 @@ async function wikipedia(name, hint) {
   const q = encodeURIComponent(`${name} ${hint}`.trim())
   const u =
     `https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*` +
-    `&generator=search&gsrsearch=${q}&gsrlimit=1&redirects=1` +
+    `&generator=search&gsrsearch=${q}&gsrlimit=5&redirects=1` +
     `&prop=pageimages|info&piprop=thumbnail&pithumbsize=200`
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
@@ -203,22 +234,39 @@ async function wikipedia(name, hint) {
       const d = await r.json()
       const pages = d?.query?.pages
       if (!pages) return null
-      for (const k of Object.keys(pages)) {
-        const page = pages[k]
-        const title = page.title || ''
-        if (!relevant(name, title)) return null
-        const t = page?.thumbnail?.source
+      // Rank the candidates rather than trusting the top hit.
+      //
+      // Searching "Perth australian football club" returns West Perth first,
+      // East Perth second, Perth Glory (a soccer club, with a tempting logo)
+      // third, and the actual Perth Football Club fourth. Taking result #1 gave
+      // Perth the Falcons crest — West Perth's — and taking the first result
+      // WITH an image would have given it Perth Glory's.
+      //
+      // So score by how much the title says beyond the name: strip the words
+      // every club title carries, and prefer the candidate that adds nothing.
+      const ranked = Object.values(pages)
+        .map((page) => {
+          const title = page.title || ''
+          const extras = [...tokens(title)].filter(
+            (tok) => !GENERIC_TITLE_WORDS.has(tok) && !tokens(name).has(tok),
+          )
+          return { page, title, extras: extras.length, index: page.index ?? 99 }
+        })
+        .filter((c) => relevant(name, c.title))
+        .sort((a, b) => a.extras - b.extras || a.index - b.index)
+
+      for (const c of ranked) {
+        const t = c.page?.thumbnail?.source
         if (t) {
-          if (REJECT.test(t)) return null
+          if (REJECT.test(t) || REJECT_PLACE.test(t)) continue
           return t
         }
-        // Wikipedia search returned the right page but it has no pageimage
-        // (common for AFL/NRL clubs). Fall through to the REST summary which
-        // returns originalimage / thumbnail more reliably.
-        const summary = await wikipediaSummary(title)
+        // The search found the right page but it has no pageimage (common for
+        // AFL/NRL clubs). The REST summary returns originalimage/thumbnail more
+        // reliably.
+        const summary = await wikipediaSummary(c.title)
         if (summary === undefined) return undefined // request failure
-        if (summary && !REJECT.test(summary)) return summary
-        return null
+        if (summary && !REJECT.test(summary) && !REJECT_PLACE.test(summary)) return summary
       }
       return null
     } catch {
@@ -260,11 +308,33 @@ function tokens(s) {
   )
 }
 
+/**
+ * Directional qualifiers that DISTINGUISH clubs rather than decorate them.
+ *
+ * "Perth" and "West Perth" are different WAFL clubs, as are "Fremantle",
+ * "East Fremantle" and "South Fremantle". A search for the bare name happily
+ * returns the qualified club — "Perth" resolved to West Perth's Falcons crest,
+ * the same image as West Perth's own row.
+ */
+/** Words every club title carries — they say nothing about WHICH club. */
+const GENERIC_TITLE_WORDS = new Set([
+  'football', 'club', 'fc', 'afc', 'sc', 'association', 'team', 'sports', 'sporting',
+  'the', 'of', 'and',
+])
+
+const DIRECTIONAL = new Set([
+  'north', 'south', 'east', 'west', 'central', 'northern', 'southern', 'eastern',
+  'western', 'upper', 'lower',
+])
+
 /** true if the page title shares a meaningful token with the searched name. */
 function relevant(name, title) {
   const n = tokens(name)
   if (n.size === 0) return true // nothing distinctive to check — trust the search
   const t = tokens(title)
+  // A directional word in the title that the name does not have means the
+  // search drifted to the neighbouring club, not this one.
+  for (const tok of t) if (DIRECTIONAL.has(tok) && !n.has(tok)) return false
   for (const tok of n) if (t.has(tok)) return true
   return false
 }
