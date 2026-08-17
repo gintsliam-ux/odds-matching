@@ -412,7 +412,7 @@ export async function fetchOdds(event: SportEvent): Promise<OddsRow[]> {
     const { data, error } = await supabase
       .from(sp.oddsTable)
       .select(
-        'market_id,selection,line,sportsbook,is_lay,current_price,open_price,status,flucs,open_at,price_3h,price_1h,price_30m,price_10m,close_price,current_at,daily_prices',
+        'market_id,selection,line,sportsbook,is_lay,current_price,open_price,status,flucs,open_at,price_6h,price_3h,price_1h,price_30m,price_10m,close_price,current_at,daily_prices',
       )
       .eq('fixture_id', event.id)
       .order('id', { ascending: true })

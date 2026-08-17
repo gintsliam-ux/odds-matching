@@ -214,6 +214,7 @@ export interface OddsRow {
   status: string | null;
   flucs: Fluc[] | null;
   open_at: string | null;
+  price_6h: number | null;
   price_3h: number | null;
   price_1h: number | null;
   price_30m: number | null;
@@ -306,6 +307,7 @@ function detailFrom(r: OddsRow, price: number): PriceDetail {
   const add = (label: string, p: number | null) => {
     if (p != null) snapshots.push({ label, price: p });
   };
+  add('6h', r.price_6h);
   add('3h', r.price_3h);
   add('1h', r.price_1h);
   add('30m', r.price_30m);
