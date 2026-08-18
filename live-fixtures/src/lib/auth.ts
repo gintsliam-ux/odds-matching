@@ -16,6 +16,8 @@ export interface User {
   username: string
   role: string
   prefs: UserPrefs
+  /** Role forces alerts on, so the switches are shown but not offered. */
+  alertsLocked?: boolean
   createdAt: string | null
   updatedAt: string | null
 }

@@ -47,6 +47,10 @@ export default function UsersPage() {
   }
 
   const prefs = user?.prefs ?? {}
+  // Support exists to watch alerts, so the server keeps them on for that role
+  // and refuses a write. Showing the switches disabled — rather than hiding
+  // them — says why they are on, instead of leaving someone to wonder.
+  const locked = !!user?.alertsLocked
 
   return (
     <div className="mx-auto max-w-[900px] px-5 py-6">
@@ -59,8 +63,14 @@ export default function UsersPage() {
       {/* --- own notification preferences ----------------------------------- */}
       <section className="mb-8 rounded-lg bg-[color:var(--panel)] px-5 py-4">
         <h2 className="mb-3 text-[13px] font-semibold text-gray-100">Notifications</h2>
+        {locked && (
+          <p className="mb-3 rounded border border-[var(--line)] bg-black/[0.2] px-3 py-2 text-[11.5px] text-[color:var(--muted)]">
+            Alerts stay on for <span className="text-gray-200">{user?.role}</span> accounts.
+          </p>
+        )}
         <div className="space-y-2">
           <Toggle
+            disabled={locked}
             on={!prefs.muteSound}
             onChange={(on) => setPrefs({ ...prefs, muteSound: !on })}
             onIcon={<Volume2 className="h-4 w-4" />}
@@ -69,6 +79,7 @@ export default function UsersPage() {
             hint="A short chime when a new alert fires."
           />
           <Toggle
+            disabled={locked}
             on={!prefs.hideToasts}
             onChange={(on) => setPrefs({ ...prefs, hideToasts: !on })}
             onIcon={<Bell className="h-4 w-4" />}
@@ -127,6 +138,7 @@ function Toggle({
   offIcon,
   title,
   hint,
+  disabled = false,
 }: {
   on: boolean
   onChange: (on: boolean) => void
@@ -134,11 +146,13 @@ function Toggle({
   offIcon: React.ReactNode
   title: string
   hint: string
+  disabled?: boolean
 }) {
   return (
     <button
-      onClick={() => onChange(!on)}
-      className="flex w-full items-center gap-3 rounded px-2 py-2 text-left hover:bg-white/[0.03]"
+      onClick={() => !disabled && onChange(!on)}
+      disabled={disabled}
+      className="flex w-full items-center gap-3 rounded px-2 py-2 text-left hover:bg-white/[0.03] disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent"
     >
       <span className={on ? 'text-[color:var(--total)]' : 'text-[color:var(--muted-2)]'}>
         {on ? onIcon : offIcon}

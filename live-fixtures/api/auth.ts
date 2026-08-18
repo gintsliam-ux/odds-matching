@@ -64,13 +64,33 @@ interface UserDoc {
   updatedAt?: string
 }
 
+/**
+ * Support is the role that exists to watch alerts, so alerts stay on for it.
+ *
+ * Enforced here rather than just seeded, because a default drifts: one person
+ * mutes the chime during a meeting, never turns it back on, and the alert the
+ * role exists to catch goes unheard. Applied on read as well as on write, so a
+ * row edited directly in Mongo still behaves.
+ */
+function effectivePrefs(u: UserDoc): UserPrefs {
+  const prefs = u.prefs ?? {}
+  if ((u.role ?? 'user') === 'support') return { ...prefs, muteSound: false, hideToasts: false }
+  return prefs
+}
+
+/** True when the role cannot change its own notification switches. */
+export function alertsLocked(role: string | undefined): boolean {
+  return (role ?? 'user') === 'support'
+}
+
 /** What the client is allowed to see. Never the hash. */
 function publicUser(u: UserDoc) {
   return {
     id: String(u._id),
     username: u.username,
     role: u.role ?? 'user',
-    prefs: u.prefs ?? {},
+    prefs: effectivePrefs(u),
+    alertsLocked: alertsLocked(u.role),
     createdAt: u.createdAt ?? null,
     updatedAt: u.updatedAt ?? null,
   }
@@ -222,6 +242,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // --- own preferences ---
     if (action === 'prefs') {
+      const self = await users.findOne({ _id: toId(session.id) })
+      if (!self) {
+        res.status(401).json({ error: 'Not signed in' })
+        return
+      }
+      if (alertsLocked(self.role)) {
+        res.status(403).json({ error: 'Support accounts always have alerts on' })
+        return
+      }
       const prefs: UserPrefs = {
         muteSound: !!body?.prefs?.muteSound,
         hideToasts: !!body?.prefs?.hideToasts,
