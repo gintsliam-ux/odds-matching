@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { Activity, Bell, ChevronDown, ChevronRight, Clock, GitMerge, LayoutGrid, ListChecks, Pencil, Plus, Radio, Star } from 'lucide-react'
+import { Activity, Bell, ChevronDown, ChevronRight, Clock, GitMerge, LayoutGrid, ListChecks, LogOut, Pencil, Plus, Radio, Star, Users as UsersIcon } from 'lucide-react'
 import type { Fixture } from '../lib/types'
 import { useMappedLeagues } from '../hooks/useMappedLeagues'
 import { displaySport, sportGroupKey, sportToSlug } from '../lib/sports'
@@ -10,6 +10,7 @@ import { FavouriteEditor } from './FavouriteEditor'
 import type { DayView } from './Layout'
 import { useSportUniverse } from '../hooks/useSportUniverse'
 import { useGolfTournaments } from '../hooks/useGolfTournaments'
+import { useAuth } from '../lib/authContext'
 
 interface Props {
   fixtures: Fixture[]
@@ -21,6 +22,7 @@ interface Props {
 }
 
 export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) {
+  const { user, signOut } = useAuth()
   const favourites = useFavourites()
   // Single open sport (accordion) — expanding one collapses any other.
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -255,7 +257,40 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
               count={notificationCount || undefined}
               accent={notificationCount ? 'live' : undefined}
             />
+            <Item to="/users" label="Users" icon={<UsersIcon className="h-3.5 w-3.5" />} />
           </Group>
+
+          {/* Who you are, and the way out. Last thing in the rail so it reads
+              as account rather than navigation. */}
+          {user && (
+            <div className="mt-1 border-t border-white/[0.05] px-4 pt-3">
+              {collapsed ? (
+                <div
+                  title={`${user.username} · ${user.role}`}
+                  className="mx-auto flex h-6 w-6 items-center justify-center rounded-full bg-white/[0.06] text-[10px] font-semibold text-gray-200"
+                >
+                  {user.username.slice(0, 2).toUpperCase()}
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/[0.06] text-[10px] font-semibold text-gray-200">
+                    {user.username.slice(0, 2).toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[12px] text-gray-200">{user.username}</div>
+                    <div className="text-[10px] text-[color:var(--muted-2)]">{user.role}</div>
+                  </div>
+                  <button
+                    onClick={() => void signOut()}
+                    title="Sign out"
+                    className="rounded p-1 text-[color:var(--muted-2)] hover:text-gray-200"
+                  >
+                    <LogOut className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </nav>
 

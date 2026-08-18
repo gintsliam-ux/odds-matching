@@ -54,7 +54,13 @@ function playChime(ctxRef: { current: AudioContext | null }): void {
   }
 }
 
-export function useAlertToasts(notifications: Notification[]): {
+export function useAlertToasts(
+  notifications: Notification[],
+  /** Signed-in user's preference. The queue still fills when muted — only the
+   *  chime is suppressed — so the Notifications page and the badge are
+   *  unaffected. */
+  muteSound = false,
+): {
   toasts: AlertToast[]
   dismiss: (id: string) => void
   dismissAll: () => void
@@ -62,6 +68,13 @@ export function useAlertToasts(notifications: Notification[]): {
   const [toasts, setToasts] = useState<AlertToast[]>([])
   const [dismissed, setDismissed] = useState<Set<string>>(new Set())
   const audioCtxRef = useRef<AudioContext | null>(null)
+  // Read through a ref so toggling the preference doesn't re-run the effect
+  // that builds the queue — that would re-evaluate "fresh" and could re-chime.
+  // Synced in an effect rather than assigned during render.
+  const muteSoundRef = useRef(muteSound)
+  useEffect(() => {
+    muteSoundRef.current = muteSound
+  }, [muteSound])
   /** Ids already queued. Authoritative and updated synchronously below, so
    *  freshness can be decided OUTSIDE the state updater. */
   const queuedRef = useRef<Set<string>>(new Set())
@@ -111,7 +124,7 @@ export function useAlertToasts(notifications: Notification[]): {
     })
 
     // Side effect, now outside the updater: one chime per batch of new alerts.
-    if (fresh.length > 0) playChime(audioCtxRef)
+    if (fresh.length > 0 && !muteSoundRef.current) playChime(audioCtxRef)
   }, [notifications, dismissed])
 
   const dismiss = (id: string) => {

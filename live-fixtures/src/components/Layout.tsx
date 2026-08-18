@@ -12,6 +12,7 @@ import { useDayFixtures } from '../hooks/useDayFixtures'
 import { useNotifications, type Notification } from '../hooks/useNotifications'
 import { useSwiftActualStartCapture } from '../hooks/useSwiftActualStartCapture'
 import { useAlertToasts } from '../hooks/useAlertToasts'
+import { useAuth } from '../lib/authContext'
 import { AlertToasts } from './AlertToasts'
 import { melbToday } from '../lib/dates'
 import type { Fixture } from '../lib/types'
@@ -100,7 +101,11 @@ export default function Layout() {
 
   // Top-right toasts for "SwiftBet still open on started event" alerts.
   // Each toast stays until the user dismisses it with the X.
-  const { toasts, dismiss, dismissAll } = useAlertToasts(notifications)
+  // Notification preferences belong to the signed-in account, so they follow
+  // the user between browsers rather than living in localStorage.
+  const { user } = useAuth()
+  const { toasts, dismiss, dismissAll } = useAlertToasts(notifications, !!user?.prefs?.muteSound)
+  const hideToasts = !!user?.prefs?.hideToasts
 
   const ctx: TerminalContext = { fixtures, now, feed, error, day, notifications, notificationsLoading }
 
@@ -115,7 +120,7 @@ export default function Layout() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden text-gray-200">
-      <AlertToasts toasts={toasts} onDismiss={dismiss} onDismissAll={dismissAll} />
+      {!hideToasts && <AlertToasts toasts={toasts} onDismiss={dismiss} onDismissAll={dismissAll} />}
       <Header
         counts={counts}
         now={now}

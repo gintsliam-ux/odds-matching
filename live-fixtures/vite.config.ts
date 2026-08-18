@@ -4,9 +4,11 @@ import { swiftApiPlugin } from './scripts/vite-swift-api'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
-  // Make MONGO_* and VITE_SUPABASE_* visible to the dev middleware.
-  // Mongo for SWIFT reads; Supabase for the actual-start side-effect write.
-  const env = loadEnv(mode, process.cwd(), ['MONGO_', 'VITE_SUPABASE_'])
+  // Make MONGO_*, VITE_SUPABASE_* and AUTH_SECRET visible to the dev middleware.
+  // Mongo for SWIFT reads; Supabase for the actual-start side-effect write;
+  // AUTH_SECRET signs the session cookie in api/auth.ts. loadEnv filters by
+  // PREFIX, so a bare name has to be listed as its own (complete) prefix.
+  const env = loadEnv(mode, process.cwd(), ['MONGO_', 'VITE_SUPABASE_', 'AUTH_SECRET'])
   for (const [k, v] of Object.entries(env)) {
     if (!process.env[k]) process.env[k] = v
   }
