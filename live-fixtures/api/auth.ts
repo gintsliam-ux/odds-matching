@@ -65,22 +65,34 @@ interface UserDoc {
 }
 
 /**
- * Support is the role that exists to watch alerts, so alerts stay on for it.
+ * Alerts are decided by ROLE, not by the person.
  *
- * Enforced here rather than just seeded, because a default drifts: one person
- * mutes the chime during a meeting, never turns it back on, and the alert the
- * role exists to catch goes unheard. Applied on read as well as on write, so a
- * row edited directly in Mongo still behaves.
+ *   support → on   the role exists to watch alerts
+ *   admin   → off  admins run the terminal; they don't want the chime
+ *   user    → their own choice
+ *
+ * Enforced rather than seeded as a default, because a default drifts: one
+ * person mutes during a meeting, never turns it back on, and the alert the role
+ * exists to catch goes unheard. Applied on READ as well as on write, so it
+ * holds even for a row edited straight in Mongo.
  */
+const ROLE_ALERTS: Record<string, boolean> = { support: true, admin: false }
+
 function effectivePrefs(u: UserDoc): UserPrefs {
   const prefs = u.prefs ?? {}
-  if ((u.role ?? 'user') === 'support') return { ...prefs, muteSound: false, hideToasts: false }
-  return prefs
+  const forced = ROLE_ALERTS[u.role ?? 'user']
+  if (forced === undefined) return prefs
+  return { ...prefs, muteSound: !forced, hideToasts: !forced }
 }
 
-/** True when the role cannot change its own notification switches. */
+/** True when the role decides the notification switches, not the person. */
 export function alertsLocked(role: string | undefined): boolean {
-  return (role ?? 'user') === 'support'
+  return ROLE_ALERTS[role ?? 'user'] !== undefined
+}
+
+/** What the role forces alerts TO, for the explanation in the UI. */
+export function alertsForcedOn(role: string | undefined): boolean | null {
+  return ROLE_ALERTS[role ?? 'user'] ?? null
 }
 
 /** What the client is allowed to see. Never the hash. */
@@ -91,6 +103,7 @@ function publicUser(u: UserDoc) {
     role: u.role ?? 'user',
     prefs: effectivePrefs(u),
     alertsLocked: alertsLocked(u.role),
+    alertsForcedOn: alertsForcedOn(u.role),
     createdAt: u.createdAt ?? null,
     updatedAt: u.updatedAt ?? null,
   }
@@ -248,7 +261,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return
       }
       if (alertsLocked(self.role)) {
-        res.status(403).json({ error: 'Support accounts always have alerts on' })
+        res.status(403).json({
+          error: `Alerts are ${alertsForcedOn(self.role) ? 'always on' : 'always off'} for ${self.role} accounts`,
+        })
         return
       }
       const prefs: UserPrefs = {

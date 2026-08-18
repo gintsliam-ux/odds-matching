@@ -47,10 +47,11 @@ export default function UsersPage() {
   }
 
   const prefs = user?.prefs ?? {}
-  // Support exists to watch alerts, so the server keeps them on for that role
-  // and refuses a write. Showing the switches disabled — rather than hiding
-  // them — says why they are on, instead of leaving someone to wonder.
+  // Alerts are decided by role — support on, admin off — and the server refuses
+  // a write from either. Showing the switches disabled rather than hiding them
+  // says why they are the way they are, instead of leaving someone to wonder.
   const locked = !!user?.alertsLocked
+  const forcedOn = user?.alertsForcedOn
 
   return (
     <div className="mx-auto max-w-[900px] px-5 py-6">
@@ -65,7 +66,8 @@ export default function UsersPage() {
         <h2 className="mb-3 text-[13px] font-semibold text-gray-100">Notifications</h2>
         {locked && (
           <p className="mb-3 rounded border border-[var(--line)] bg-black/[0.2] px-3 py-2 text-[11.5px] text-[color:var(--muted)]">
-            Alerts stay on for <span className="text-gray-200">{user?.role}</span> accounts.
+            Alerts are always {forcedOn ? 'on' : 'off'} for{' '}
+            <span className="text-gray-200">{user?.role}</span> accounts.
           </p>
         )}
         <div className="space-y-2">
