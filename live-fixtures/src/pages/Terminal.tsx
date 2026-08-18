@@ -190,19 +190,27 @@ export default function Terminal() {
     [source, status, sport, fav],
   )
 
-  // Status-tab counts for /sport/:sport: same scope as `routeScoped` but
-  // ignoring the status filter, so the tabs show the totals across every bucket.
+  // Status-tab counts for /sport/:sport[/:league]: the same scope the grid uses
+  // but ignoring the status filter, so the tabs show totals across every bucket.
+  //
+  // These MUST honour the league too. Counting by sport alone made a league page
+  // advertise its whole sport: /sport/australian-rules/australia_-_vfl showed
+  // "Upcoming 9" — every upcoming AFL game — above a grid of nothing, because
+  // the VFL's own five fixtures had all finished. Matching is on the raw slug or
+  // the pretty name, exactly as `visible` does, since the league arrives from a
+  // URL as one and from the dropdown as the other.
   const sportStatusCounts = useMemo(() => {
     if (!sport) return { all: 0, live: 0, upcoming: 0, completed: 0 }
     let live = 0, upcoming = 0, completed = 0
     for (const f of source) {
       if (!sportMatches(f.sport, sport)) continue
+      if (league !== 'all' && f.league !== league && f.rawLeague !== league) continue
       if (f.status === 'live') live++
       else if (f.status === 'upcoming') upcoming++
       else completed++
     }
     return { all: live + upcoming + completed, live, upcoming, completed }
-  }, [source, sport])
+  }, [source, sport, league])
 
   // Counts per sport in the current scope (for the SPORT dropdown badges).
   const sportCounts = useMemo(() => {
@@ -239,7 +247,12 @@ export default function Terminal() {
   // sidebar's expandable sports) pre-selects the league filter. The dropdown
   // takes over after — it holds a prettified name, so the filter below matches
   // EITHER the raw slug or the pretty league.
-  const leagueParam = leagueSlug ?? null
+  //
+  // PRETTIFIED HERE, though, because the <select> options are prettified: a raw
+  // "australia_-_vfl" matches no option, so the control fell back to displaying
+  // "ALL" while the page was in fact filtered to the VFL — the board said one
+  // thing and the dropdown another.
+  const leagueParam = leagueSlug ? prettyLeague(leagueSlug) : null
   useEffect(() => {
     if (leagueParam) setLeague(leagueParam)
   }, [leagueParam])
