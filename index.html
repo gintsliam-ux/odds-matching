@@ -1275,17 +1275,26 @@ async function loadCompetitionLogos() {
   }
 }
 
+/* Tennis files every event separately, and a challenger has no badge anywhere —
+   so fall back to its tour's. Half are named for the tour ("WTA Porto") and half
+   for the host town ("Hagen, Germany", "Cervia"), which no prefix rule catches;
+   the sport_key knows in both cases. */
+function tourFallbackFor(label) {
+  if (activeSport !== 'tennis' || !label) return '';
+  const entry = (sportData.tennis?.tournamentEntries || []).find(e => e.labels.includes(label));
+  const key = entry ? entry.sportKey : '';
+  if (/^tennis_atp/.test(key)) return 'ATP Tour';
+  if (/^tennis_wta/.test(key)) return 'WTA Tour';
+  const prefix = /^(ATP|WTA)\b/.exec(label);
+  return prefix ? `${prefix[1]} Tour` : '';
+}
+
 /* A badge for a competition, or '' when there is none — never a broken image.
    `lazy` is for the sidebar, whose list runs to a couple of hundred rows; the
    handful on cards and headers load eagerly so they are there on first paint. */
 function tournamentLogoHtml(label, cls, lazy) {
   let url = competitionLogos.get(label);
-  // Tennis files every event separately ("ATP Cincinnati", "Hagen, Germany"),
-  // and a challenger has no badge of its own — show the tour's instead.
-  if (!url) {
-    const tour = /^(ATP|WTA)\b/.exec(label || '');
-    if (tour) url = competitionLogos.get(`${tour[1]} Tour`);
-  }
+  if (!url) url = competitionLogos.get(tourFallbackFor(label));
   if (!url) return '';
   return `<img class="${cls}" src="${escAttr(url)}" alt=""${lazy ? ' loading="lazy"' : ''} onerror="this.remove()">`;
 }

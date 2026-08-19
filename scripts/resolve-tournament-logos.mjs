@@ -86,13 +86,62 @@ const ALIAS = {
   'ATP Tour': 'ATP Tour', 'WTA Tour': 'WTA Tour',
   UFC: 'Ultimate Fighting Championship', PFL: 'Professional Fighters League',
   MMA: 'Mixed martial arts', 'Mixed Martial Arts': 'Mixed martial arts',
+
+  // Leagues the feed names its own way. Each value is the Wikipedia title.
+  'Argentina Primera Division': 'Argentine Primera División',
+  'Primera División - Argentina': 'Argentine Primera División',
+  'Australia Aleague': 'A-League Men',
+  'Brasileirao Serie A': 'Campeonato Brasileiro Série A',
+  'Brasileirao Serie B': 'Campeonato Brasileiro Série B',
+  'Ekstraklasa - Poland': 'Ekstraklasa',
+  'England League1': 'EFL League One', 'Soccer England League1': 'EFL League One',
+  'England League2': 'EFL League Two', 'Soccer England League2': 'EFL League Two',
+  'League 2': 'EFL League Two',
+  'France Ligue One': 'Ligue 1', 'Soccer France Ligue One': 'Ligue 1',
+  'France Ligue Two': 'Ligue 2',
+  'Germany Bundesliga2': '2. Bundesliga', 'Soccer Germany Bundesliga2': '2. Bundesliga',
+  'Soccer Germany Bundesliga': 'Bundesliga',
+  'Croatian 1. HNL': 'Croatian Football League',
+  'Hungarian NB I': 'Nemzeti Bajnokság I',
+  'Latvia Virsliga': 'Latvian Higher League', 'Soccer Latvia Virsliga': 'Latvian Higher League',
+  'Lithuania A LYGA': 'A Lyga', 'Soccer Lithuania A Lyga': 'A Lyga',
+  'Serbian Super Liga': 'Serbian SuperLiga',
+  'Slovak Super Liga': 'Slovak First Football League',
+  'Switzerland Superleague': 'Swiss Super League',
+  'Superettan - Sweden': 'Superettan',
+  'Parva Liga': 'First Professional Football League (Bulgaria)',
+  'Costa Rican Primera': 'Liga FPD',
+  'Venezuelan Primera': 'Venezuelan Primera División',
+  'Belarus Premier': 'Belarusian Premier League', 'Soccer Belarus Premier': 'Belarusian Premier League',
+  'Mexico Ligamx': 'Liga MX',
+  'Korea Kleague1': 'K League 1',
+  'Serie B - Italy': 'Serie B',
+  'UEFA Champions League Qualification': 'UEFA Champions League',
+  'UEFA Champs League Women': "UEFA Women's Champions League",
+  'Soccer Uefa Champs League Women': "UEFA Women's Champions League",
+  'Fifa World Cup Qualifiers South America': 'FIFA World Cup qualification (CONMEBOL)',
+  'Turkish BSL': 'Basketbol Süper Ligi',
+  'Brazil NBB': 'Novo Basquete Brasil',
+  'Argentina LNB': 'Liga Nacional de Básquet',
+  'NBA Preseason': 'National Basketball Association',
+  'FIBA EuroBasket Qualifiers': 'EuroBasket',
+  'Wnbl1': "Women's National Basketball League", 'Basketball Wnbl1': "Women's National Basketball League",
+  'ICC Womens World Cup': "Women's Cricket World Cup",
+  Dota2: 'Dota 2', 'Esports Dota2': 'Dota 2',
 };
+
+// Australia's state leagues are all one competition with a state suffix.
+for (const st of ['Capital', 'NSW', 'Queensland', 'SA', 'Tasmania', 'Victoria', 'WA']) {
+  ALIAS[`Australia NPL ${st}`] = 'National Premier Leagues';
+  ALIAS[`Soccer Australia Npl ${st.charAt(0) + st.slice(1).toLowerCase()}`] = 'National Premier Leagues';
+}
 
 /* Labels that name a SPORT rather than a competition. There is no badge for
    "Mixed Martial Arts", so every attempt lands on whichever promotion the
    article happens to illustrate — Strikeforce, in practice. Resolve them to
    nothing and let the sidebar show the text. */
-const NO_LOGO = new Set(['Mixed Martial Arts', 'MMA', 'Boxing', 'Esports', 'Volleyball']);
+const NO_LOGO = new Set(['Mixed Martial Arts', 'MMA', 'Boxing', 'Esports', 'Volleyball',
+  'CLUB Friendlies', 'Soccer Club Friendlies']);
 
 const REJECT = /Flag_of|Coat_of_arms|Map_of|Locator|Seal_of|_map[._]|Orthographic/i;
 const REJECT_PLACE = /Town_Hall|City_Hall|Skyline|_CBD|Street|Railway_station|Post_Office|Courthouse|Library|Bridge|Beach|Aerial|Panorama|Church|Cathedral|Museum/i;
@@ -245,7 +294,8 @@ function relevant(name, title) {
    ones whose names read like a mark, and take the best. A competition with no
    logo-looking file returns nothing rather than a photograph — a missing badge
    is honest, a wrong one is not. */
-const FILE_OK = /\.(png|svg|jpe?g)$/i;
+// Wikipedia serves plenty of newer marks as webp — Superettan's logo among them.
+const FILE_OK = /\.(png|svg|jpe?g|webp)$/i;
 // Portal furniture that rides along on most articles and is not the subject's
 // mark: People_icon.svg and Global_thinking.svg were being picked for UFC and
 // MMA precisely because they are on every page of those portals.
@@ -275,8 +325,10 @@ function scoreFile(fileName, name) {
 
 /** The best logo-looking file on an article, as a 320px thumbnail. */
 async function wikiLogoFile(title, name) {
-  const list = `https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*` +
-    `&titles=${encodeURIComponent(title)}&prop=images&imlimit=100`;
+  // redirects=1 matters: "Argentine Primera División" is a redirect, and without
+  // following it the API returns a page with no images at all.
+  const list = `https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&redirects=1` +
+    `&titles=${encodeURIComponent(title)}&prop=images&imlimit=200`;
   let files;
   try {
     const r = await fetch(list, { headers: { 'User-Agent': WIKI_UA, 'Api-User-Agent': WIKI_UA } });
@@ -308,7 +360,7 @@ async function wikiLogoFile(title, name) {
    file list under a name containing "logo". It still has to pass scoreFile, so
    the NRL's lead photograph of a player is rejected on the same path. */
 async function wikiLeadImage(title) {
-  const u = `https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*` +
+  const u = `https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&redirects=1` +
     `&titles=${encodeURIComponent(title)}&prop=pageimages&piprop=thumbnail&pithumbsize=320`;
   try {
     const r = await fetch(u, { headers: { 'User-Agent': WIKI_UA, 'Api-User-Agent': WIKI_UA } });
