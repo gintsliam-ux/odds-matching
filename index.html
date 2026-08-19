@@ -94,11 +94,28 @@
     display: flex; flex-direction: column;
     height: 100vh; z-index: 40;
   }
-  .sb-brand {
-    display: flex; align-items: center; gap: 10px;
-    padding: 16px 18px; border-bottom: 1px solid var(--line-soft);
-    cursor: pointer; user-select: none; flex-shrink: 0;
+  .sb-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 14px 12px 14px 16px; border-bottom: 1px solid var(--line-soft); flex-shrink: 0;
   }
+  .sb-brand {
+    display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;
+    cursor: pointer; user-select: none;
+  }
+  .sb-collapse {
+    width: 26px; height: 26px; flex-shrink: 0; display: grid; place-items: center;
+    background: transparent; border: 1px solid transparent; border-radius: var(--r-sm);
+    color: var(--text-3); cursor: pointer; transition: all .15s;
+  }
+  .sb-collapse:hover { background: var(--surface-2); color: var(--text); border-color: var(--line); }
+  .sb-collapse svg { transition: transform .2s ease; }
+
+  .sb-search-mini {
+    display: none; width: 34px; height: 34px; margin: 10px auto 2px;
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md);
+    color: var(--text-2); cursor: pointer; place-items: center; transition: all .15s;
+  }
+  .sb-search-mini:hover { border-color: var(--accent-line); color: var(--text); }
   .sb-mark {
     width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
     background: linear-gradient(135deg, var(--accent) 0%, #2d6fd6 100%);
@@ -741,16 +758,82 @@
   @media (max-width: 860px) {
     .btn-lbl { display: none; }
   }
+
+  /* ============================================================
+     Collapsed rail
+     ------------------------------------------------------------
+     Only above the overlay breakpoint: under it the sidebar already
+     slides in and out, so a rail would be a second, conflicting mode.
+     ============================================================ */
+  @media (min-width: 1081px) {
+    .sidebar { transition: width .18s ease; }
+    .sidebar.collapsed { width: 62px; }
+
+    .sidebar.collapsed .sb-head { flex-direction: column; gap: 10px; padding: 14px 8px; }
+    .sidebar.collapsed .sb-brand { flex: none; justify-content: center; }
+    .sidebar.collapsed .sb-brand-text { display: none; }
+    .sidebar.collapsed .sb-collapse svg { transform: rotate(180deg); }
+
+    .sidebar.collapsed .sb-search { display: none; }
+    .sidebar.collapsed .sb-search-mini { display: grid; }
+
+    .sidebar.collapsed .sb-nav { padding: 6px 8px 20px; overflow-x: hidden; }
+    .sidebar.collapsed .sb-label { display: none; }
+    .sidebar.collapsed .sb-item { justify-content: center; padding: 8px 0; }
+    .sidebar.collapsed .sb-item .sb-txt { display: none; }
+
+    /* Only the sport glyph survives — the tree needs width it no longer has. */
+    .sidebar.collapsed .sb-group-head { justify-content: center; padding: 8px 0; gap: 0; }
+    .sidebar.collapsed .sb-chev,
+    .sidebar.collapsed .sb-group-name,
+    .sidebar.collapsed .sb-group-n,
+    .sidebar.collapsed .sb-dot { display: none; }
+    .sidebar.collapsed .sb-group-body { display: none; }
+    .sidebar.collapsed .sb-group.has-active .sb-group-head {
+      background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent);
+    }
+
+    .sidebar.collapsed .sb-foot { justify-content: center; padding: 10px 6px; }
+    .sidebar.collapsed .sb-foot span { display: none; }
+  }
+
+  /* Bookmaker marks in the odds header. The mark replaces the name; the column's
+     title attribute keeps the name reachable, and Fair columns stay labelled so
+     the two halves of the table don't blur together. */
+  .bk { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; }
+  .bk-logo {
+    width: 17px; height: 17px; border-radius: 4px; object-fit: contain;
+    background: rgba(255,255,255,0.9); padding: 1px; flex-shrink: 0;
+  }
+  .bk-fair {
+    font-size: 9px; font-weight: 700; letter-spacing: .5px; color: var(--violet);
+    text-transform: uppercase;
+  }
+  .bk-name { font-size: 10px; }
 </style>
 </head>
 <body>
 
 <!-- ============ Sidebar: brand, search, sport/tournament tree ============ -->
 <aside class="sidebar" id="sidebar">
-  <div class="sb-brand" onclick="goHome()" title="Home">
-    <div class="sb-mark">OL</div>
-    <div class="sb-brand-text"><b>Odds</b> Library</div>
+  <div class="sb-head">
+    <div class="sb-brand" onclick="goHome()" title="Home">
+      <div class="sb-mark">OL</div>
+      <div class="sb-brand-text"><b>Odds</b> Library</div>
+    </div>
+    <button class="sb-collapse" id="sb-collapse" onclick="toggleCollapse()" title="Collapse sidebar" aria-label="Collapse sidebar">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14.5 5.5 8 12l6.5 6.5"></path>
+      </svg>
+    </button>
   </div>
+
+  <!-- Stands in for the search field once the rail is narrow: expands, then focuses it. -->
+  <button class="sb-search-mini" onclick="expandAndSearch()" title="Search teams or players" aria-label="Search">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+      <circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path>
+    </svg>
+  </button>
 
   <div class="sb-search">
     <div class="sb-search-field">
@@ -856,6 +939,27 @@ const BOOKS = [
   { key: 'fanduel',  label: 'FanDuel' },
   { key: 'fanatics', label: 'Fanatics' },
 ];
+/* Marks live in assets/books/, downloaded once rather than hotlinked: the table
+   renders one per column on every event and a book's own CDN has no business in
+   that path. A book without a file falls back to its name. */
+const BOOK_LOGOS = new Set(['pinn', 'bet365', 'sbet', 'tab', 'lads', 'fanduel', 'fanatics']);
+const BOOK_LOGO_FILE = {
+  pinn: 'pinnacle', bet365: 'bet365', sbet: 'sportsbet', tab: 'tab',
+  lads: 'ladbrokes', fanduel: 'fanduel', fanatics: 'fanatics',
+};
+
+// Header cell for a book column: the mark alone for odds, the mark plus "Fair"
+// for the fair columns, so the two halves of the table stay tellable apart.
+function bookHeader(bookKey, label, isFair) {
+  const file = BOOK_LOGO_FILE[bookKey];
+  if (!file || !BOOK_LOGOS.has(bookKey)) return escHtml(label);
+  return `<span class="bk">
+      <img class="bk-logo" src="assets/books/${file}.png" alt="${escAttr(label)}"
+           onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'bk-name',textContent:'${jsStr(label)}'}))">
+      ${isFair ? '<span class="bk-fair">Fair</span>' : ''}
+    </span>`;
+}
+
 const ODDS_BOOKS = BOOKS.map(b => ({
   key: b.key, label: b.label,
   col1: `oc1_${b.key}_odds`, col2: `oc2_${b.key}_odds`, col3: `oc3_${b.key}_odds`,
@@ -1479,6 +1583,42 @@ function sportIconHtml(key, cls) {
 /* ===========================================================================
    Sidebar
    =========================================================================== */
+/* Collapsed state is a preference, so it outlives the session. It is applied
+   before the first render — setting it later would show a full-width sidebar for
+   a frame and then snap. */
+const SIDEBAR_COLLAPSE_KEY = 'ol.sidebar.collapsed';
+let sidebarCollapsed = false;
+
+function applySidebarCollapsed() {
+  const el = document.getElementById('sidebar');
+  const btn = document.getElementById('sb-collapse');
+  if (!el) return;
+  el.classList.toggle('collapsed', sidebarCollapsed);
+  if (btn) {
+    const label = sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+  }
+}
+
+function initSidebarCollapsed() {
+  try { sidebarCollapsed = localStorage.getItem(SIDEBAR_COLLAPSE_KEY) === '1'; } catch { /* private mode */ }
+  applySidebarCollapsed();
+}
+
+function toggleCollapse(force) {
+  sidebarCollapsed = force === undefined ? !sidebarCollapsed : !!force;
+  applySidebarCollapsed();
+  try { localStorage.setItem(SIDEBAR_COLLAPSE_KEY, sidebarCollapsed ? '1' : '0'); } catch { /* private mode */ }
+}
+
+// The rail has no room for the search field, so reaching for it expands first.
+function expandAndSearch() {
+  toggleCollapse(false);
+  const input = document.getElementById('team-search');
+  if (input) input.focus();
+}
+
 function toggleSidebar(force) {
   const el = document.getElementById('sidebar');
   const scrim = document.getElementById('sidebar-scrim');
@@ -1674,7 +1814,7 @@ function renderSidebar() {
   if (!nav) return;
   const cutoff = recentCutoff();
 
-  let html = `<div class="sb-item ${activeSport ? '' : 'active'}" onclick="goHome()">
+  let html = `<div class="sb-item ${activeSport ? '' : 'active'}" title="All sports" onclick="goHome()">
       <span class="sb-ico">${ICON.home}</span><span class="sb-txt">All sports</span>
     </div>
     <div class="sb-label">Sports</div>`;
@@ -1689,7 +1829,7 @@ function renderSidebar() {
     const nTours = isActive ? (sportData[key]?.tournaments || []).length : 0;
 
     html += `<div class="sb-group ${open ? 'open' : ''} ${isActive ? 'has-active' : ''}">
-        <div class="sb-group-head" onclick="switchSport('${key}')">
+        <div class="sb-group-head" title="${escAttr(cfg.label)}" onclick="switchSport('${key}')">
           <span class="sb-chev" onclick="toggleNavGroup('${key}', event)">${ICON.chevron}</span>
           ${sportIconHtml(key, 'sb-league-icon')}
           <span class="sb-group-name">${escHtml(cfg.label)}</span>
@@ -2338,8 +2478,16 @@ function renderOddsTable(markets, cfg, type) {
     { key: 'question', label: 'Line', sortable: false, type: 'text' },
     { key: 'outcome', label: 'Outcome', sortable: false, type: 'text' },
   ];
-  for (const b of visibleBooks) cols.push({ key: 'odds_' + b.key, label: b.label, sortable: true, type: 'num' });
-  for (const b of visibleFair) cols.push({ key: 'fair_' + b.key, label: b.label, sortable: true, type: 'num' });
+  for (const b of visibleBooks) {
+    cols.push({ key: 'odds_' + b.key, label: b.label, sortable: true, type: 'num',
+                html: bookHeader(b.key, b.label, false) });
+  }
+  for (const b of visibleFair) {
+    // fairBooks keys are the book key with a `_fair` suffix.
+    const base = b.key.replace(/_fair$/, '');
+    cols.push({ key: 'fair_' + b.key, label: b.label, sortable: true, type: 'num',
+                html: bookHeader(base, b.label, true) });
+  }
   if (anyVal('blendedOdds')) cols.push({ key: 'blendedOdds', label: 'Blend', sortable: true, type: 'num' });
   if (anyVal('blendedFair')) cols.push({ key: 'blendedFair', label: 'Fair Blend', sortable: true, type: 'num' });
   if (anyVal('oddsRange')) cols.push({ key: 'oddsRange', label: 'Odds Range', sortable: true, type: 'num' });
@@ -2351,7 +2499,7 @@ function renderOddsTable(markets, cfg, type) {
 
   let html = `<div class="table-wrapper"><table class="odds-table" id="${tableId}"><thead><tr>`;
   for (const c of cols) {
-    html += `<th data-col="${c.key}"${c.sortable ? ` onclick="sortTable('${tableId}', '${c.key}', '${c.type}')"` : ''}>${escHtml(c.label)}${c.sortable ? '<span class="sort-arrow"></span>' : ''}</th>`;
+    html += `<th data-col="${c.key}" title="${escAttr(c.label)}"${c.sortable ? ` onclick="sortTable('${tableId}', '${c.key}', '${c.type}')"` : ''}>${c.html || escHtml(c.label)}${c.sortable ? '<span class="sort-arrow"></span>' : ''}</th>`;
   }
   html += '</tr></thead><tbody>';
 
@@ -2577,6 +2725,21 @@ function parseRoute() {
   return { sport, tournament, slug };
 }
 
+/* Open on the month we are in, not on the last month with any data. Several
+   sports carry fixtures scheduled months or years out — MMA's furthest row sits
+   in 2027 — and landing there showed a near-empty board for a sport that has a
+   full card this week. Falls back to the closest month that exists. */
+function defaultPeriod(combos) {
+  const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth() + 1;
+  const exact = combos.find(c => c.year === y && c.month === m);
+  if (exact) return exact;
+  const target = y * 12 + m;
+  return combos.reduce((best, c) =>
+    Math.abs(c.year * 12 + c.month - target) < Math.abs(best.year * 12 + best.month - target) ? c : best,
+    combos[0]);
+}
+
 // Pull the month out of a slug so a deep link can load the right period.
 function extractDateFromSlug(slug) {
   if (!slug) return null;
@@ -2607,9 +2770,13 @@ async function loadScoped(key) {
   return loadMarkets(key, selectedYear, selectedMonth, entry);
 }
 
-let _routing = false;
+/* A hash change that lands mid-route used to be dropped outright: the URL moved
+   but the view never followed, which is how closing an event could leave the
+   page — and the discrepancy drawer — on the event you had just left. Queue the
+   pass instead, so the final URL always wins. */
+let _routing = false, _routeQueued = false;
 async function handleRoute() {
-  if (_routing) return;
+  if (_routing) { _routeQueued = true; return; }
   _routing = true;
   try {
     const { sport, tournament, slug } = parseRoute();
@@ -2663,8 +2830,8 @@ async function handleRoute() {
       }
       if (slugDate) { selectedYear = slugDate.year; selectedMonth = slugDate.month; }
       if (!selectedYear || !selectedMonth) {
-        const last = range.combos[range.combos.length - 1];
-        selectedYear = last.year; selectedMonth = last.month;
+        const start = defaultPeriod(range.combos);
+        selectedYear = start.year; selectedMonth = start.month;
       }
 
       await loadTournamentIndex(sport, selectedYear, selectedMonth);
@@ -2686,6 +2853,18 @@ async function handleRoute() {
     }
     showLoading(null);
 
+    /* Clear the open event BEFORE the list renders. renderMatchList paints the
+       discrepancy drawer, and the drawer is scoped to currentSlug — leaving the
+       old slug set meant going back from an event kept the drawer showing that
+       event's discrepancies over a list of every fixture. */
+    if (!slug) {
+      currentSlug = null;
+      const dv = document.getElementById('detail-view');
+      dv.classList.remove('active');
+      dv.innerHTML = '';
+      document.getElementById('match-list-view').style.display = '';
+    }
+
     renderSidebar();
     renderMatchList();
 
@@ -2693,14 +2872,7 @@ async function handleRoute() {
     // fills in the sport's full history as the scan walks it.
     loadAllTournaments(sport);
 
-    if (slug) {
-      openDetailDirect(slug);
-    } else {
-      currentSlug = null;
-      const dv = document.getElementById('detail-view');
-      dv.classList.remove('active'); dv.innerHTML = '';
-      document.getElementById('match-list-view').style.display = '';
-    }
+    if (slug) openDetailDirect(slug);
     renderTopbar();
 
     const ev = currentEvent();
@@ -2708,6 +2880,7 @@ async function handleRoute() {
       : `${currentTournamentLabel() || SPORTS[sport].label} · Odds Library`;
   } finally {
     _routing = false;
+    if (_routeQueued) { _routeQueued = false; handleRoute(); }
   }
 }
 
@@ -2836,6 +3009,7 @@ function skeletonSearch(n = 4) {
    Init
    =========================================================================== */
 async function init() {
+  initSidebarCollapsed();
   renderSidebar();
   await handleRoute();
   const missing = Object.keys(SPORTS).filter(k => !sportData[k]?.dateRange);
