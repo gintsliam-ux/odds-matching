@@ -530,6 +530,7 @@
 
   .disc-panel {
     position: fixed; top: 0; right: 0; bottom: 0; width: var(--disc-w); max-width: 92vw;
+    overflow-y: auto;
     background: var(--surface); border-left: 1px solid var(--line);
     box-shadow: var(--shadow-lg); z-index: 70;
     display: flex; flex-direction: column;
@@ -538,7 +539,14 @@
   }
   .disc-panel.open { transform: translateX(0); }
 
-  .disc-head { padding: 16px 18px 12px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+  /* Pinned two ways over. `flex-shrink: 0` keeps it out of the list's scroll box,
+     and `sticky` holds it even if the panel itself ever becomes a scroll
+     container — a long scope line on a short window is enough to cause that,
+     and the filters are the one thing in here you reach for mid-scroll. */
+  .disc-head {
+    padding: 16px 18px 12px; border-bottom: 1px solid var(--line);
+    flex-shrink: 0; position: sticky; top: 0; z-index: 2; background: var(--surface);
+  }
   .disc-head-top { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
   .disc-head h3 {
     font-size: 13px; font-weight: 700; color: #fff; text-transform: uppercase; letter-spacing: .8px;
@@ -572,7 +580,12 @@
      scrolling past the last finding chains into the page behind, and the board
      slides around under a cursor that is sitting on the drawer — which reads as
      the panel not being pinned at all. */
-  .error-log-list { overflow-y: auto; overscroll-behavior: contain; flex: 1; padding: 12px 14px 20px; }
+  /* min-height: 0 so the list yields to the header rather than the flex algorithm
+     letting its ~11,800px of findings size the column. */
+  .error-log-list {
+    overflow-y: auto; overscroll-behavior: contain;
+    flex: 1; min-height: 0; padding: 12px 14px 20px;
+  }
   .error-log-item {
     background: var(--surface-2); border: 1px solid var(--line-soft);
     border-left: 2px solid var(--neg);
