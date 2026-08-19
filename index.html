@@ -447,12 +447,6 @@
   }
   .mkt-tab.active .mt-n { background: var(--accent-soft); color: var(--accent-2); }
 
-  .market-panel-head {
-    display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px;
-  }
-  .market-panel-head h3 { font-size: 15px; font-weight: 700; color: #fff; }
-  .market-panel-head .mph-n { font-size: 12px; color: var(--text-3); }
-
   /* Legacy group heading (kept for any non-tabbed render path) */
   .market-group { margin-bottom: 24px; }
   .market-group-title {
@@ -2229,10 +2223,8 @@ function renderMarketPanel() {
     return;
   }
   const rows = detailByType[activeMarketType] || [];
-  el.innerHTML = `<div class="market-panel-head">
-      <h3>${escHtml(formatMarketType(activeMarketType))}</h3>
-      <span class="mph-n">${rows.length} line${rows.length === 1 ? '' : 's'}</span>
-    </div>` + renderOddsTable(rows, detailCfg, activeMarketType);
+  // No heading: the active tab already names the market and counts its lines.
+  el.innerHTML = renderOddsTable(rows, detailCfg, activeMarketType);
 }
 
 async function refreshDetail() {
@@ -2799,7 +2791,6 @@ function skeletonDetail() {
     </div>
     <div class="load-msg" id="load-msg">Loading…</div>
     <div class="skel-mkt-tabs">${[92, 78, 62, 104, 96].map(w => bar(w + 'px', 15)).join('')}</div>
-    <div class="market-panel-head">${bar('120px', 16)}</div>
     <div class="skel-table-wrap">${head}${Array.from({ length: 10 }, (_, i) => row(i)).join('')}</div>`;
 }
 
