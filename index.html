@@ -88,6 +88,7 @@
      Sidebar
      ============================================================ */
   .sidebar {
+    position: relative;
     width: var(--sidebar-w); flex-shrink: 0;
     background: var(--surface);
     border-right: 1px solid var(--line);
@@ -102,12 +103,15 @@
     display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;
     cursor: pointer; user-select: none;
   }
+  /* A handle on the sidebar's right border, vertically centred — same place
+     whether the nav is open or a rail, and clear of the logo either way. */
   .sb-collapse {
-    width: 26px; height: 26px; flex-shrink: 0; display: grid; place-items: center;
-    background: transparent; border: 1px solid transparent; border-radius: var(--r-sm);
-    color: var(--text-3); cursor: pointer; transition: all .15s;
+    position: absolute; top: 50%; right: -13px; transform: translateY(-50%);
+    width: 26px; height: 26px; display: grid; place-items: center; z-index: 45;
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: 50%;
+    color: var(--text-2); cursor: pointer; transition: background .15s, color .15s, border-color .15s;
   }
-  .sb-collapse:hover { background: var(--surface-2); color: var(--text); border-color: var(--line); }
+  .sb-collapse:hover { background: var(--surface-3); color: var(--text); border-color: var(--accent-line); }
   .sb-collapse svg { transition: transform .2s ease; }
 
   .sb-search-mini {
@@ -686,6 +690,9 @@
     }
     .sidebar.open { transform: translateX(0); }
     .sb-toggle { display: grid; }
+    /* The rail is a desktop mode; down here the sidebar slides in and out, so the
+       handle has nothing to do and would ride the off-screen edge. */
+    .sb-collapse { display: none; }
     .content { padding: 18px 16px 50px; }
     .topbar { padding: 0 12px; }
   }
@@ -787,7 +794,7 @@
     .sidebar { transition: width .18s ease; }
     .sidebar.collapsed { width: 62px; }
 
-    .sidebar.collapsed .sb-head { flex-direction: column; gap: 10px; padding: 14px 8px; }
+    .sidebar.collapsed .sb-head { justify-content: center; padding: 14px 8px; }
     .sidebar.collapsed .sb-brand { flex: none; justify-content: center; }
     .sidebar.collapsed .sb-brand-text { display: none; }
     .sidebar.collapsed .sb-collapse svg { transform: rotate(180deg); }
@@ -869,12 +876,15 @@
       <div class="sb-mark">OL</div>
       <div class="sb-brand-text"><b>Odds</b> Library</div>
     </div>
-    <button class="sb-collapse" id="sb-collapse" onclick="toggleCollapse()" title="Collapse sidebar" aria-label="Collapse sidebar">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M14.5 5.5 8 12l6.5 6.5"></path>
-      </svg>
-    </button>
   </div>
+
+  <!-- Rides the sidebar's right edge rather than the header row, so collapsing
+       never stacks it under the logo. -->
+  <button class="sb-collapse" id="sb-collapse" onclick="toggleCollapse()" title="Collapse sidebar" aria-label="Collapse sidebar">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14.5 5.5 8 12l6.5 6.5"></path>
+    </svg>
+  </button>
 
   <!-- Stands in for the search field once the rail is narrow: expands, then focuses it. -->
   <button class="sb-search-mini" onclick="expandAndSearch()" title="Search teams or players" aria-label="Search">
