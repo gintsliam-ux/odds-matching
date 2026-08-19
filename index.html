@@ -103,10 +103,12 @@
     display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;
     cursor: pointer; user-select: none;
   }
-  /* A handle on the sidebar's right border, vertically centred — same place
-     whether the nav is open or a rail, and clear of the logo either way. */
+  /* A handle on the sidebar's right border, sitting on the brand line rather than
+     halfway down the edge. The header row is the same height in both states, so
+     one offset keeps it level with the logo whether the nav is open or a rail —
+     and being half outside the border, it clears the mark either way. */
   .sb-collapse {
-    position: absolute; top: 50%; right: -13px; transform: translateY(-50%);
+    position: absolute; top: 30px; right: -13px; transform: translateY(-50%);
     width: 26px; height: 26px; display: grid; place-items: center; z-index: 45;
     background: var(--surface-2); border: 1px solid var(--line); border-radius: 50%;
     color: var(--text-2); cursor: pointer; transition: background .15s, color .15s, border-color .15s;
