@@ -948,7 +948,7 @@ const MONTH_ROW_BUDGET = 6000;
 let activeSport = null;
 let sportData = {};              // key -> { dateRange, tournaments, events, grouped, loadedScope }
 let currentSlug = null;
-let selectedSubTournament = null;
+let selectedTournament = null;   // tournament entry id (a URL slug)
 let selectedYear = null;
 let selectedMonth = null;
 let detailByType = {}, detailTypes = [], activeMarketType = null, detailCfg = null;
@@ -1073,6 +1073,151 @@ async function loadDateRange(key) {
 
 /* Phase 2 — which tournaments ran this month, and how big each is. Scanning one
    column keeps the payload small even when the row count is large. */
+/* ---------------------------------------------------------------------------
+   Tournaments
+   ---------------------------------------------------------------------------
+   `tournament` is free text and has been written by more than one generation of
+   the ingest, so one competition can appear under several names:
+
+     sport_key            tournament labels
+     aussierules_afl      "AFL", "Aussierules Afl"
+     mma_ufc              "UFC",  "Mma Ufc"
+     cricket_big_bash     "Big Bash", "Big Bash League"
+     americanfootball_ncaaf  "NCAAF", "Ncaaf"
+
+   Checking the dates shows these are renames, not parallel feeds — "Aussierules
+   Afl" covers 2026-08-01→07 and "AFL" runs 2019→now — so they have to collapse
+   into one entry or the sidebar lists the same league twice.
+
+   `sport_key` is the reliable identity, with one exception: a few keys are
+   buckets rather than leagues. `tennis_atp` carries hundreds of real event names
+   ("ATP Wimbledon", "ATP Cincinnati") from before each got its own key, so
+   collapsing on it would hide them all behind one row. Hence the rule below: a
+   key with a handful of labels is a renamed competition and merges; a key with
+   many is a bucket, and its labels stay listed individually. */
+const MERGE_MAX_LABELS = 3;
+
+// A label the ingest generated from the key itself ("Aussierules Afl" for
+// `aussierules_afl`) — always the weaker name when a real one exists.
+function isDerivedLabel(label, sportKey) {
+  return slugify(label) === slugify(sportKey);
+}
+
+/* When every label for a key is generated ("Aussierules Aflw" is the only name
+   `aussierules_aflw` has ever had), build a better one from the key itself:
+   drop the leading sport token and shout the short ones, which is how these
+   competitions are actually written — AFLW, WAFL, T20 Blast Women. */
+function labelFromSportKey(sportKey) {
+  const parts = String(sportKey || '').split('_').filter(Boolean);
+  if (parts.length < 2) return null;
+  return parts.slice(1)
+    .map(w => w.length <= 4 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+/* Prefer a real name over a generated one, then the fullest, then the one that
+   shouts (acronyms like NCAAF over Ncaaf). Deliberately independent of the month
+   on screen: ranking by row count made a league read "Big Bash" in January and
+   "Big Bash League" in August. */
+const upperCount = (str) => (str.match(/[A-Z]/g) || []).length;
+
+function pickLabel(labels, sportKey) {
+  const real = labels.filter(l => !l.derived);
+  if (!real.length) {
+    const built = labelFromSportKey(sportKey);
+    if (built) return built;
+  }
+  const pool = real.length ? real : labels;
+  return pool.slice().sort((a, b) =>
+    (b.label.length - a.label.length) ||
+    (upperCount(b.label) - upperCount(a.label)) ||
+    a.label.localeCompare(b.label)
+  )[0].label;
+}
+
+/* Turn the (sport_key, label) pairs gathered so far into selectable entries.
+   Runs after the month scan and again as the all-time walk streams names in. */
+function rebuildTournamentIndex(key) {
+  const d = sportData[key] || {};
+  const monthCounts = d.monthPairs || new Map();          // "key\u0000label" -> rows this month
+  const byKey = new Map();
+
+  const note = (sportKey, label) => {
+    const sk = sportKey || '';
+    if (!byKey.has(sk)) byKey.set(sk, new Map());
+    const m = byKey.get(sk);
+    if (!m.has(label)) m.set(label, { label, derived: isDerivedLabel(label, sk) });
+  };
+  for (const pairKey of monthCounts.keys()) {
+    const [sk, label] = pairKey.split('\u0000');
+    note(sk, label);
+  }
+  for (const pair of (d.allPairs || [])) note(pair.sportKey, pair.label);
+
+  const rowsOf = (sk, label) => monthCounts.get(`${sk}\u0000${label}`) || 0;
+  const entries = [];
+  for (const [sportKey, labelMap] of byKey) {
+    const labels = [...labelMap.values()];
+    if (labels.length <= MERGE_MAX_LABELS) {
+      // One competition that has been renamed — select on the key.
+      entries.push({
+        sportKey,
+        label: pickLabel(labels, sportKey),
+        labels: labels.map(l => l.label),
+        rows: labels.reduce((n, l) => n + rowsOf(sportKey, l.label), 0),
+        filter: { col: 'sport_key', value: sportKey },
+      });
+    } else {
+      // A bucket key — each label is its own event, so select on the label.
+      for (const l of labels) {
+        entries.push({
+          sportKey,
+          label: l.label,
+          labels: [l.label],
+          rows: rowsOf(sportKey, l.label),
+          filter: { col: 'tournament', value: l.label },
+        });
+      }
+    }
+  }
+
+  /* URL slugs have to be stable across months, or a bookmark breaks and changing
+     period silently drops the selected tournament. So a merged entry is named
+     after its sport_key (minus the sport prefix) rather than its label, which can
+     move; a bucket entry is named after its label, which IS its identity there.
+     Sorting first keeps collision suffixes deterministic. */
+  entries.sort((a, b) => a.sportKey.localeCompare(b.sportKey) || a.label.localeCompare(b.label));
+  const used = new Set();
+  for (const e of entries) {
+    const stem = e.filter.col === 'sport_key'
+      ? (slugify(e.sportKey.split('_').slice(1).join('_')) || slugify(e.sportKey))
+      : slugify(e.label);
+    let id = stem || slugify(e.sportKey) || 'other';
+    if (used.has(id)) {
+      const alt = slugify(e.sportKey);
+      id = used.has(alt) ? `${id}-${slugify(e.label)}` : alt;
+    }
+    used.add(id);
+    e.id = id;
+  }
+
+  d.tournamentEntries = entries;
+  d.tournaments = entries.filter(e => e.rows > 0).sort((a, b) => b.rows - a.rows || a.label.localeCompare(b.label));
+  d.allTournaments = entries.slice().sort((a, b) => a.label.localeCompare(b.label));
+  return d.tournaments;
+}
+
+function tournamentEntry(key, id) {
+  return (sportData[key]?.tournamentEntries || []).find(e => e.id === id) || null;
+}
+function currentTournamentEntry() {
+  return selectedTournament ? tournamentEntry(activeSport, selectedTournament) : null;
+}
+function currentTournamentLabel() {
+  const e = currentTournamentEntry();
+  return e ? e.label : null;
+}
+
 async function loadTournamentIndex(key, year, month) {
   const cfg = SPORTS[key];
   const d = (sportData[key] = sportData[key] || {});
@@ -1082,19 +1227,20 @@ async function loadTournamentIndex(key, year, month) {
   const filter = monthFilter(year, month);
   const total = await countOdds(cfg.table, `select=id&${filter}`);
   msg(`Indexing ${cfg.label} — ${total.toLocaleString()} rows…`);
-  const rows = total === 0 ? [] : await qAllOdds(cfg.table, `select=tournament&${filter}`, total,
+  // Both columns: the label is what to show, the key is what makes two labels
+  // the same competition.
+  const rows = total === 0 ? [] : await qAllOdds(cfg.table, `select=sport_key,tournament&${filter}`, total,
     (done, pages) => msg(`Indexing ${cfg.label} — ${Math.round(done / pages * 100)}%`));
 
-  const counts = new Map();
+  const pairs = new Map();
   for (const r of rows) {
-    const t = r.tournament || 'Other';
-    counts.set(t, (counts.get(t) || 0) + 1);
+    const k = `${r.sport_key || ''}\u0000${r.tournament || 'Other'}`;
+    pairs.set(k, (pairs.get(k) || 0) + 1);
   }
-  d.tournaments = [...counts.entries()]
-    .map(([name, rows]) => ({ name, rows }))
-    .sort((a, b) => b.rows - a.rows || a.name.localeCompare(b.name));
+  d.monthPairs = pairs;
   d.tournamentsFor = stamp;
   d.monthRows = total;
+  rebuildTournamentIndex(key);
   return d.tournaments;
 }
 
@@ -1119,19 +1265,22 @@ function eventSlug(key, m) {
 /* Phase 3 — the markets themselves, scoped to a month and (usually) one
    tournament. `scope` records what is currently in memory so a re-render knows
    whether it can answer from cache. */
-async function loadMarkets(key, year, month, tournament) {
+async function loadMarkets(key, year, month, entry) {
   const cfg = SPORTS[key];
   const d = (sportData[key] = sportData[key] || {});
-  const scope = `${year}-${month}|${tournament || '*'}`;
+  const scope = `${year}-${month}|${entry ? entry.id : '*'}`;
   if (d.loadedScope === scope) return d;
 
   let filter = monthFilter(year, month);
-  if (tournament) filter += `&tournament=eq.${encodeURIComponent(tournament)}`;
+  // A merged entry filters on sport_key so it picks up every name the league has
+  // been given; a bucket entry filters on the label itself.
+  if (entry) filter += `&${entry.filter.col}=eq.${encodeURIComponent(entry.filter.value)}`;
 
-  msg(`Loading ${tournament || cfg.label}…`);
+  const what = entry ? entry.label : cfg.label;
+  msg(`Loading ${what}…`);
   const total = await countOdds(cfg.table, `select=id&${filter}`);
   const markets = await qAllOdds(cfg.table, `select=*&${filter}`, total,
-    (done, pages) => msg(`Loading ${tournament || cfg.label} — ${Math.round(done / pages * 100)}%`));
+    (done, pages) => msg(`Loading ${what} — ${Math.round(done / pages * 100)}%`));
 
   const grouped = {};
   const eventMap = new Map();
@@ -1164,7 +1313,7 @@ async function loadMarkets(key, year, month, tournament) {
         score: hasScore ? `${s1}-${s2}` : null,
         ended: hasScore,
         live: false,
-        tournament: m.tournament || null,
+        tournament: canonicalTournamentLabel(key, m) || m.tournament || null,
         location: m.location || null,
       });
     } else {
@@ -1360,66 +1509,71 @@ function toggleNavGroup(key, ev) {
    soccer's 222 and tennis's 294, so it renders progressively as names arrive and
    is cached in localStorage afterwards. */
 const TOURNAMENT_CACHE_TTL = 7 * 86400000;
+const TOURNAMENT_CACHE_VERSION = 'v2';   // v1 stored bare labels, with no key to merge on
 const TOURNAMENT_SCAN_CAP = 600;
 let navFilter = '';
 
-function tournamentCacheKey(key) { return `ol.tourns.v1.${key}`; }
+function tournamentCacheKey(key) { return `ol.tourns.${TOURNAMENT_CACHE_VERSION}.${key}`; }
 
 function readTournamentCache(key) {
   try {
     const o = JSON.parse(localStorage.getItem(tournamentCacheKey(key)) || 'null');
-    if (!o || !Array.isArray(o.names)) return null;
+    if (!o || !Array.isArray(o.pairs)) return null;
     if (Date.now() - o.at > TOURNAMENT_CACHE_TTL) return null;
-    return o.names;
+    return o.pairs;
   } catch { return null; }
 }
-function writeTournamentCache(key, names) {
+function writeTournamentCache(key, pairs) {
   try {
-    localStorage.setItem(tournamentCacheKey(key), JSON.stringify({ at: Date.now(), names }));
+    localStorage.setItem(tournamentCacheKey(key), JSON.stringify({ at: Date.now(), pairs }));
   } catch { /* private mode / quota — the list still works, just uncached */ }
 }
 
 async function loadAllTournaments(key) {
   const d = (sportData[key] = sportData[key] || {});
-  if (d.tournamentScan === 'running') return d.allTournaments || [];   // already walking
-  if (d.allTournaments && d.tournamentScan === 'done') return d.allTournaments;
+  if (d.tournamentScan === 'running') return d.allPairs || [];   // already walking
+  if (d.allPairs && d.tournamentScan === 'done') return d.allPairs;
 
   const cached = readTournamentCache(key);
   if (cached) {
-    d.allTournaments = cached;
+    d.allPairs = cached;
     d.tournamentScan = 'done';
+    rebuildTournamentIndex(key);
     refreshNavTournaments(key);
     return cached;
   }
 
   const cfg = SPORTS[key];
-  const names = [];
+  const pairs = [];
   let last = null;
   d.tournamentScan = 'running';
   refreshNavTournaments(key);
 
   try {
     for (let i = 0; i < TOURNAMENT_SCAN_CAP; i++) {
-      if (activeSport !== key) { d.tournamentScan = 'aborted'; return names; }  // moved on
-      let params = 'select=tournament&order=tournament.asc&limit=1';
+      if (activeSport !== key) { d.tournamentScan = 'aborted'; return pairs; }  // moved on
+      // sport_key rides along free of charge, and it is what lets two spellings
+      // of one league collapse into a single row.
+      let params = 'select=tournament,sport_key&order=tournament.asc&limit=1';
       if (last != null) params += `&tournament=gt.${encodeURIComponent(last)}`;
       const rows = await qOdds(cfg.table, params);
       // NULL tournaments sort last, so a null means the walk is finished.
       if (!rows.length || rows[0].tournament == null) break;
       last = rows[0].tournament;
-      names.push(last);
-      d.allTournaments = names.slice();
-      if (names.length % 8 === 0) refreshNavTournaments(key);
+      pairs.push({ label: last, sportKey: rows[0].sport_key || '' });
+      d.allPairs = pairs.slice();
+      if (pairs.length % 8 === 0) { rebuildTournamentIndex(key); refreshNavTournaments(key); }
     }
     d.tournamentScan = 'done';
-    writeTournamentCache(key, names);
+    writeTournamentCache(key, pairs);
   } catch (err) {
     d.tournamentScan = 'failed';
     console.error('tournament scan', err);
   }
-  d.allTournaments = names;
+  d.allPairs = pairs;
+  rebuildTournamentIndex(key);
   refreshNavTournaments(key);
-  return names;
+  return pairs;
 }
 
 // Swap just the rows, never the whole sidebar: the filter box sits outside this
@@ -1459,25 +1613,26 @@ function navTournamentRows(key) {
   const scanning = d.tournamentScan === 'running';
   const canLoadAll = (d.monthRows || 0) <= MONTH_ROW_BUDGET;
 
-  const row = (name, dim) => `<div class="sb-tourn ${selectedSubTournament === name ? 'active' : ''} ${dim ? 'dim' : ''}"
-      data-name="${escAttr(name.toLowerCase())}" title="${escAttr(name)}${dim ? ' — no data in this period' : ''}"
-      onclick="selectTournament('${jsStr(name)}')">${escHtml(name)}</div>`;
+  const row = (e, dim) => `<div class="sb-tourn ${selectedTournament === e.id ? 'active' : ''} ${dim ? 'dim' : ''}"
+      data-name="${escAttr(e.labels.join(' ').toLowerCase())}"
+      title="${escAttr(e.label)}${dim ? ' — no data in this period' : ''}"
+      onclick="selectTournament('${jsStr(e.id)}')">${escHtml(e.label)}</div>`;
 
-  let html = `<div class="sb-tourn ${selectedSubTournament ? '' : 'active'} ${canLoadAll ? '' : 'muted'}"
+  let html = `<div class="sb-tourn ${selectedTournament ? '' : 'active'} ${canLoadAll ? '' : 'muted'}"
       data-name="all tournaments"
       title="${canLoadAll ? 'Every tournament this month' : 'Too much data to load at once — pick a tournament'}"
       onclick="${canLoadAll ? 'selectTournament(null)' : ''}">All tournaments</div>`;
 
   if (inMonth.length) {
     html += `<div class="sb-tourn-sect">${escHtml(periodLabel())}</div>`;
-    for (const t of inMonth) html += row(t.name, false);
+    for (const e of inMonth) html += row(e, false);
   }
 
-  const seen = new Set(inMonth.map(t => t.name));
-  const rest = all.filter(n => !seen.has(n));
+  const seen = new Set(inMonth.map(e => e.id));
+  const rest = all.filter(e => !seen.has(e.id));
   if (rest.length || scanning) {
     html += `<div class="sb-tourn-sect">Other periods${rest.length ? ` <span>${rest.length}</span>` : ''}</div>`;
-    for (const n of rest) html += row(n, true);
+    for (const e of rest) html += row(e, true);
     if (scanning) html += skeletonTournaments(4);
   } else if (!inMonth.length) {
     html += '<div class="sb-tourn-empty">No tournaments found</div>';
@@ -1553,8 +1708,8 @@ function renderSidebar() {
   nav.innerHTML = html;
 }
 
-function selectTournament(name) {
-  navigate(activeSport, null, name ? slugify(name) : null);
+function selectTournament(id) {
+  navigate(activeSport, null, id || null);
   toggleSidebar(false);
 }
 function switchSport(key) {
@@ -1581,9 +1736,10 @@ function renderCrumbs() {
   } else {
     const ev = currentEvent();
     parts.push({ label: 'All sports', go: 'goHome()' });
-    parts.push({ label: SPORTS[activeSport].label, go: `switchSport('${activeSport}')`, current: !selectedSubTournament && !ev });
-    if (selectedSubTournament) {
-      parts.push({ label: selectedSubTournament, go: `selectTournament('${jsStr(selectedSubTournament)}')`, current: !ev });
+    parts.push({ label: SPORTS[activeSport].label, go: `switchSport('${activeSport}')`, current: !selectedTournament && !ev });
+    if (selectedTournament) {
+      parts.push({ label: currentTournamentLabel() || selectedTournament,
+                   go: `selectTournament('${jsStr(selectedTournament)}')`, current: !ev });
     }
     if (ev) parts.push({ label: ev.title, current: true });
   }
@@ -1642,8 +1798,9 @@ async function setDateFilter(year, month) {
   try {
     await loadTournamentIndex(activeSport, selectedYear, selectedMonth);
     // The tournament we were on may not run in the new month.
-    const names = (sportData[activeSport].tournaments || []).map(t => t.name);
-    if (selectedSubTournament && !names.includes(selectedSubTournament)) selectedSubTournament = null;
+    // Keep the tournament if it still exists for this sport at all — it may
+    // simply have no fixtures this month, which the empty state explains.
+    if (selectedTournament && !tournamentEntry(activeSport, selectedTournament)) selectedTournament = null;
     await loadScoped(activeSport);
   } catch (err) {
     console.error(err);
@@ -1781,7 +1938,7 @@ function renderErrorLog() {
     const events = data.events || [];
     if (scopeEl) {
       scopeEl.innerHTML = `Across <b>${events.length}</b> event${events.length === 1 ? '' : 's'} · ` +
-        `<b>${escHtml(selectedSubTournament || 'all tournaments')}</b>, ${escHtml(periodLabel())}`;
+        `<b>${escHtml(currentTournamentLabel() || 'all tournaments')}</b>, ${escHtml(periodLabel())}`;
     }
     const rows = [];
     for (const ev of events) {
@@ -1901,10 +2058,10 @@ function renderMatchList() {
 
   const events = (data.events || []).filter(ev => evHasMarkets(ev, data.grouped));
   const tours = data.tournaments || [];
-  const needsPick = !selectedSubTournament && (data.monthRows || 0) > MONTH_ROW_BUDGET && !data.loadedScope;
+  const needsPick = !selectedTournament && (data.monthRows || 0) > MONTH_ROW_BUDGET && !data.loadedScope;
 
   let html = `<div class="list-head">
-      <h2>${escHtml(selectedSubTournament || SPORTS[activeSport].label)}</h2>
+      <h2>${escHtml(currentTournamentLabel() || SPORTS[activeSport].label)}</h2>
       <div class="lh-sub"><b>${events.length}</b> event${events.length === 1 ? '' : 's'}${periodLabel() ? ' · ' + escHtml(periodLabel()) : ''}</div>
     </div>`;
 
@@ -1913,7 +2070,7 @@ function renderMatchList() {
   } else if (!events.length) {
     html += `<div class="empty-state">
         <div class="es-title">Nothing to show for ${escHtml(periodLabel())}</div>
-        <div class="es-sub">No ${escHtml(selectedSubTournament || SPORTS[activeSport].label)} events with markets in this period. Try another month.</div>
+        <div class="es-sub">No ${escHtml(currentTournamentLabel() || SPORTS[activeSport].label)} events with markets in this period. Try another month.</div>
       </div>`;
     if (tours.length) html += renderTournamentPicker(tours);
   } else {
@@ -1945,8 +2102,8 @@ function renderTournamentPicker(tours) {
         <div class="tp-sub">${escHtml(SPORTS[activeSport].label)} runs ${tours.length} competition${tours.length === 1 ? '' : 's'} in ${escHtml(periodLabel())} — more data than is worth loading at once.</div>
       </div>
       <div class="tp-grid">
-        ${tours.map(t => `<div class="tp-item" onclick="selectTournament('${jsStr(t.name)}')">
-            <span class="tp-name">${escHtml(t.name)}</span>
+        ${tours.map(t => `<div class="tp-item" onclick="selectTournament('${jsStr(t.id)}')">
+            <span class="tp-name">${escHtml(t.label)}</span>
             <span class="tp-n">${t.rows.toLocaleString()}</span>
           </div>`).join('')}
       </div>
@@ -2384,13 +2541,16 @@ function openSearchResult(sport, slug, tournament) {
 /* ===========================================================================
    Routing  —  #/{sport}/{tournament}/{event}
    =========================================================================== */
-function currentTournamentSlug() {
-  return selectedSubTournament ? slugify(selectedSubTournament) : null;
-}
+function currentTournamentSlug() { return selectedTournament || null; }
+// Matches the entry id, any spelling the league has had, or the raw sport_key —
+// so links made before the merge (…/aussierules-afl) still land correctly.
 function findTournamentBySlug(sportKey, tSlug) {
-  const tours = sportData[sportKey]?.tournaments || [];
-  const hit = tours.find(t => slugify(t.name) === tSlug);
-  return hit ? hit.name : null;
+  const entries = sportData[sportKey]?.tournamentEntries || [];
+  const hit = entries.find(e =>
+    e.id === tSlug ||
+    slugify(e.sportKey) === tSlug ||
+    e.labels.some(l => slugify(l) === tSlug));
+  return hit ? hit.id : null;
 }
 
 function goHome() {
@@ -2435,14 +2595,24 @@ function extractDateFromSlug(slug) {
 }
 
 // Load whatever the current (sport, month, tournament) selection points at.
+// The label to print on an event, resolved through the merge so a fixture never
+// shows "Aussierules Afl" just because it landed during the rename window.
+function canonicalTournamentLabel(key, m) {
+  const entries = sportData[key]?.tournamentEntries || [];
+  const hit = entries.find(e => e.sportKey === (m.sport_key || '') &&
+    (e.filter.col === 'sport_key' || e.labels.includes(m.tournament)));
+  return hit ? hit.label : null;
+}
+
 async function loadScoped(key) {
   const d = sportData[key] || {};
-  if (!selectedSubTournament && (d.monthRows || 0) > MONTH_ROW_BUDGET) {
+  const entry = currentTournamentEntry();
+  if (!entry && (d.monthRows || 0) > MONTH_ROW_BUDGET) {
     // Too much to pull in one go — the picker takes over until a tournament is chosen.
     d.events = []; d.grouped = {}; d.loadedScope = null;
     return d;
   }
-  return loadMarkets(key, selectedYear, selectedMonth, selectedSubTournament);
+  return loadMarkets(key, selectedYear, selectedMonth, entry);
 }
 
 let _routing = false;
@@ -2454,7 +2624,7 @@ async function handleRoute() {
 
     // ---- Home
     if (!sport) {
-      activeSport = null; currentSlug = null; selectedSubTournament = null;
+      activeSport = null; currentSlug = null; selectedTournament = null;
       selectedYear = null; selectedMonth = null;
       document.getElementById('loading').style.display = 'none';
       renderHomeView();
@@ -2476,7 +2646,7 @@ async function handleRoute() {
     const sportChanged = sport !== activeSport;
     if (sportChanged) {
       currentSlug = null;
-      selectedSubTournament = null;
+      selectedTournament = null;
       navFilter = '';
       selectedYear = null; selectedMonth = null;
       activeMarketType = null;
@@ -2506,10 +2676,10 @@ async function handleRoute() {
       }
 
       await loadTournamentIndex(sport, selectedYear, selectedMonth);
-      selectedSubTournament = tournament ? findTournamentBySlug(sport, tournament) : null;
+      selectedTournament = tournament ? findTournamentBySlug(sport, tournament) : null;
       renderSidebar();
       // The row count is in now, so we know which shape is actually coming.
-      if (!slug && !selectedSubTournament && (sportData[sport].monthRows || 0) > MONTH_ROW_BUDGET) {
+      if (!slug && !selectedTournament && (sportData[sport].monthRows || 0) > MONTH_ROW_BUDGET) {
         showLoading('picker');
       }
       await loadScoped(sport);
@@ -2543,7 +2713,7 @@ async function handleRoute() {
 
     const ev = currentEvent();
     document.title = ev ? `${ev.title} · Odds Library`
-      : `${selectedSubTournament || SPORTS[sport].label} · Odds Library`;
+      : `${currentTournamentLabel() || SPORTS[sport].label} · Odds Library`;
   } finally {
     _routing = false;
   }
@@ -2575,7 +2745,13 @@ let loadingKind = null;
 function showLoading(kind) {
   const el = document.getElementById('loading');
   loadingKind = kind || null;
-  if (!kind) { el.style.display = 'none'; return; }
+  if (!kind) {
+    // Drop the markup, not just its visibility: a hidden skeleton keeps a second
+    // #load-msg in the document, and msg() would then write to the wrong one.
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
 
   el.style.display = '';
   el.innerHTML = kind === 'detail' ? skeletonDetail()
