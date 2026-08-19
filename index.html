@@ -810,6 +810,36 @@
     text-transform: uppercase;
   }
   .bk-name { font-size: 10px; }
+
+  /* ============================================================
+     Event page: pin everything down to the book row
+     ------------------------------------------------------------
+     The odds rows scroll inside the table rather than the page, so the back
+     button, the fixture header, the market tabs and the header row of book
+     marks all stay put while you read down a market.
+
+     This has to be done by giving the table its own scroll box, not by making
+     the block above it `position: sticky`. `.table-wrapper` carries
+     `overflow-x: auto` for wide tables, and a non-visible overflow on one axis
+     forces the other to `auto` — so a sticky `th` resolves against the wrapper,
+     whose height is its content, and never sticks to anything.
+
+     Only where there is height to spare: on a short viewport a fixed header
+     plus tabs would leave no room for rows, so the page just scrolls normally.
+     ============================================================ */
+  @media (min-height: 560px) {
+    .content.detail-mode { overflow: hidden; padding-bottom: 22px; }
+    .content.detail-mode .content-inner { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+    .content.detail-mode .detail-view.active { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    .content.detail-mode .detail-sticky { flex-shrink: 0; }
+    .content.detail-mode #market-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .content.detail-mode #market-panel .table-wrapper {
+      flex: 1; min-height: 180px; overflow: auto;
+    }
+    /* Now that the wrapper scrolls in both axes, the header row has something
+       to stick to. It sits above the best-price tint, hence the z-index. */
+    .content.detail-mode .odds-table th { top: 0; z-index: 3; }
+  }
 </style>
 </head>
 <body>
@@ -2119,6 +2149,7 @@ function setDiscCount(n) {
    Home
    =========================================================================== */
 function renderHomeView() {
+  setDetailMode(false);
   const view = document.getElementById('home-view');
   document.getElementById('match-list-view').style.display = 'none';
   const detail = document.getElementById('detail-view');
@@ -2275,6 +2306,12 @@ function renderMatchCard(ev, mkts) {
 /* ===========================================================================
    Event detail — market tabs
    =========================================================================== */
+/* Only an open event pins its header; every other view scrolls the page. */
+function setDetailMode(on) {
+  const c = document.querySelector('.content');
+  if (c) c.classList.toggle('detail-mode', !!on);
+}
+
 function openDetail(slug) { navigate(activeSport, slug); }
 function closeDetail() { navigate(activeSport, null); }
 
@@ -2289,6 +2326,7 @@ function openDetailDirect(slug) {
   detailEl.classList.add('active');
 
   if (!ev) {
+    setDetailMode(false);
     detailEl.innerHTML = `<button class="back-btn" onclick="closeDetail()">${ICON.back} Back</button>
       <div class="empty-state">
         <div class="es-title">Event not in the loaded period</div>
@@ -2306,7 +2344,8 @@ function openDetailDirect(slug) {
   detailCfg = cfg;
 
   const statusText = ev.ended ? 'Final' : ev.live ? 'Live' : 'Upcoming';
-  let html = `<div class="detail-top">
+  let html = `<div class="detail-sticky">
+    <div class="detail-top">
       <button class="back-btn" onclick="closeDetail()">${ICON.back} Back</button>
     </div>
     <div class="detail-header">
@@ -2330,12 +2369,14 @@ function openDetailDirect(slug) {
     </div>`;
 
   html += renderMarketTabs();
+  html += '</div>';                      // /detail-sticky — the table scrolls under it
   html += '<div id="market-panel"></div>';
 
   detailEl.innerHTML = html;
   renderMarketPanel();
   renderTopbar();
   renderErrorLog();
+  setDetailMode(true);
   const c = document.querySelector('.content');
   if (c) c.scrollTop = 0;
 }
@@ -2863,6 +2904,7 @@ async function handleRoute() {
       dv.classList.remove('active');
       dv.innerHTML = '';
       document.getElementById('match-list-view').style.display = '';
+      setDetailMode(false);
     }
 
     renderSidebar();
@@ -2918,6 +2960,7 @@ function showLoading(kind) {
     return;
   }
 
+  setDetailMode(false);   // the skeleton is a normal scrolling page
   el.style.display = '';
   el.innerHTML = kind === 'detail' ? skeletonDetail()
     : kind === 'picker' ? skeletonPicker()
