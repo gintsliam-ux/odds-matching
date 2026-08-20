@@ -1205,6 +1205,84 @@ async function loadDateRange(key) {
   return range;
 }
 
+/* `leagues` is the authoritative map from optic_league to its category and
+   display name — 339 rows, one query, so take it rather than inferring a name
+   from the id.
+
+   It also exposes a real duplication: eight (sport, tournament) pairs have two
+   optic_league ids. Six are the same competition twice within one category —
+   soccer_france_ligue_1 and soccer_france_ligue_one, soccer_mexico_liga_mx and
+   soccer_mexico_ligamx — and merging them stops the sidebar listing Ligue 1
+   twice with the fixtures split between the two rows. The other two are
+   different competitions that share a name across categories: Serie A is Brazil
+   AND Italy. Keying on (category, tournament) merges the first kind and can
+   never merge the second. */
+const leagueDirectory = new Map();     // optic_league -> { category, tournament }
+let directoryLoaded = false;
+
+async function loadLeagueDirectory() {
+  if (directoryLoaded) return leagueDirectory;
+  directoryLoaded = true;
+  try {
+    for (const r of await sb('leagues', 'select=optic_league,sport,category,tournament&limit=2000')) {
+      leagueDirectory.set(r.optic_league, { category: r.category || null, tournament: r.tournament || null });
+    }
+  } catch (err) {
+    console.warn('league directory unavailable', err);   // labels fall back to the id
+  }
+  return leagueDirectory;
+}
+
+/* Two of the directory's own columns need cleaning before they can key anything.
+
+   CATEGORY is sometimes just a restatement of the id: americanfootball_cfl is
+   filed under "Americanfootball" (the id's prefix) and amfootball_cfl under
+   "Cfl" (its tail). Both are noise, and keeping them split CFL across two rows.
+   Ignoring a category that repeats the prefix or the tail merges those, while
+   Brazil and Italy — which repeat neither — stay the separate Serie As.
+
+   TOURNAMENT is sometimes the whole id title-cased: "Amfootball Ncaaf" against
+   the other id's "NCAAF". Falling back to the tail gives both the same name. */
+/* Fixtures spell some ids with a `_-_` separator where the directory uses `_`:
+   soccer_spain_-_la_liga against soccer_spain_la_liga. All 30 of soccer's
+   unmatched ids resolve by normalising it, and nine of them are the same
+   competition already present in the month under the other spelling — so this
+   both finds the directory entry and merges the pair. */
+function normaliseLeagueId(id) {
+  return String(id || '').replace(/_-_/g, '_');
+}
+
+function cleanCategory(category, leagueId) {
+  if (!category || !leagueId) return category || '';
+  const id = String(leagueId);
+  const prefix = id.split('_')[0];
+  const tail = id.slice(prefix.length + 1);
+  const c = slugify(category);
+  return (c === slugify(prefix) || c === slugify(tail) || c === slugify(id)) ? '' : category;
+}
+function cleanTournament(tournament, leagueId) {
+  if (!tournament || !leagueId) return tournament || null;
+  const id = normaliseLeagueId(leagueId);
+  // Compare against the WHOLE id title-cased, not the prefix-stripped form:
+  // the name to catch is "Amfootball Ncaaf", which carries the prefix.
+  const whole = id.split('_').filter(Boolean).map(titleiseLeagueWord).join(' ');
+  if (slugify(tournament) !== slugify(whole) && slugify(tournament) !== slugify(labelFromLeagueId(id))) {
+    return tournament;
+  }
+  const tail = id.slice(id.split('_')[0].length + 1);
+  return tail ? tail.split('_').filter(Boolean).map(titleiseLeagueWord).join(' ') : tournament;
+}
+
+// The competition an optic_league belongs to, as (category, tournament).
+function competitionKeyFor(leagueId, fallbackTournament) {
+  const norm = normaliseLeagueId(leagueId);
+  const dir = leagueDirectory.get(norm) || leagueDirectory.get(leagueId);
+  const rawTournament = (dir && dir.tournament) || fallbackTournament || labelFromLeagueId(norm) || 'Other';
+  const tournament = cleanTournament(rawTournament, norm) || rawTournament;
+  const category = cleanCategory((dir && dir.category) || '', norm);
+  return { key: `${slugify(category)}|${slugify(tournament)}`, tournament, category };
+}
+
 /* Every competition a sport has ever run. Two columns over that sport's
    fixtures, paged in parallel — soccer's 51k rows are 52 pages, about two
    seconds, where the old schema needed one request per distinct name. */
@@ -1233,20 +1311,8 @@ async function loadLeagues(key) {
   refreshNavTournaments(key);
   try {
     const total = await sbCount('fixtures', `select=fixture_id&sport=eq.${key}`);
-    const rows = await sbAll('fixtures', `select=league,tournament&sport=eq.${key}`, 'fixture_id.asc', total);
-    const groups = new Map();
-    for (const r of rows) {
-      const id = entryIdFor(r.league, r.tournament);
-      let hit = groups.get(id);
-      if (!hit) {
-        hit = { id, league: r.league || null, tournament: r.tournament || null, names: new Map(), n: 0 };
-        groups.set(id, hit);
-      }
-      hit.names.set(r.tournament, (hit.names.get(r.tournament) || 0) + 1);
-      hit.n++;
-    }
-    for (const g of groups.values()) g.label = pickLeagueLabel(g.names, g.league);
-    d.leagues = [...groups.values()].sort((a, b) => a.label.localeCompare(b.label));
+    const rows = await sbAll('fixtures', `select=optic_league,tournament&sport=eq.${key}`, 'fixture_id.asc', total);
+    d.leagues = groupCompetitions(rows).sort((a, b) => a.label.localeCompare(b.label));
     d.leagueScan = 'done';
     writeLeagueCache(key, d.leagues);
   } catch (err) {
@@ -1270,13 +1336,13 @@ async function loadFixtures(key, year, month, league) {
   let filter = `sport=eq.${key}&${monthFilter(year, month)}`;
   const entry = league ? findLeagueEntry(key, league) : null;
   if (entry) filter += `&${entryFilterFor(entry)}`;
-  else if (league) filter += `&league=eq.${encodeURIComponent(league)}`;
+  else if (league) filter += `&optic_league=eq.${encodeURIComponent(league)}`;
 
   const what = league ? (leagueLabel(key, league) || league) : SPORTS[key].label;
   msg(`Loading ${what}…`);
   const total = await sbCount('fixtures', `select=fixture_id&${filter}`);
   const rows = await sbAll('fixtures',
-    `select=fixture_id,sport,league,tournament,event_name,competitors,home_team,away_team,` +
+    `select=fixture_id,sport,optic_league,category,tournament,event_name,competitors,home_team,away_team,` +
     `scheduled_start,actual_start,status,is_live,scores,venue,location,has_odds,tier&${filter}`,
     'scheduled_start.asc,fixture_id.asc', total,
     (done, pages) => msg(`Loading ${what} — ${Math.round(done / pages * 100)}%`));
@@ -1297,21 +1363,9 @@ async function loadMonthLeagues(key, year, month) {
   const total = await sbCount('fixtures', `select=fixture_id&${filter}`);
   msg(`Indexing ${SPORTS[key].label} — ${total.toLocaleString()} fixtures…`);
   const rows = total === 0 ? []
-    : await sbAll('fixtures', `select=league,tournament&${filter}`, 'scheduled_start.asc,fixture_id.asc', total);
+    : await sbAll('fixtures', `select=optic_league,tournament&${filter}`, 'scheduled_start.asc,fixture_id.asc', total);
 
-  const groups = new Map();
-  for (const r of rows) {
-    const id = entryIdFor(r.league, r.tournament);
-    let hit = groups.get(id);
-    if (!hit) {
-      hit = { id, league: r.league || null, tournament: r.tournament || null, names: new Map(), n: 0 };
-      groups.set(id, hit);
-    }
-    hit.names.set(r.tournament, (hit.names.get(r.tournament) || 0) + 1);
-    hit.n++;
-  }
-  for (const g of groups.values()) g.label = pickLeagueLabel(g.names, g.league);
-  d.monthLeagues = [...groups.values()].sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));
+  d.monthLeagues = groupCompetitions(rows).sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));
   d.monthLeaguesFor = stamp;
   d.monthFixtures = total;
   return d.monthLeagues;
@@ -1326,8 +1380,9 @@ function toEvent(r) {
   return {
     id: r.fixture_id,
     title: title.replace(/\s+v\s+/i, ' vs '),
-    league: r.league,
-    tournament: r.tournament || labelFromLeagueId(r.league),
+    league: r.optic_league,
+    category: r.category || null,
+    tournament: r.tournament || labelFromLeagueId(r.optic_league),
     start: r.actual_start || r.scheduled_start,
     scheduled: r.scheduled_start,
     status: r.status,
@@ -1347,13 +1402,13 @@ function toEvent(r) {
    shows prices without the fair columns. */
 async function loadFixtureOdds(fixtureId) {
   const closing = await sb('odds_sp',
-    `select=market_id,market_name,selection,line,line_key,n_outcomes,book_prices,book_fairs,` +
+    `select=market_id,market_name,selection,line,line_group,outcome_no,n_outcomes,book_prices,book_fairs,` +
     `book_overround,fair_blend,fair_prob,n_books,blend_books,blend_tier,og_blend,og_prob,optic_clv,close_delta` +
     `&fixture_id=eq.${encodeURIComponent(fixtureId)}&limit=2000`);
   if (closing.length) return { source: 'closing', rows: closing.map(normaliseClosing) };
 
   const live = await sb('odds',
-    `select=market_id,market_name,selection,line,line_key,is_main,sportsbook,is_lay,is_live,` +
+    `select=market_id,market_name,selection,line,line_group,outcome_no,is_main,sportsbook,is_lay,is_live,` +
     `open_price,current_price,close_price,status&fixture_id=eq.${encodeURIComponent(fixtureId)}` +
     `&is_lay=eq.false&limit=3000`);
   return { source: live.length ? 'live' : 'none', rows: collapseLive(live) };
@@ -1366,7 +1421,10 @@ function normaliseClosing(r) {
     marketName: r.market_name,
     selection: r.selection,
     line: r.line,
-    lineKey: r.line_key,
+    // line_group is abs(line): a handicap's -5.5 and +5.5 land in one group,
+    // exactly as a total's shared 5.5 does. line_key split them into two.
+    lineGroup: r.line_group,
+    outcomeNo: r.outcome_no,
     outcomes: r.n_outcomes,
     prices: r.book_prices || {},
     fairs: r.book_fairs || {},
@@ -1386,12 +1444,12 @@ function collapseLive(rows) {
   const by = new Map();
   for (const r of rows) {
     if (r.status && r.status !== 'active') continue;
-    const key = `${r.market_id} ${r.line_key} ${r.selection}`;
+    const key = `${r.market_id} ${r.line_group} ${r.selection}`;
     let hit = by.get(key);
     if (!hit) {
       hit = {
         market: r.market_id, marketName: r.market_name, selection: r.selection,
-        line: r.line, lineKey: r.line_key, outcomes: null,
+        line: r.line, lineGroup: r.line_group, outcomeNo: r.outcome_no, outcomes: null,
         prices: {}, fairs: {}, overround: {},
         blend: null, prob: null, nBooks: 0, tier: null, ogBlend: null, ogProb: null,
         live: r.is_live,
@@ -1506,7 +1564,7 @@ function labelFromLeagueId(leagueId) {
 }
 
 /* Badge candidates for a competition, best first: a derived label like
-   "England EFL Cup" is not in entity_logos, but "EFL Cup" is. */
+   "England EFL Cup" is not in `entities`, but "EFL Cup" is. */
 function leagueBadgeNames(label, leagueId) {
   const names = [];
   if (label) names.push(label);
@@ -1531,13 +1589,52 @@ function leagueBadgeNames(label, leagueId) {
        commoner. basketball_mexico_lnbp is "Basketball Mexico Lnbp" 28 times and
        "Mexico - LNBP" 11 — the second is the one to show, so a name that is
        merely the id title-cased loses to one that isn't. */
+/* Fold (optic_league, tournament) rows into one entry per competition. A
+   fixture with no league at all — 676 of tennis's in a month, before the feed
+   backfilled them — groups on its tournament instead. */
+function groupCompetitions(rows) {
+  const groups = new Map();
+  for (const r of rows) {
+    const leagueId = r.optic_league || null;
+    const comp = leagueId
+      ? competitionKeyFor(leagueId, r.tournament)
+      : { key: 't|' + slugify(r.tournament || 'other'), tournament: r.tournament || 'Other', category: '' };
+    let hit = groups.get(comp.key);
+    if (!hit) {
+      hit = { key: comp.key, leagues: new Set(), tournament: comp.tournament, category: comp.category,
+              names: new Map(), n: 0 };
+      groups.set(comp.key, hit);
+    }
+    if (leagueId) hit.leagues.add(leagueId);
+    hit.names.set(r.tournament, (hit.names.get(r.tournament) || 0) + 1);
+    hit.n++;
+  }
+  const out = [];
+  for (const g of groups.values()) {
+    const leagues = [...g.leagues].sort();
+    out.push({
+      // The id stays an optic_league where there is one, so existing links hold.
+      id: leagues[0] || 't-' + slugify(g.tournament),
+      leagues,
+      league: leagues[0] || null,
+      tournament: g.tournament,
+      category: g.category,
+      label: g.tournament || pickLeagueLabel(g.names, leagues[0]),
+      n: g.n,
+    });
+  }
+  return out;
+}
+
 function entryIdFor(league, tournament) {
   return league ? league : 't-' + slugify(tournament || 'other');
 }
 function entryFilterFor(entry) {
-  return entry.league
-    ? `league=eq.${encodeURIComponent(entry.league)}`
-    : `tournament=eq.${encodeURIComponent(entry.tournament)}`;
+  const ids = entry.leagues && entry.leagues.length ? entry.leagues : (entry.league ? [entry.league] : []);
+  if (!ids.length) return `tournament=eq.${encodeURIComponent(entry.tournament)}`;
+  if (ids.length === 1) return `optic_league=eq.${encodeURIComponent(ids[0])}`;
+  // A merged competition spans more than one id — ask for all of them.
+  return `optic_league=in.(${ids.map(encodeURIComponent).join(',')})`;
 }
 // A name that is just the id title-cased is the ingest's fallback, not a name.
 function isDerivedName(name, leagueId) {
@@ -1558,8 +1655,8 @@ function pickLeagueLabel(counts, leagueId) {
 
 function findLeagueEntry(sportKey, id) {
   const d = sportData[sportKey] || {};
-  return (d.monthLeagues || []).find(l => l.id === id) ||
-         (d.leagues || []).find(l => l.id === id) || null;
+  const match = (l) => l.id === id || (l.leagues || []).includes(id);
+  return (d.monthLeagues || []).find(match) || (d.leagues || []).find(match) || null;
 }
 function leagueLabel(sportKey, leagueId) {
   const hit = findLeagueEntry(sportKey, leagueId);
@@ -1636,7 +1733,7 @@ function sportIconHtml(key, cls) {
 }
 
 /* Competition badges, resolved offline by scripts/resolve-tournament-logos.mjs
-   into `entity_logos`. One query for the lot, keyed by the tournament's display
+   into `entities`. One query for the lot, keyed by the tournament's display
    name — which is exactly what fixtures.tournament carries. */
 const competitionLogos = new Map();
 let logosLoaded = false;
@@ -1645,7 +1742,7 @@ async function loadCompetitionLogos() {
   if (logosLoaded) return;
   logosLoaded = true;
   try {
-    const rows = await sb('entity_logos', 'select=name,logo_url&sport=eq.competition&logo_url=not.is.null&limit=2000');
+    const rows = await sb('entities', 'select=name,logo_url&sport=eq.competition&logo_url=not.is.null&limit=2000');
     for (const r of rows) competitionLogos.set(r.name, r.logo_url);
   } catch (err) {
     console.warn('competition logos unavailable', err);
@@ -2333,16 +2430,25 @@ async function refreshDetail() {
    its +0.5 sit together, and build the book columns from the jsonb keys that
    actually appear — a book the feed adds tomorrow needs nothing here.
    =========================================================================== */
+// A handicap's two sides share a group, so the sign belongs on the selection.
+function selectionLabel(row) {
+  const m = String(row.market || '').toLowerCase();
+  const signed = row.line != null && (m.includes('spread'));
+  if (!signed) return escHtml(row.selection);
+  return `<span class="oc-name">${escHtml(row.selection)}</span> <span class="oc-line">${row.line > 0 ? '+' : ''}${row.line}</span>`;
+}
+
 function lineLabel(row) {
   const m = String(row.market || '').toLowerCase();
-  if (row.line == null) {
+  if (row.lineGroup == null && row.line == null) {
     if (m === 'dnb') return 'Draw No Bet';
     if (m === 'btts') return 'Both Teams';
     if (m === 'double_chance') return 'Double Chance';
     return 'H2H';
   }
-  if (m.endsWith('total') || m === 'total_sets') return `O/U ${row.line}`;
-  return `Line ${row.line > 0 ? '+' : ''}${row.line}`;
+  const g = row.lineGroup != null ? row.lineGroup : Math.abs(row.line);
+  if (m.includes('total') || m === 'total_sets') return `O/U ${g}`;
+  return `Line ${g}`;   // the sign lives on each selection, not on the group
 }
 
 function renderOddsTable(rows) {
@@ -2351,12 +2457,17 @@ function renderOddsTable(rows) {
   // Group by line, keeping the order the lines came in (already sorted by key).
   const groups = new Map();
   for (const r of rows) {
-    const k = r.lineKey == null ? 'null' : String(r.lineKey);
+    const k = r.lineGroup == null ? 'null' : String(r.lineGroup);
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(r);
   }
+  /* Within a group, outcome_no restores the old oc1/oc2/oc3 reading order:
+     1 home/Over/Yes, 2 away/Under/No, 3 Draw. */
+  for (const g of groups.values()) {
+    g.sort((a, b) => (a.outcomeNo ?? 99) - (b.outcomeNo ?? 99) || String(a.selection).localeCompare(String(b.selection)));
+  }
   const ordered = [...groups.entries()].sort((a, b) => {
-    const la = a[1][0].line, lb = b[1][0].line;
+    const la = a[1][0].lineGroup, lb = b[1][0].lineGroup;
     if (la == null && lb == null) return 0;
     if (la == null) return -1;
     if (lb == null) return 1;
@@ -2406,7 +2517,7 @@ function renderOddsTable(rows) {
           continue;
         }
         if (col.key === 'selection') {
-          html += `<td class="outcome-cell"><span class="oc-name oc-name-solo" title="${escAttr(r.selection)}">${escHtml(r.selection)}</span></td>`;
+          html += `<td class="outcome-cell" title="${escAttr(r.selection)}">${selectionLabel(r)}</td>`;
           continue;
         }
         if (col.key === 'tier') {
@@ -2529,12 +2640,12 @@ async function runTeamSearch(q) {
   container.innerHTML = skeletonSearch();
   try {
     const rows = await sb('fixtures',
-      `select=fixture_id,sport,league,tournament,event_name,scheduled_start,status,scores` +
+      `select=fixture_id,sport,optic_league,category,tournament,event_name,scheduled_start,status,scores` +
       `&event_name=ilike.*${encodeURIComponent(q)}*&order=scheduled_start.desc&limit=40`);
     if (!rows.length) { container.innerHTML = '<div class="search-no-results">No matches found</div>'; return; }
     container.innerHTML = rows.map(r => {
       const ev = toEvent(r);
-      return `<div class="search-result-item" onclick="openSearchResult('${r.sport}','${escAttr(r.fixture_id)}','${jsStr(r.league || '')}')">
+      return `<div class="search-result-item" onclick="openSearchResult('${r.sport}','${escAttr(r.fixture_id)}','${jsStr(r.optic_league || '')}')">
         <div class="sr-teams">${escHtml(ev.title)}</div>
         <div class="sr-meta">
           <span class="sr-sport">${escHtml(SPORTS[r.sport]?.label || r.sport)}</span>
@@ -2670,11 +2781,11 @@ async function handleRoute() {
       /* A deep link can name a fixture from another month. The id carries no
          date, so ask fixtures where it is and reload that period. */
       if (slug && !(sportData[sport].events || []).some(e => e.id === slug)) {
-        const found = await sb('fixtures', `select=scheduled_start,league&fixture_id=eq.${encodeURIComponent(slug)}&limit=1`);
+        const found = await sb('fixtures', `select=scheduled_start,optic_league&fixture_id=eq.${encodeURIComponent(slug)}&limit=1`);
         if (found.length) {
           const d = new Date(found[0].scheduled_start);
           selectedYear = d.getUTCFullYear(); selectedMonth = d.getUTCMonth() + 1;
-          if (!selectedTournament && found[0].league) selectedTournament = entryIdFor(found[0].league, null);
+          if (!selectedTournament && found[0].optic_league) selectedTournament = entryIdFor(found[0].optic_league, null);
           await loadMonthLeagues(sport, selectedYear, selectedMonth);
           await loadScoped(sport);
         }
@@ -2805,7 +2916,7 @@ function skeletonSearch(n = 4) {
 async function init() {
   initSidebarCollapsed();
   renderSidebar();
-  await loadCompetitionLogos();
+  await Promise.all([loadCompetitionLogos(), loadLeagueDirectory()]);
   await handleRoute();
   const missing = Object.keys(SPORTS).filter(k => !sportData[k]?.dateRange);
   if (missing.length) {
