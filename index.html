@@ -123,7 +123,7 @@
   }
   .sb-search-mini:hover { border-color: var(--accent-line); color: var(--text); }
   .sb-mark {
-    width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
+    width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0;
     background: linear-gradient(135deg, var(--accent) 0%, #2d6fd6 100%);
     display: grid; place-items: center;
     font-size: 12px; font-weight: 800; color: #fff; letter-spacing: -0.5px;
@@ -329,7 +329,7 @@
   .home-tile.off { opacity: .62; }
   .home-tile.off:hover { opacity: 1; }
   .ht-head { display: flex; align-items: center; gap: 10px; }
-  .ht-icon { width: 28px; height: 28px; border-radius: 7px; object-fit: cover; flex-shrink: 0; }
+  .ht-icon { width: 32px; height: 32px; border-radius: 8px; object-fit: cover; flex-shrink: 0; }
   .ht-name { flex: 1; font-size: 14px; font-weight: 700; color: #fff; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ht-status {
     font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: var(--r-pill);
@@ -714,9 +714,9 @@
     border: 1px solid color-mix(in srgb, var(--tint) 26%, transparent);
   }
   .sport-glyph svg { width: 64%; height: 64%; }
-  .sb-league-icon { width: 20px; height: 20px; border-radius: 6px; }
-  .ht-icon.sport-glyph { width: 30px; height: 30px; border-radius: 8px; }
-  .dh-ico { width: 18px; height: 18px; border-radius: 5px; }
+  .sb-league-icon { width: 23px; height: 23px; border-radius: 6px; }
+  .ht-icon.sport-glyph { width: 34px; height: 34px; border-radius: 9px; }
+  .dh-ico { width: 22px; height: 22px; border-radius: 6px; }
 
   /* Sidebar group head now carries chevron + glyph + name + count + freshness */
   .sb-chev {
@@ -829,7 +829,7 @@
      the two halves of the table don't blur together. */
   .bk { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; }
   .bk-logo {
-    width: 17px; height: 17px; border-radius: 4px; object-fit: contain;
+    width: 21px; height: 21px; border-radius: 4px; object-fit: contain;
     background: rgba(255,255,255,0.9); padding: 1px; flex-shrink: 0;
   }
   .bk-fair {
@@ -872,12 +872,12 @@
      Competition badges
      ============================================================ */
   .tl-badge {
-    width: 16px; height: 16px; flex-shrink: 0; object-fit: contain;
+    width: 19px; height: 19px; flex-shrink: 0; object-fit: contain;
     border-radius: 3px; background: rgba(255,255,255,0.92); padding: 1px;
   }
   /* Keeps the labels on one left edge whether or not a badge resolved. */
   .tl-badge.tl-none { background: transparent; }
-  .tl-badge.tl-sm { width: 13px; height: 13px; border-radius: 2px; }
+  .tl-badge.tl-sm { width: 16px; height: 16px; border-radius: 3px; }
   .tl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .sb-tourn { display: flex; align-items: center; gap: 7px; }
@@ -887,10 +887,10 @@
     flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .dh-badge {
-    width: 20px; height: 20px; object-fit: contain; flex-shrink: 0;
+    width: 24px; height: 24px; object-fit: contain; flex-shrink: 0;
     border-radius: 4px; background: rgba(255,255,255,0.92); padding: 1px;
   }
-  .tp-item .tl-badge { width: 18px; height: 18px; }
+  .tp-item .tl-badge { width: 22px; height: 22px; }
 </style>
 </head>
 <body>
@@ -2189,7 +2189,6 @@ function renderMatchCard(ev) {
     <div class="mc-meta">
       ${ev.score ? `<span class="mc-score">${escHtml(ev.score)}</span>` : ''}
       <span class="mc-when">${escHtml(fmtTime(ev.start))}</span>
-      ${ev.hasOdds ? '' : '<span class="mc-no-odds">No prices</span>'}
     </div>
   </div>`;
 }
@@ -2376,6 +2375,10 @@ function renderOddsTable(rows) {
   for (const b of fairBooks) cols.push({ key: 'f_' + b, label: bookLabel(b) + ' Fair', sortable: true, type: 'num', html: bookHeader(b, true) });
   if (any(r => r.blend != null)) cols.push({ key: 'blend', label: 'Fair Blend', sortable: true, type: 'num' });
   if (any(r => r.prob != null)) cols.push({ key: 'prob', label: 'Fair %', sortable: true, type: 'num' });
+  // Only the archive era carries these — about a fifth of odds_sp — so they
+  // appear on the fixtures that have them rather than as empty columns.
+  if (any(r => r.ogBlend != null)) cols.push({ key: 'ogBlend', label: 'Orig Blend', sortable: true, type: 'num' });
+  if (any(r => r.ogProb != null)) cols.push({ key: 'ogProb', label: 'Orig %', sortable: true, type: 'num' });
   cols.push({ key: 'spread', label: 'Book Spread', sortable: true, type: 'num' });
   if (any(r => r.nBooks)) cols.push({ key: 'nBooks', label: 'Books', sortable: true, type: 'num' });
   if (any(r => r.tier && r.tier !== 'core')) cols.push({ key: 'tier', label: 'Tier', type: 'text' });
@@ -2420,14 +2423,16 @@ function renderOddsTable(rows) {
           html += `<td class="odds-val" data-val="${r.nBooks || 0}">${r.nBooks || '—'}</td>`;
           continue;
         }
-        if (col.key === 'prob') {
-          html += r.prob == null ? '<td class="null-val" data-val="">—</td>'
-            : `<td class="prob-cell" data-val="${r.prob}">${r.prob.toFixed(1)}%</td>`;
+        if (col.key === 'prob' || col.key === 'ogProb') {
+          const v = col.key === 'prob' ? r.prob : r.ogProb;
+          html += v == null ? '<td class="null-val" data-val="">—</td>'
+            : `<td class="prob-cell" data-val="${v}">${v.toFixed(1)}%</td>`;
           continue;
         }
-        if (col.key === 'blend') {
-          html += r.blend == null ? '<td class="null-val" data-val="">—</td>'
-            : `<td class="odds-val" data-val="${r.blend}">${r.blend.toFixed(2)}</td>`;
+        if (col.key === 'blend' || col.key === 'ogBlend') {
+          const v = col.key === 'blend' ? r.blend : r.ogBlend;
+          html += v == null ? '<td class="null-val" data-val="">—</td>'
+            : `<td class="odds-val" data-val="${v}">${v.toFixed(2)}</td>`;
           continue;
         }
         const isFair = col.key.startsWith('f_');
