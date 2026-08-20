@@ -891,6 +891,13 @@
     border-radius: 4px; background: rgba(255,255,255,0.92); padding: 1px;
   }
   .tp-item .tl-badge { width: 22px; height: 22px; }
+
+  .tp-cat { margin-left: 7px; font-size: 11px; font-weight: 500; color: var(--text-3); }
+  .dh-country {
+    margin-left: 6px; padding: 1px 7px; border-radius: var(--r-pill);
+    background: rgba(255,255,255,0.05); color: var(--text-2);
+    font-size: 9.5px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase;
+  }
 </style>
 </head>
 <body>
@@ -1292,7 +1299,10 @@ function competitionKeyFor(leagueId, fallbackTournament) {
    fixtures, paged in parallel — soccer's 51k rows are 52 pages, about two
    seconds, where the old schema needed one request per distinct name. */
 const LEAGUE_CACHE_TTL = 7 * 86400000;
-const leagueCacheKey = (key) => `ol.leagues.v1.${key}`;
+/* v2: the backend merged the duplicate optic_league ids (americanfootball_* into
+   amfootball_*, and soccer's `_-_` spellings). A cache keyed v1 would keep
+   showing the retired ids as dimmed "other periods" rows for up to a week. */
+const leagueCacheKey = (key) => `ol.leagues.v2.${key}`;
 
 function readLeagueCache(key) {
   try {
@@ -1347,7 +1357,7 @@ async function loadFixtures(key, year, month, league) {
   msg(`Loading ${what}…`);
   const total = await sbCount('fixtures', `select=fixture_id&${filter}`);
   const rows = await sbAll('fixtures',
-    `select=fixture_id,sport,optic_league,category,tournament,event_name,competitors,home_team,away_team,` +
+    `select=fixture_id,sport,optic_league,category,country,tournament,event_name,competitors,home_team,away_team,` +
     `scheduled_start,actual_start,status,is_live,scores,venue,location,has_odds,tier&${filter}`,
     'scheduled_start.asc,fixture_id.asc', total,
     (done, pages) => msg(`Loading ${what} — ${Math.round(done / pages * 100)}%`));
@@ -1368,7 +1378,7 @@ async function loadMonthLeagues(key, year, month) {
   const total = await sbCount('fixtures', `select=fixture_id&${filter}`);
   msg(`Indexing ${SPORTS[key].label} — ${total.toLocaleString()} fixtures…`);
   const rows = total === 0 ? []
-    : await sbAll('fixtures', `select=optic_league,tournament&${filter}`, 'scheduled_start.asc,fixture_id.asc', total);
+    : await sbAll('fixtures', `select=optic_league,tournament,country&${filter}`, 'scheduled_start.asc,fixture_id.asc', total);
 
   d.monthLeagues = groupCompetitions(rows).sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));
   d.monthLeaguesFor = stamp;
@@ -1387,6 +1397,7 @@ function toEvent(r) {
     title: title.replace(/\s+v\s+/i, ' vs '),
     league: r.optic_league,
     category: r.category || null,
+    country: r.country || null,
     tournament: r.tournament || labelFromLeagueId(r.optic_league),
     start: r.actual_start || r.scheduled_start,
     scheduled: r.scheduled_start,
@@ -1611,23 +1622,30 @@ function groupCompetitions(rows) {
     let hit = groups.get(comp.key);
     if (!hit) {
       hit = { key: comp.key, leagues: new Set(), tournament: comp.tournament, category: comp.category,
-              names: new Map(), n: 0 };
+              names: new Map(), countries: new Set(), n: 0 };
       groups.set(comp.key, hit);
     }
     if (leagueId) hit.leagues.add(leagueId);
+    if (r.country) hit.countries.add(r.country);
     hit.names.set(r.tournament, (hit.names.get(r.tournament) || 0) + 1);
     hit.n++;
   }
   const out = [];
   for (const g of groups.values()) {
     const leagues = [...g.leagues].sort();
+    /* `leagues.category` is a restatement of the tournament for 52 of its 300
+       rows — CFL is filed under "Cfl" — so it tells you nothing about where the
+       competition is played. The fixtures know: every CFL row carries
+       country=Canada. Only take it when the competition agrees on one. */
+    const countries = [...g.countries].filter(Boolean);
+    const country = countries.length === 1 ? countries[0] : '';
     out.push({
       // The id stays an optic_league where there is one, so existing links hold.
       id: leagues[0] || 't-' + slugify(g.tournament),
       leagues,
       league: leagues[0] || null,
       tournament: g.tournament,
-      category: g.category,
+      category: g.category || country,
       label: g.tournament || pickLeagueLabel(g.names, leagues[0]),
       n: g.n,
     });
@@ -1835,7 +1853,7 @@ function navTournamentRows(key) {
 
   const row = (l, dim) => `<div class="sb-tourn ${selectedTournament === l.id ? 'active' : ''} ${dim ? 'dim' : ''}"
       data-name="${escAttr(String(l.label).toLowerCase())}"
-      title="${escAttr(l.label)}${dim ? ' — nothing in this period' : ''}"
+      title="${escAttr(l.label)}${l.category ? ' — ' + escAttr(l.category) : ''}${dim ? ' · nothing in this period' : ''}"
       onclick="selectTournament('${jsStr(l.id)}')">
       ${tournamentLogoHtml(l.label, 'tl-badge', true, l.id) || '<span class="tl-badge tl-none"></span>'}
       <span class="tl-name">${escHtml(l.label)}</span>
@@ -2270,7 +2288,7 @@ function renderTournamentPicker(leagues) {
       <div class="tp-grid">
         ${leagues.map(l => `<div class="tp-item" onclick="selectTournament('${jsStr(l.id)}')">
             ${tournamentLogoHtml(l.label, 'tl-badge', false, l.id)}
-            <span class="tp-name">${escHtml(l.label)}</span>
+            <span class="tp-name">${escHtml(l.label)}${l.category ? `<span class="tp-cat">${escHtml(l.category)}</span>` : ''}</span>
             <span class="tp-n">${l.n.toLocaleString()}</span>
           </div>`).join('')}
       </div>
@@ -2361,6 +2379,7 @@ async function openDetailDirect(id) {
         <div class="dh-eyebrow">
           ${tournamentLogoHtml(ev.tournament, 'dh-badge', false, ev.league) || sportIconHtml(activeSport, 'dh-ico')}
           ${escHtml(ev.tournament || SPORTS[activeSport].label)}
+          ${ev.country ? `<span class="dh-country">${escHtml(ev.country)}</span>` : ''}
         </div>
         <div class="dh-title">${splitTitle(ev.title)}</div>
         <div class="dh-meta">
