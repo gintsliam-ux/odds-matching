@@ -1270,8 +1270,13 @@ function cleanTournament(tournament, leagueId) {
     return tournament;
   }
   const tail = id.slice(id.split('_')[0].length + 1);
-  return tail ? tail.split('_').filter(Boolean).map(titleiseLeagueWord).join(' ') : tournament;
+  if (!tail) return tournament;
+  const stripped = tail.split('_').filter(Boolean).map(titleiseLeagueWord).join(' ');
+  /* Stripping the sport can leave nothing meaningful behind: "Boxing Matches"
+     becomes "Matches". Keep the original when that happens. */
+  return GENERIC_TAILS.has(stripped.toLowerCase()) ? tournament : stripped;
 }
+const GENERIC_TAILS = new Set(['matches', 'games', 'match', 'game', 'cup', 'league', 'other', 'events', 'main']);
 
 // The competition an optic_league belongs to, as (category, tournament).
 function competitionKeyFor(leagueId, fallbackTournament) {
@@ -1551,7 +1556,11 @@ function formatMarketType(t) {
    <sport>_<region>_-_<name>. The region stays in: without it Brazil's Serie A
    and Italy's are the same string. */
 const LEAGUE_ACRONYMS = new Set(['uefa','conmebol','concacaf','afc','caf','fifa','efl','mls','usa','uk','mx',
-  'nba','nfl','nhl','mlb','wnba','ncaa','atp','wta','ufc','pfl','nrl','afl','ipl','psl','bbl','cpl','t20','odi']);
+  'nba','nfl','nhl','mlb','wnba','ncaa','atp','wta','ufc','pfl','nrl','afl','ipl','psl','bbl','cpl','t20','odi',
+  // Seen in the 42 league names that repeat their sport prefix; without these
+  // they render "Aflw", "Ncaaf", "Dota2".
+  'aflw','wafl','ncaaf','ncaab','nbl','nbl1','wnbl','wnbl1','ibl','lnb','lnbp','nbb','pba','bsn','kbl','cba',
+  'sbl','milb','lmb','lmp','cpbl','kbo','npb','ufl','xfl','cfl','shl','ahl','dota2','cs2','big3','sa20','wbbl','wpl']);
 function titleiseLeagueWord(w) {
   if (!w) return '';
   if (LEAGUE_ACRONYMS.has(w) || (w.length <= 3 && !/[aeiou]/.test(w))) return w.toUpperCase();
