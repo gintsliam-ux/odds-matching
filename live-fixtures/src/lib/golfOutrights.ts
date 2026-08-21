@@ -209,13 +209,26 @@ const LETTER_FOLD: Record<string, string> = {
 /**
  * Canonical form of a golfer's name, for joining the two feeds.
  *
- * OPTIC writes "Cameron Young"; SwiftBet writes "Young, Cameron". Sorting the
- * name tokens makes the two identical without having to know which convention a
- * given feed uses. Accents are folded, including the stroked letters NFD leaves
- * alone (see LETTER_FOLD) — the feeds disagree on Højgaard.
+ * OPTIC writes "Cameron Young"; SwiftBet writes "Young, Cameron". Sorting makes
+ * the two identical without having to know which convention a feed uses.
  *
- * It does NOT fix short forms: "Zach Bauchou" and "Zachary Bauchou" stay
- * distinct, which is most of the ~15% that doesn't join.
+ * Sorting *letters* rather than *words* is the part that matters. Sorting words
+ * still relies on both feeds breaking a name in the same place, and they do
+ * not: "SONG Younghan" split to [song, younghan] while "Young-han Song" split
+ * to [han, song, young], so the field fragmented on hyphenated Korean names.
+ * Dropping separators first and sorting letters collapses hyphens, periods,
+ * initials and word order under one rule, so "Young-han Song", "J.T. Poston"
+ * and "Jun Yong Park" now meet "SONG Younghan", "JT Poston" and "JunYong Park".
+ *
+ * Accents fold first, including the stroked letters NFD leaves whole (see
+ * LETTER_FOLD) — without that the [^a-z] strip eats them and "Højgaard" stops
+ * matching SwiftBet's "Hojgaard".
+ *
+ * Two known limits. It does NOT fix short forms: "Zach Bauchou" and "Zachary
+ * Bauchou" stay distinct, which is most of what still doesn't join. And a
+ * letter multiset can collide: across 5,509 real player names the only wrong
+ * merge was "Philipe Lins" against a stray "Phillipines", and the near-misses
+ * it does join ("Jaime"/"Jamie", "Jeffery"/"Jeffrey") are the same person.
  */
 export function golferKey(name: string): string {
   return name
@@ -223,9 +236,8 @@ export function golferKey(name: string): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    .replace(/[^a-z ]/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean)
+    .replace(/[^a-z]/g, '')
+    .split('')
     .sort()
-    .join(' ')
+    .join('')
 }
