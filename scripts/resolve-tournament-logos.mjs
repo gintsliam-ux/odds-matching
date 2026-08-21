@@ -5,6 +5,10 @@
 // `entities` under sport='competition'. The page then reads that one table
 // at load instead of touching Wikipedia at runtime.
 //
+// Tournaments come from `fixtures` — the same table the sidebar builds from —
+// so this can no longer drift from what the page shows. It used to walk the
+// fifteen per-sport `*_odds` tables, which have been retired.
+//
 // It reuses live-fixtures' `entities` table (was entity_logos) and its Wikipedia —
 // search, then rank candidates, then fall back to the REST summary — because
 // that resolver already learned which results lie (flags, maps, town halls).
@@ -22,27 +26,57 @@ const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 const REST = `${SB_URL}/rest/v1`;
 const H = { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` };
 
+/* Reads go through the anon key, which is all the sidebar ever needs. Writes do
+   not: `entities` grants anon neither INSERT nor UPDATE, so every write comes
+   back 42501 no matter how it is shaped. Supply a service key to cache badges:
+   SUPABASE_SERVICE_KEY=… node scripts/resolve-tournament-logos.mjs */
+const WRITE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SB_SERVICE_KEY || SB_KEY;
+const WH = { apikey: WRITE_KEY, Authorization: `Bearer ${WRITE_KEY}` };
+
+/* Probe before spending a single Wikipedia lookup — an empty insert writes
+   nothing but still needs the grant, so it answers the question for free. */
+async function assertWritable() {
+  const r = await fetch(`${REST}/entities`, {
+    method: 'POST',
+    headers: { ...WH, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    body: '[]',
+  });
+  if (r.ok) return;
+  const body = (await r.text()).slice(0, 160);
+  const which = WRITE_KEY === SB_KEY ? 'the anon key' : 'SUPABASE_SERVICE_KEY';
+  throw new Error(
+    `cannot write to entities with ${which} — ${body}\n` +
+    `  Badges are resolved but nothing can be cached. Either run with\n` +
+    `  SUPABASE_SERVICE_KEY set, or grant anon INSERT/UPDATE on entities.`);
+}
+
 // Wikimedia throttles anonymous User-Agents under load.
 const WIKI_UA = 'odds-library-competition-logos/1.0 (league badge cache; contact: gintsliam@gmail.com)';
 
 const LOGO_SPORT = 'competition';   // namespace inside `entities`
 
+/* Competitions come from `fixtures` now, not the fifteen per-sport odds tables.
+   The keys ARE `fixtures.sport`, so a sport is a filter rather than a table —
+   and golf, which never had a wide table, gets badges for the first time. */
+const FIXTURES = 'fixtures';
+
 const SPORTS = {
-  soccer:      { table: 'soccer_odds',      hint: 'association football league' },
-  basketball:  { table: 'basketball_odds',  hint: 'basketball league' },
-  amfootball:  { table: 'amfootball_odds',  hint: 'american football league' },
-  baseball:    { table: 'baseball_odds',    hint: 'baseball league' },
-  icehockey:   { table: 'icehockey_odds',   hint: 'ice hockey league' },
-  tennis:      { table: 'tennis_odds',      hint: 'tennis tournament' },
-  cricket:     { table: 'cricket_odds',     hint: 'cricket competition' },
-  aussierules: { table: 'aussierules_odds', hint: 'australian rules football league' },
-  rugbyleague: { table: 'rugbyleague_odds', hint: 'rugby league competition' },
-  rugbyunion:  { table: 'rugbyunion_odds',  hint: 'rugby union competition' },
-  mma:         { table: 'mma_odds',         hint: 'mixed martial arts promotion' },
-  boxing:      { table: 'boxing_odds',      hint: 'boxing' },
-  darts:       { table: 'darts_odds',       hint: 'darts tournament' },
-  esports:     { table: 'esports_odds',     hint: 'esports league' },
-  volleyball:  { table: 'volleyball_odds',  hint: 'volleyball league' },
+  soccer:      { hint: 'association football league' },
+  basketball:  { hint: 'basketball league' },
+  amfootball:  { hint: 'american football league' },
+  baseball:    { hint: 'baseball league' },
+  icehockey:   { hint: 'ice hockey league' },
+  tennis:      { hint: 'tennis tournament' },
+  cricket:     { hint: 'cricket competition' },
+  aussierules: { hint: 'australian rules football league' },
+  rugbyleague: { hint: 'rugby league competition' },
+  rugbyunion:  { hint: 'rugby union competition' },
+  mma:         { hint: 'mixed martial arts promotion' },
+  boxing:      { hint: 'boxing' },
+  darts:       { hint: 'darts tournament' },
+  esports:     { hint: 'esports league' },
+  volleyball:  { hint: 'volleyball league' },
+  golf:        { hint: 'golf tournament' },
 };
 
 // Same rule as the page: a key with a handful of labels is one competition that
@@ -164,30 +198,88 @@ async function getJSON(pathAndQuery, tries = 3) {
   throw new Error(`API failed: ${pathAndQuery}`);
 }
 
-async function upsert(rows) {
+/* `entities` holds (sport, name) uniquely — 12,408 rows, no repeats — but the
+   constraint is not declared, so ON CONFLICT has nothing to match and PostgREST
+   rejects a real upsert with 42P10. Until that constraint exists, write the two
+   cases apart: PATCH the names already on file, POST the rest. `known` is the
+   set loaded at startup, so this costs no extra reads. */
+let upsertNative = true;
+
+/* Two competitions can nominate the same alias — "Bundesliga" is reached from
+   both "Germany Bundesliga" and "Bundesliga - Germany" — so a batch can carry
+   the same (sport, name) twice. Postgres refuses to let one statement touch a
+   row twice (21000), so collapse them first, preferring a row that actually
+   found a badge over one that recorded a miss. */
+function dedupe(rows) {
+  const by = new Map();
+  for (const row of rows) {
+    const k = `${row.sport} ${row.name}`;
+    const prev = by.get(k);
+    if (!prev || (prev.logo_url == null && row.logo_url != null)) by.set(k, row);
+  }
+  return [...by.values()];
+}
+
+async function upsert(batch, known) {
+  const rows = dedupe(batch);
   if (!rows.length) return;
-  const r = await fetch(`${REST}/entities?on_conflict=sport,name`, {
+
+  if (upsertNative) {
+    const r = await fetch(`${REST}/entities?on_conflict=sport,name`, {
+      method: 'POST',
+      headers: { ...WH, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify(rows),
+    });
+    if (r.ok) return;
+    const body = (await r.text()).slice(0, 200);
+    if (!body.includes('42P10')) throw new Error(`upsert ${r.status}: ${body}`);
+    upsertNative = false;
+    console.log('  (no unique index on entities(sport, name) — writing with PATCH/POST instead)');
+  }
+
+  const fresh = [];
+  for (const row of rows) {
+    if (!known || !known.has(row.name)) { fresh.push(row); continue; }
+    const q = `${REST}/entities?sport=eq.${encodeURIComponent(row.sport)}` +
+              `&name=eq.${encodeURIComponent(row.name)}`;
+    const r = await fetch(q, {
+      method: 'PATCH',
+      headers: { ...WH, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ logo_url: row.logo_url, source: row.source }),
+    });
+    if (!r.ok) throw new Error(`patch ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  }
+  if (!fresh.length) return;
+
+  const r = await fetch(`${REST}/entities`, {
     method: 'POST',
-    headers: { ...H, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
-    body: JSON.stringify(rows),
+    headers: { ...WH, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    body: JSON.stringify(fresh),
   });
-  if (!r.ok) throw new Error(`upsert ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  if (!r.ok) throw new Error(`insert ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  for (const row of fresh) known?.set(row.name, row.logo_url);
 }
 
 /* -------------------------------------------------- tournaments, as the page sees them */
 
-// Distinct (tournament, sport_key) pairs. One request per distinct label —
+/* The league id plays the part `sport_key` used to. It is the same shape —
+   `soccer_england_premier_league` — except that some ids carry the `_-_`
+   separator, which would leave labelFromSportKey building "- Premier League". */
+const leagueId = (row) => String(row.optic_league || '').replace(/_-_/g, '_');
+
+// Distinct (tournament, league) pairs. One request per distinct label —
 // PostgREST has aggregates disabled, so there is no GROUP BY to lean on.
-async function distinctPairs(table) {
+async function distinctPairs(sport) {
   const out = [];
   let last = null;
   for (let i = 0; i < 800; i++) {
-    let q = `${table}?select=tournament,sport_key&order=tournament.asc&limit=1`;
+    let q = `${FIXTURES}?select=tournament,optic_league&sport=eq.${sport}` +
+            `&tournament=not.is.null&order=tournament.asc&limit=1`;
     if (last != null) q += `&tournament=gt.${encodeURIComponent(last)}`;
     const rows = await getJSON(q);
     if (!rows.length || rows[0].tournament == null) break;
     last = rows[0].tournament;
-    out.push({ label: last, sportKey: rows[0].sport_key || '' });
+    out.push({ label: last, sportKey: leagueId(rows[0]) });
   }
   return out;
 }
@@ -222,21 +314,26 @@ function pickLabel(labels, sportKey) {
    Walking alone missed spellings the month scan has — the sidebar was showing
    "EFL Cup" while this script had only ever seen "England Efl Cup" — so scan the
    current month too and let the union decide. */
-async function monthPairs(table) {
+async function monthPairs(sport) {
   const now = new Date();
   const y = now.getFullYear(), m = now.getMonth() + 1;
   const start = `${y}-${String(m).padStart(2, '0')}-01`;
   const ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1;
   const end = `${ny}-${String(nm).padStart(2, '0')}-01`;
-  const filter = `date=gte.${start}&date=lt.${end}`;
+  const filter = `scheduled_start=gte.${start}&scheduled_start=lt.${end}`;
 
+  /* Leading the sort with the date keeps Postgres on the index. Ordering by the
+     id alone made it re-sort the whole table per page, and a deep offset then
+     timed out (57014) on the bigger sports. */
   const seen = new Map();
   for (let page = 0; page < 60; page++) {
     const rows = await getJSON(
-      `${table}?select=tournament,sport_key&${filter}&order=date.asc,id.asc&limit=1000&offset=${page * 1000}`);
+      `${FIXTURES}?select=tournament,optic_league&sport=eq.${sport}&${filter}` +
+      `&order=scheduled_start.asc,fixture_id.asc&limit=1000&offset=${page * 1000}`);
     for (const r of rows) {
       if (!r.tournament) continue;
-      seen.set(`${r.sport_key || ''}\u0000${r.tournament}`, { label: r.tournament, sportKey: r.sport_key || '' });
+      const sportKey = leagueId(r);
+      seen.set(`${sportKey}\u0000${r.tournament}`, { label: r.tournament, sportKey });
     }
     if (rows.length < 1000) break;
   }
@@ -477,6 +574,8 @@ async function main() {
   const only = (argv.find((a) => a.startsWith('--sport=')) ?? '')
     .replace('--sport=', '').split(',').map((s) => s.trim()).filter(Boolean);
 
+  await assertWritable();
+
   const cached = new Map();
   for (const row of await getJSON(`entities?select=name,logo_url&sport=eq.${LOGO_SPORT}&limit=5000`)) {
     cached.set(row.name, row.logo_url);
@@ -498,12 +597,12 @@ async function main() {
   }
 
   for (const key of keys) {
-    const { table, hint } = SPORTS[key];
+    const { hint } = SPORTS[key];
     try {
     process.stdout.write(`  ${key}: enumerating… `);
     const pairs = monthOnly
-      ? await monthPairs(table)
-      : [...await distinctPairs(table), ...await monthPairs(table)];
+      ? await monthPairs(key)
+      : [...await distinctPairs(key), ...await monthPairs(key)];
     const entries = entriesFor(pairs);
     const missing = entries.filter(
       (e) => force || !cached.has(e.name) || (retryNull && cached.get(e.name) == null) ||
@@ -530,10 +629,10 @@ async function main() {
     for (const alias of new Set([item.name, ...item.aliases])) {
       batch.push({ sport: LOGO_SPORT, name: alias, logo_url: url, source: url ? 'wikipedia' : null });
     }
-    if (batch.length >= 40) { await upsert(batch.splice(0, batch.length)); }
+    if (batch.length >= 40) { await upsert(batch.splice(0, batch.length), cached); }
     if (done % 25 === 0) console.log(`  ${done}/${todo.length}  found ${hit}, none ${miss}, failed ${failed}`);
   });
-  await upsert(batch);
+  await upsert(batch, cached);
 
   console.log(`\ndone: ${done} resolved — ${hit} with a badge, ${miss} without, ${failed} request failures`);
 }
