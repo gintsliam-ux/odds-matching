@@ -2,10 +2,10 @@
 //
 // Enumerates every tournament each sport has ever run, merges the spellings the
 // same way index.html does, resolves a badge for each, and caches it in
-// `entity_logos` under sport='competition'. The page then reads that one table
+// `entities` under sport='competition'. The page then reads that one table
 // at load instead of touching Wikipedia at runtime.
 //
-// It reuses live-fixtures' entity_logos table and its Wikipedia approach —
+// It reuses live-fixtures' `entities` table (was entity_logos) and its Wikipedia —
 // search, then rank candidates, then fall back to the REST summary — because
 // that resolver already learned which results lie (flags, maps, town halls).
 //
@@ -25,7 +25,7 @@ const H = { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` };
 // Wikimedia throttles anonymous User-Agents under load.
 const WIKI_UA = 'odds-library-competition-logos/1.0 (league badge cache; contact: gintsliam@gmail.com)';
 
-const LOGO_SPORT = 'competition';   // namespace inside entity_logos
+const LOGO_SPORT = 'competition';   // namespace inside `entities`
 
 const SPORTS = {
   soccer:      { table: 'soccer_odds',      hint: 'association football league' },
@@ -166,7 +166,7 @@ async function getJSON(pathAndQuery, tries = 3) {
 
 async function upsert(rows) {
   if (!rows.length) return;
-  const r = await fetch(`${REST}/entity_logos?on_conflict=sport,name`, {
+  const r = await fetch(`${REST}/entities?on_conflict=sport,name`, {
     method: 'POST',
     headers: { ...H, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
     body: JSON.stringify(rows),
@@ -478,7 +478,7 @@ async function main() {
     .replace('--sport=', '').split(',').map((s) => s.trim()).filter(Boolean);
 
   const cached = new Map();
-  for (const row of await getJSON(`entity_logos?select=name,logo_url&sport=eq.${LOGO_SPORT}&limit=5000`)) {
+  for (const row of await getJSON(`entities?select=name,logo_url&sport=eq.${LOGO_SPORT}&limit=5000`)) {
     cached.set(row.name, row.logo_url);
   }
   console.log(`cache: ${cached.size} competitions already resolved`);
