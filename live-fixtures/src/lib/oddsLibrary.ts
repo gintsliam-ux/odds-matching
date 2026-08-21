@@ -139,11 +139,34 @@ const FIXTURE_COLS =
 
 // --- mapping ----------------------------------------------------------------
 
+/**
+ * A fixture stuck on `status='live'` long past any plausible duration is
+ * finished, whatever the column says.
+ *
+ * Measured 2026-08-21: of 29 fixtures marked live, only 8 had started within
+ * four hours. Fifteen were 12-24h old and England v Pakistan had been "live"
+ * for 44 hours. Without this the board would carry a permanent tail of phantom
+ * live games, and every "live fixtures with live odds" ratio would be measured
+ * against a denominator full of matches that ended yesterday — which is exactly
+ * how I mis-read the live-odds coverage for several days.
+ *
+ * dataSource.ts already does this for live_fixtures (STALE_LIVE_FEED_H); the
+ * same disease is in the new table, so the same guard travels with it.
+ *
+ * Eight hours is deliberately generous: a Test match session, a rain-delayed
+ * tennis match and a long golf round all legitimately run past four.
+ */
+const STALE_LIVE_H = 8
+
 /** `cancelled` has no place on a live board; it reads as finished. */
-function mapStatus(row: FixtureRow): FixtureStatus {
+function mapStatus(row: FixtureRow, nowMs = Date.now()): FixtureStatus {
   switch (row.status) {
-    case 'live':
+    case 'live': {
+      const ref = row.actual_start ?? row.scheduled_start
+      const started = ref ? Date.parse(ref) : NaN
+      if (Number.isFinite(started) && nowMs - started > STALE_LIVE_H * 3_600_000) return 'completed'
       return 'live'
+    }
     case 'upcoming':
       return 'upcoming'
     default:
@@ -184,8 +207,8 @@ function periodList(row: FixtureRow): PeriodScore[] {
  * The odds fields are left null here — prices come from `odds`/`odds_sp` via
  * fetchMarkets, not from the fixture row.
  */
-export function mapFixture(row: FixtureRow): Fixture {
-  const status = mapStatus(row)
+export function mapFixture(row: FixtureRow, nowMs = Date.now()): Fixture {
+  const status = mapStatus(row, nowMs)
   const { home, away } = names(row)
   const rawSport = reclassifySport(row.sport ?? '', row.optic_league ?? '')
   // Display the league from `tournament` (+ `category`), NOT from prettifying
@@ -264,7 +287,8 @@ export async function fetchLibraryFixtures(hoursBack = 24, hoursAhead = 24): Pro
     .limit(1000)
     .returns<FixtureRow[]>()
   if (error) throw error
-  return (data ?? []).map(mapFixture)
+  const nowMs = Date.now()
+  return (data ?? []).map((r) => mapFixture(r, nowMs))
 }
 
 export async function fetchLibraryFixture(fixtureId: string): Promise<Fixture | null> {
