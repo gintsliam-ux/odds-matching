@@ -34,6 +34,12 @@ import {
   type BookOdds,
   type SidePrices,
 } from '../lib/marketOdds'
+import {
+  fairKey,
+  fetchFixtureMarkets,
+  periodsOf,
+  type MarketGroup,
+} from '../lib/fixtureMarkets'
 
 export default function FixtureDetailPage() {
   const navigate = useNavigate()
@@ -796,7 +802,164 @@ const BOOK_TINT: Record<string, { text: string; bg: string; border: string }> = 
   tab: { text: 'text-cyan-300', bg: 'bg-cyan-300/10', border: 'border-cyan-300/30' },
 }
 
+/**
+ * Markets, read from the Odds Library (`odds` + `odds_sp`).
+ *
+ * The old jsonb path is kept below as `LegacyMarketsTab` and used when the new
+ * tables have nothing for this fixture. That is not belt-and-braces: `odds` is
+ * a WORKING set, pruned once a fixture settles, so it covers the next few days
+ * well (38/40 in the next 24h) and history barely at all (3/40 a week back),
+ * while `live_fixtures.pregame_odds` still holds those older fixtures. Reading
+ * only the new table would have blanked the tab on anything more than a few
+ * days old.
+ */
 function MarketsTab({ fixture: f, now }: { fixture: Fixture; now: Date }) {
+  const [groups, setGroups] = useState<MarketGroup[] | null>(null)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    setGroups(null)
+    setFailed(false)
+    fetchFixtureMarkets(f.id, {
+      homeName: f.homeName,
+      awayName: f.awayName,
+      scheduledStart: f.scheduledStart ?? f.startTime,
+    })
+      .then((g) => alive && setGroups(g))
+      .catch(() => alive && setFailed(true))
+    return () => {
+      alive = false
+    }
+  }, [f.id, f.homeName, f.awayName, f.scheduledStart, f.startTime])
+
+  if (!failed && groups === null) return <PanelSkeleton fields={4} />
+  // Nothing in the new tables (or they errored) — fall back to the jsonb the
+  // page has always read, which still covers settled fixtures.
+  if (failed || !groups?.length) return <LegacyMarketsTab fixture={f} now={now} />
+
+  return <MarketsView fixture={f} now={now} groups={groups} />
+}
+
+function MarketsView({
+  fixture: f,
+  now,
+  groups,
+}: {
+  fixture: Fixture
+  now: Date
+  groups: MarketGroup[]
+}) {
+  const periods = periodsOf(groups)
+  const lastPriced =
+    groups
+      .map((g) => g.lastPriced)
+      .filter((t): t is string => !!t && Number.isFinite(Date.parse(t)))
+      .sort()
+      .at(-1) ?? null
+  const bookCount = new Set(
+    groups.flatMap((g) => [...g.pregame, ...g.live].map((b) => b.book)),
+  ).size
+  const liveMarkets = groups.filter((g) => g.live.length > 0).length
+
+  return (
+    <>
+      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 border-t border-white/[0.05] bg-black/[0.12] px-5 py-2.5 text-[12px] text-[color:var(--muted)]">
+        <span className="flex items-center gap-2">
+          Live odds
+          <span
+            className={`rounded border px-1.5 py-0.5 text-[11px] font-medium ${
+              liveMarkets
+                ? 'border-[color:var(--live)]/40 bg-[color:var(--live)]/[0.1] text-[color:var(--live)]'
+                : 'border-[color:var(--line-soft)]/60 bg-black/[0.2] text-[color:var(--muted-2)]'
+            }`}
+          >
+            {liveMarkets ? `${liveMarkets} in play` : 'none'}
+          </span>
+        </span>
+        <span>
+          Updated <span className="ml-1 text-gray-200 tabular-nums">{fmtDateTime(lastPriced)}</span>
+          {lastPriced && (
+            <span className="ml-1.5 text-[color:var(--muted-2)]">({agoLabel(lastPriced, now)})</span>
+          )}
+        </span>
+        {(f.openAt || f.closeAt) && (
+          <span className="flex items-center gap-4">
+            {f.openAt && (
+              <span>
+                Opened <span className="ml-1 text-gray-200 tabular-nums">{fmtDateTime(f.openAt)}</span>
+              </span>
+            )}
+            {f.closeAt && (
+              <span>
+                Closed <span className="ml-1 text-gray-200 tabular-nums">{fmtDateTime(f.closeAt)}</span>
+              </span>
+            )}
+          </span>
+        )}
+        <span className="ml-auto text-[color:var(--muted-2)]">
+          {groups.length} market{groups.length === 1 ? '' : 's'} · {bookCount} book
+          {bookCount === 1 ? '' : 's'}
+        </span>
+      </div>
+
+      <div className="space-y-4 px-5 py-4">
+        {periods.map((period) => {
+          const inPeriod = groups.filter((g) => g.period === period)
+          return (
+            <Fragment key={period}>
+              {/* Only head the sections once there is more than one period —
+                  a fixture with only full-game markets needs no divider. */}
+              {periods.length > 1 && (
+                <div className="flex items-center gap-3 pt-1">
+                  <span className="text-[11px] font-semibold tracking-wide text-[color:var(--muted-2)] uppercase">
+                    {period}
+                  </span>
+                  <span className="h-px flex-1 bg-white/[0.06]" />
+                </div>
+              )}
+              {inPeriod.map((g) => (
+                <MarketGroupCard key={g.marketId} group={g} />
+              ))}
+            </Fragment>
+          )
+        })}
+      </div>
+    </>
+  )
+}
+
+/** One market's card, adapting a MarketGroup onto the existing MarketCard. */
+function MarketGroupCard({ group: g }: { group: MarketGroup }) {
+  const byBook = new Map(g.pregame.map((b) => [b.book, b]))
+  const books = g.pregame.map((b) => b.book)
+
+  return (
+    <MarketCard
+      title={g.title}
+      kind={g.kind}
+      books={books}
+      outcomes={g.outcomes}
+      getPrice={(book, k) => byBook.get(book)?.mainPrices[k as keyof SidePrices] ?? null}
+      getLive={(k) => g.livePrices[k] ?? null}
+      liveLine={g.liveLine}
+      getLine={(book) => byBook.get(book)?.mainLine ?? null}
+      lineSuffix={
+        g.kind === 'spread'
+          ? (k, line) => (line == null ? undefined : fmtLine(k === 'away' ? negate(line) : line))
+          : g.kind === 'total'
+            ? (k, line) => (line == null ? undefined : `${k === 'over' ? 'O' : 'U'} ${line}`)
+            : undefined
+      }
+      odds={g.pregame}
+      flucs={g.flucs}
+      fair={g.fair}
+      suspended={g.suspended}
+    />
+  )
+}
+
+function LegacyMarketsTab({ fixture: f, now }: { fixture: Fixture; now: Date }) {
   const po = f.pregameOdds
   // Both odds shapes flow through the normaliser: the old flat one and the
   // alternate-lines ladder the feed started writing on 2026-08-11. Reading the
@@ -1008,6 +1171,28 @@ function MarketsTab({ fixture: f, now }: { fixture: Fixture; now: Date }) {
  * abbreviation — which is all this used to show, and which cannot separate
  * "Bet365" from "Betano", "Betway", "Betsafe" or "Betsson" at three characters.
  */
+/**
+ * The vig-stripped consensus price for a selection.
+ *
+ * This is `odds_sp.fair_blend` — a blend across books with each book's own
+ * margin removed — so it is the closest thing on the page to a true price, and
+ * what a quoted price should be compared against. It is computed at settlement,
+ * so it is absent on fixtures that have not run yet.
+ */
+function FairCell({ value }: { value: number | null }) {
+  return (
+    <td className="px-2 py-2 text-right">
+      {value != null ? (
+        <span title={`${impliedPct(value)} implied · vig-stripped`} className="text-sky-300/90">
+          {value.toFixed(2)}
+        </span>
+      ) : (
+        <span className="text-gray-700">–</span>
+      )}
+    </td>
+  )
+}
+
 function BestPrice({ price, book }: { price: number; book: string | null }) {
   const logo = bookLogo(book)
   return (
@@ -1164,6 +1349,8 @@ function MarketCard<K extends string>({
   odds,
   lineSuffix,
   flucs,
+  fair,
+  suspended,
 }: {
   title: string
   kind: 'moneyline' | 'spread' | 'total'
@@ -1182,6 +1369,10 @@ function MarketCard<K extends string>({
   lineSuffix?: (key: K, line: number | null) => string | undefined
   /** This market's price history, book → stage → snapshot. */
   flucs?: Record<string, Partial<Record<string, FlucSnapshot>>>
+  /** Vig-stripped consensus price, keyed by fairKey(outcome, line). */
+  fair?: Record<string, number>
+  /** Books currently showing this market as suspended rather than priced. */
+  suspended?: string[]
 }) {
   const [view, setView] = useState<'prices' | 'movement'>('prices')
 
@@ -1233,6 +1424,14 @@ function MarketCard<K extends string>({
               {groups.length} lines
             </span>
           )}
+          {!!suspended?.length && (
+            <span
+              title={`Suspended by ${suspended.join(', ')}`}
+              className="rounded border border-amber-400/30 bg-amber-400/[0.08] px-2 py-0.5 text-[11px] font-medium text-amber-300"
+            >
+              {suspended.length} suspended
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3">
           {hasFlucs && (
@@ -1273,6 +1472,7 @@ function MarketCard<K extends string>({
             lineSuffix={lineSuffix}
             showLive={hasLive}
             showLineHeader={false}
+            fair={fair}
           />
         ))
       ) : (
@@ -1286,6 +1486,7 @@ function MarketCard<K extends string>({
           outcomes={outcomes}
           books={books}
           live={hasLive ? { line: liveLine ?? null, get: getLive } : null}
+          fair={fair}
         />
       )}
     </div>
@@ -1312,11 +1513,13 @@ function LinesTable<K extends string>({
   outcomes,
   books,
   live,
+  fair,
 }: {
   kind: 'moneyline' | 'spread' | 'total'
   odds: BookOdds[]
   outcomes: MarketOutcome<K>[]
   books: string[]
+  fair?: Record<string, number>
   live: { line: number | null; get: (key: K) => number | null } | null
 }) {
   const [shown, setShown] = useState(LADDER_PAGE)
@@ -1360,6 +1563,9 @@ function LinesTable<K extends string>({
 
   const visible = ordered.slice(0, shown)
   const showLive = !!live
+  // Only widen the table when this market actually has fair prices. `odds_sp`
+  // is computed at settlement, so an upcoming fixture usually has none.
+  const hasFair = !!fair && Object.keys(fair).length > 0
   // A handicap names the away side by the negated line; a total names both
   // sides by the same number.
   const sideLine = (key: K, line: number) => (kind === 'spread' && key !== outcomes[0]?.key ? -line : line)
@@ -1378,6 +1584,14 @@ function LinesTable<K extends string>({
               <th className="px-2 py-2.5 text-right font-medium text-[color:var(--live)]">Live</th>
             )}
             <th className="px-2 py-2.5 text-right font-medium text-[color:var(--total)]">Best</th>
+            {hasFair && (
+              <th
+                title="Vig-stripped consensus price across books (odds_sp.fair_blend)"
+                className="px-2 py-2.5 text-right font-medium text-sky-300/80"
+              >
+                Fair
+              </th>
+            )}
             {books.map((b) => {
               return (
                 <th key={b} className="px-2 py-2.5 text-right font-normal">
@@ -1448,6 +1662,11 @@ function LinesTable<K extends string>({
                           <span className="text-gray-700">–</span>
                         )}
                       </td>
+                      {/* Keyed on the group's home-signed line, which is how
+                          both `odds.pair_key` and the fair map identify a
+                          market — NOT the selection's own line, where a
+                          spread's two sides would look up different markets. */}
+                      {hasFair && <FairCell value={fair?.[fairKey(o.key, line)] ?? null} />}
                       {books.map((b) => {
                         const v = priceOf(b, o.key)
                         const isBest = bestThis.price > 0 && v === bestThis.price
@@ -1521,6 +1740,7 @@ function PriceTable<K extends string>({
   lineSuffix,
   showLive,
   showLineHeader,
+  fair,
 }: {
   kind: 'moneyline' | 'spread' | 'total'
   line: number | null
@@ -1531,7 +1751,9 @@ function PriceTable<K extends string>({
   lineSuffix?: (key: K, line: number | null) => string | undefined
   showLive: boolean
   showLineHeader: boolean
+  fair?: Record<string, number>
 }) {
+  const hasFair = !!fair && Object.keys(fair).length > 0
   // Best price per outcome, WITHIN this line — comparing across lines would be
   // comparing different bets.
   const best = outcomes.map((o) => {
@@ -1573,6 +1795,14 @@ function PriceTable<K extends string>({
                 <th className="px-2 py-2.5 text-right font-medium text-[color:var(--live)]">Live</th>
               )}
               <th className="px-2 py-2.5 text-right font-medium text-[color:var(--total)]">Best</th>
+              {hasFair && (
+                <th
+                  title="Vig-stripped consensus price across books (odds_sp.fair_blend)"
+                  className="px-2 py-2.5 text-right font-medium text-sky-300/80"
+                >
+                  Fair
+                </th>
+              )}
               {books.map((b) => {
                 return (
                   <th key={b} className="px-2 py-2.5 text-right font-normal">
@@ -1615,6 +1845,7 @@ function PriceTable<K extends string>({
                       <span className="text-[color:var(--muted-2)]/60">—</span>
                     )}
                   </td>
+                  {hasFair && <FairCell value={fair?.[fairKey(o.key, line)] ?? null} />}
                   {books.map((b) => {
                     const v = getPrice(b, o.key)
                     const isBest = bestThis.price > 0 && v === bestThis.price

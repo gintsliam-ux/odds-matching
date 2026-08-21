@@ -102,8 +102,12 @@ export interface OddsRow {
   open_price: number | null
   current_price: number | null
   close_price: number | null
-  flucs: Array<{ p: number; t: string }> | null
-  daily_prices: Record<string, number> | null
+  // The jsonb price columns are written empty rather than null — `[]` and `{}`
+  // — so they are typed non-nullable. Verified across all 1.2M rows: zero
+  // nulls on either. Modelling them as nullable only forced a `?? {}` at every
+  // read for a state the table does not produce.
+  flucs: Array<{ p: number; t: string }>
+  daily_prices: Record<string, number>
   price_6h: number | null
   price_3h: number | null
   price_1h: number | null
@@ -121,12 +125,15 @@ export interface SpRow {
   outcome_no: number | null
   line: number | null
   line_group: number | null
-  book_prices: Record<string, number> | null
-  book_fairs: Record<string, number> | null
-  book_overround: Record<string, number> | null
+  // Same as the odds row: always an object, never null (0 of 5.93M).
+  book_prices: Record<string, number>
+  book_fairs: Record<string, number>
+  book_overround: Record<string, number>
   fair_blend: number | null
   fair_prob: number | null
   n_books: number | null
+  // Genuinely nullable, unlike the three above — null on 72,312 rows, the same
+  // rows where `fair_blend` is null (no blend was computed, so no book list).
   blend_books: string[] | null
   blend_tier: string | null
 }
