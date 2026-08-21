@@ -12,24 +12,8 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Plugin, ViteDevServer } from 'vite'
-import { MongoClient } from 'mongodb'
 
-// Read these lazily (at request time), NOT at module load: vite.config.ts
-// injects MONGO_*/VITE_SUPABASE_* into process.env from `.env` inside its
-// defineConfig callback, which runs *after* this module is imported. Capturing
-// the const here would freeze MONGO_URI as undefined and every Mongo route
-// would 500 with "MONGO_URI not set".
-const MONGO_DB = process.env.MONGO_DB ?? 'gutsy'
-const MONGO_COLL = process.env.MONGO_COLL ?? 'events'
 
-// Hold a single client across HMR reloads so we don't churn connections.
-let clientPromise: Promise<MongoClient> | null = null
-function getClient(): Promise<MongoClient> {
-  const uri = process.env.MONGO_URI
-  if (!uri) throw new Error('MONGO_URI not set — SWIFT polling disabled')
-  if (clientPromise) return clientPromise
-  return (clientPromise = new MongoClient(uri, { maxPoolSize: 4 }).connect())
-}
 
 // --- mapping-tick throttle (mirrors api/mapping-tick.ts) ------------------
 const MAPPING_THROTTLE_MS = 10 * 60 * 1000
@@ -91,11 +75,19 @@ async function readJson(req: IncomingMessage): Promise<{ ids?: unknown }> {
  * Routes this file still implements by hand, and which therefore must NOT be
  * delegated. Everything else under /api resolves to its real handler.
  *
- * mapping-tick keeps its own version because the throttle is genuinely
- * dev-specific; mongo-pulse likewise. Both are mounted before the catch-all
- * below, so Connect gives them the request first.
+ * ONLY mapping-tick. It runs the matcher in-process by importing
+ * build-mapping.mjs, which the deployed handler cannot do, so the dev version
+ * is genuinely different rather than a copy.
+ *
+ * mongo-pulse used to be here "likewise" and had no such reason — it was a
+ * copy that stopped keeping up. The real handler gained a `mybet` block; the
+ * dev mirror never did, so the Mybet feed pulse was missing from the header on
+ * localhost while working in production, and the dev copy also reported a
+ * wildly different live count (1,429 against production's 14). Delegating it
+ * removes the divergence rather than re-syncing a duplicate that will drift
+ * again.
  */
-const HAND_WRITTEN = new Set(['mapping-tick', 'mongo-pulse'])
+const HAND_WRITTEN = new Set(['mapping-tick'])
 
 /** `/api/foo` -> `foo`, ignoring query string and any trailing path. */
 function routeName(url: string | undefined): string | null {
@@ -188,61 +180,6 @@ export function swiftApiPlugin(): Plugin {
           return send(res, 200, { ok: true, ran: true, ms: Date.now() - t0 })
         } catch (e) {
           mappingRunning = false
-          return send(res, 500, { ok: false, error: String((e as { message?: unknown })?.message ?? e) })
-        }
-      })
-
-      // GET /api/mongo-pulse — see api/mongo-pulse.ts for the contract. Keeps
-      // the dev server behaving like prod so the header pulse works under
-      // `npm run dev` too.
-      server.middlewares.use('/api/mongo-pulse', async (req, res) => {
-        if (req.method !== 'GET') return send(res, 405, { ok: false, error: 'GET only' })
-        try {
-          const client = await getClient()
-          const coll = client.db(MONGO_DB).collection(MONGO_COLL)
-          const [agg] = await coll.aggregate([
-            {
-              $facet: {
-                byStatus: [{ $group: { _id: '$status', n: { $sum: 1 } } }],
-                newest: [{ $sort: { scraped_at: -1 } }, { $limit: 1 }, { $project: { scraped_at: 1 } }],
-                bySport: [
-                  {
-                    $group: {
-                      _id: '$sport.name',
-                      total: { $sum: 1 },
-                      live: { $sum: { $cond: [{ $eq: ['$status', 'inprogress'] }, 1, 0] } },
-                    },
-                  },
-                  { $sort: { live: -1, total: -1 } },
-                ],
-              },
-            },
-          ]).toArray()
-          const byStatus = new Map<string | null, number>(
-            ((agg?.byStatus as Array<{ _id: string | null; n: number }>) ?? []).map((r) => [r._id, r.n]),
-          )
-          const rawNewest = (agg?.newest as Array<{ scraped_at: string | Date | null }>)?.[0]?.scraped_at ?? null
-          const newestScrapedAt = rawNewest ? new Date(rawNewest).toISOString() : null
-          const serverNow = new Date().toISOString()
-          const ageSec = newestScrapedAt
-            ? Math.max(0, Math.round((Date.parse(serverNow) - Date.parse(newestScrapedAt)) / 1000))
-            : null
-          const total = [...byStatus.values()].reduce((a, b) => a + b, 0)
-          const sports = ((agg?.bySport as Array<{ _id: string | null; total: number; live: number }>) ?? [])
-            .filter((s) => s._id)
-            .map((s) => ({ name: s._id as string, total: s.total, live: s.live }))
-          return send(res, 200, {
-            ok: true,
-            serverNow,
-            newestScrapedAt,
-            ageSec,
-            live: byStatus.get('inprogress') ?? 0,
-            prematch: byStatus.get('prematch') ?? 0,
-            postmatch: byStatus.get('postmatch') ?? 0,
-            total,
-            sports,
-          })
-        } catch (e) {
           return send(res, 500, { ok: false, error: String((e as { message?: unknown })?.message ?? e) })
         }
       })
