@@ -18,8 +18,10 @@
  *     against `home_team`. That matching is what put West Perth's crest on
  *     Perth and picked the wrong leg out of a multi holding both Botev clubs.
  *   · `outcome_no` gives a stable order (1 home/over, 2 away/under, 3 draw).
- *   · `line_group` = abs(line), so a total's shared line and a handicap's
- *     mirrored pair group identically.
+ *   · `pair_key` is the handicap signed from the home side, which is what pairs
+ *     the two sides of a market. `line_group` = abs(line) is NOT safe for this:
+ *     home -1.5/away +1.5 and home +1.5/away -1.5 both exist and are different
+ *     markets, and abs() collapses them into one.
  *   · `odds_sp.fair_blend` is vig-stripped per book and blended, so a fair
  *     price no longer has to be derived in the client.
  */
@@ -90,6 +92,9 @@ export interface OddsRow {
   outcome_no: number | null
   line: number | null
   line_group: number | null
+  /** The handicap line signed from the HOME side — the correct key for pairing
+   *  a two-sided market. See groupMarkets. */
+  pair_key: number | null
   is_main: boolean | null
   sportsbook: string | null
   is_lay: boolean | null
@@ -289,8 +294,15 @@ export interface MarketSide {
 }
 
 export interface MarketLine {
-  /** abs(line) — a total's shared number, or a handicap's mirrored pair. */
-  lineGroup: number | null
+  /**
+   * The handicap signed from the home side (`pair_key`), or the total's line.
+   *
+   * NOT abs(line). Both ladders exist — home -1.5 with away +1.5, AND home
+   * +1.5 with away -1.5 — and they are different markets. Grouping on abs()
+   * merges them, so a favourite's line and an underdog's land in one row and
+   * the two prices read as a pair when they are nothing of the sort.
+   */
+  pairKey: number | null
   /** Signed line as the book quotes it, per side. */
   sides: MarketSide[]
 }
@@ -313,11 +325,11 @@ export interface Market {
  * Sides come from `normalized_selection` and order from `outcome_no`, so
  * nothing here parses a team name out of a selection string.
  *
- * NOTE ON `is_main`: the schema intends exactly one line per book per market,
- * and this reads the flag rather than guessing. As measured on 2026-08-20 it is
- * `true` on 100% of rows — 46 of 49 sampled (fixture, book, side) groups had
- * more than one "main" line, one bet365 total had 81 — so `mainOnly` currently
- * filters almost nothing. It becomes correct the moment the scraper sets it.
+ * `is_main` now selects exactly one line per book per market — verified: 0 of
+ * 1000 sampled (fixture, book, is_live, side) groups had more than one, where
+ * a day earlier 46 of 49 did. Pass `live` alongside `mainOnly`: a fixture with
+ * both pregame and in-play prices legitimately has one main line for EACH, so
+ * filtering on is_main alone returns two.
  */
 export async function fetchMarkets(
   fixtureId: string,
@@ -351,10 +363,10 @@ export function groupMarkets(rows: OddsRow[]): Market[] {
       ({ book: r.sportsbook ?? '?', isLay: !!r.is_lay, isLive: !!r.is_live, lines: [] } as BookMarket)
     byBook.set(bookKey, book)
 
-    const lineGroup = r.line_group ?? (r.line == null ? null : Math.abs(r.line))
-    let line = book.lines.find((l) => l.lineGroup === lineGroup)
+    const pairKey = r.pair_key ?? r.line ?? null
+    let line = book.lines.find((l) => l.pairKey === pairKey)
     if (!line) {
-      line = { lineGroup, sides: [] }
+      line = { pairKey, sides: [] }
       book.lines.push(line)
     }
     line.sides.push({
@@ -370,7 +382,7 @@ export function groupMarkets(rows: OddsRow[]): Market[] {
   // outcome_no is the schema's ordering: 1 home/over, 2 away/under, 3 draw.
   for (const byBook of markets.values()) {
     for (const b of byBook.values()) {
-      b.lines.sort((x, y) => (x.lineGroup ?? 0) - (y.lineGroup ?? 0))
+      b.lines.sort((x, y) => (x.pairKey ?? 0) - (y.pairKey ?? 0))
       for (const l of b.lines) l.sides.sort((a, c) => (a.outcomeNo ?? 9) - (c.outcomeNo ?? 9))
     }
   }
