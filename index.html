@@ -1240,16 +1240,17 @@ async function loadLeagueDirectory() {
   return leagueDirectory;
 }
 
-/* Two of the directory's own columns need cleaning before they can key anything.
+/* CATEGORY is taken as the directory gives it. It used to need cleaning —
+   amfootball_cfl was filed under "Cfl", a restatement of its own tournament —
+   but the backend has since made it a real place: CFL is Canada, NFL is USA,
+   KBO is South Korea. The old rule would now throw away the deliberate
+   non-place categories the new scheme uses, since tennis is ATP/WTA, golf
+   PGA/LIV and esports the game title. Six leagues still have category equal to
+   tournament and all six are esports, where that is the intent.
 
-   CATEGORY is sometimes just a restatement of the id: americanfootball_cfl is
-   filed under "Americanfootball" (the id's prefix) and amfootball_cfl under
-   "Cfl" (its tail). Both are noise, and keeping them split CFL across two rows.
-   Ignoring a category that repeats the prefix or the tail merges those, while
-   Brazil and Italy — which repeat neither — stay the separate Serie As.
-
-   TOURNAMENT is sometimes the whole id title-cased: "Amfootball Ncaaf" against
-   the other id's "NCAAF". Falling back to the tail gives both the same name. */
+   TOURNAMENT still needs cleaning: a few are the whole id title-cased —
+   "Amfootball Ncaaf" where the name is NCAAF. Falling back to the tail fixes
+   those. */
 /* Fixtures spell some ids with a `_-_` separator where the directory uses `_`:
    soccer_spain_-_la_liga against soccer_spain_la_liga. All 30 of soccer's
    unmatched ids resolve by normalising it, and nine of them are the same
@@ -1259,14 +1260,6 @@ function normaliseLeagueId(id) {
   return String(id || '').replace(/_-_/g, '_');
 }
 
-function cleanCategory(category, leagueId) {
-  if (!category || !leagueId) return category || '';
-  const id = String(leagueId);
-  const prefix = id.split('_')[0];
-  const tail = id.slice(prefix.length + 1);
-  const c = slugify(category);
-  return (c === slugify(prefix) || c === slugify(tail) || c === slugify(id)) ? '' : category;
-}
 function cleanTournament(tournament, leagueId) {
   if (!tournament || !leagueId) return tournament || null;
   const id = normaliseLeagueId(leagueId);
@@ -1289,9 +1282,15 @@ const GENERIC_TAILS = new Set(['matches', 'games', 'match', 'game', 'cup', 'leag
 function competitionKeyFor(leagueId, fallbackTournament) {
   const norm = normaliseLeagueId(leagueId);
   const dir = leagueDirectory.get(norm) || leagueDirectory.get(leagueId);
-  const rawTournament = (dir && dir.tournament) || fallbackTournament || labelFromLeagueId(norm) || 'Other';
+  /* The FIXTURE's tournament wins over the directory's. A bucket league carries
+     a different event per fixture — tennis_atp_challenger runs Lincoln, Todi,
+     Hamburg — and the directory records only one of them, so preferring it
+     filed all 711 challenger fixtures under "Lincoln". Keying on the fixture's
+     own (category, tournament) is also what keeps Hamburg's ATP Challenger and
+     its WTA event apart. */
+  const rawTournament = fallbackTournament || (dir && dir.tournament) || labelFromLeagueId(norm) || 'Other';
   const tournament = cleanTournament(rawTournament, norm) || rawTournament;
-  const category = cleanCategory((dir && dir.category) || '', norm);
+  const category = (dir && dir.category) || '';
   return { key: `${slugify(category)}|${slugify(tournament)}`, tournament, category };
 }
 
@@ -1418,16 +1417,22 @@ function toEvent(r) {
    shows prices without the fair columns. */
 async function loadFixtureOdds(fixtureId) {
   const closing = await sb('odds_sp',
-    `select=market_id,market_name,selection,line,line_group,outcome_no,n_outcomes,book_prices,book_fairs,` +
+    `select=market_id,market_name,selection,line,line_group,pair_key,outcome_no,n_outcomes,book_prices,book_fairs,` +
     `book_overround,fair_blend,fair_prob,n_books,blend_books,blend_tier,og_blend,og_prob,optic_clv,close_delta` +
     `&fixture_id=eq.${encodeURIComponent(fixtureId)}&limit=2000`);
   if (closing.length) return { source: 'closing', rows: closing.map(normaliseClosing) };
 
+  /* `odds` now carries both pregame and in-play rows for the same selection,
+     and they must not be averaged into one cell — a live price is not a pregame
+     price. Take in-play when the fixture has any, pregame otherwise. */
   const live = await sb('odds',
-    `select=market_id,market_name,selection,line,line_group,outcome_no,is_main,sportsbook,is_lay,is_live,` +
+    `select=market_id,market_name,selection,line,line_group,pair_key,outcome_no,is_main,sportsbook,is_lay,is_live,` +
     `open_price,current_price,close_price,status&fixture_id=eq.${encodeURIComponent(fixtureId)}` +
     `&is_lay=eq.false&limit=3000`);
-  return { source: live.length ? 'live' : 'none', rows: collapseLive(live) };
+  if (!live.length) return { source: 'none', rows: [] };
+  const inPlay = live.filter(r => r.is_live);
+  const chosen = inPlay.length ? inPlay : live.filter(r => !r.is_live);
+  return { source: inPlay.length ? 'inplay' : 'pregame', rows: collapseLive(chosen) };
 }
 
 // odds_sp is already one row per selection; just give it the shape the table wants.
@@ -1437,9 +1442,13 @@ function normaliseClosing(r) {
     marketName: r.market_name,
     selection: r.selection,
     line: r.line,
-    // line_group is abs(line): a handicap's -5.5 and +5.5 land in one group,
-    // exactly as a total's shared 5.5 does. line_key split them into two.
-    lineGroup: r.line_group,
+    /* pair_key is the line signed from the HOME side, and it is what separates
+       two-sided markets correctly. abs(line) does not: a fixture carries both
+       "home -1.5 / away +1.5" and "home +1.5 / away -1.5", which are different
+       markets, and line_group folds them into one group of four rows. On one
+       live NFL spread that was 35 groups of up to four against 50 clean pairs.
+       odds_sp is not fully backfilled yet, hence the fallbacks. */
+    lineGroup: r.pair_key != null ? r.pair_key : (r.line_group != null ? r.line_group : r.line),
     outcomeNo: r.outcome_no,
     outcomes: r.n_outcomes,
     prices: r.book_prices || {},
@@ -1460,12 +1469,13 @@ function collapseLive(rows) {
   const by = new Map();
   for (const r of rows) {
     if (r.status && r.status !== 'active') continue;
-    const key = `${r.market_id} ${r.line_group} ${r.selection}`;
+    const key = `${r.market_id} ${r.pair_key ?? r.line_group} ${r.selection}`;
     let hit = by.get(key);
     if (!hit) {
       hit = {
         market: r.market_id, marketName: r.market_name, selection: r.selection,
-        line: r.line, lineGroup: r.line_group, outcomeNo: r.outcome_no, outcomes: null,
+        line: r.line, lineGroup: r.pair_key != null ? r.pair_key : r.line_group,
+        outcomeNo: r.outcome_no, outcomes: null, main: false,
         prices: {}, fairs: {}, overround: {},
         blend: null, prob: null, nBooks: 0, tier: null, ogBlend: null, ogProb: null,
         live: r.is_live,
@@ -1473,6 +1483,7 @@ function collapseLive(rows) {
       by.set(key, hit);
     }
     if (r.current_price != null) hit.prices[r.sportsbook] = r.current_price;
+    if (r.is_main) hit.main = true;
   }
   for (const hit of by.values()) hit.nBooks = Object.keys(hit.prices).length;
   return [...by.values()];
@@ -2158,7 +2169,9 @@ function renderErrorLog() {
     ? `Fair <b>${d.fair.toFixed(2)}</b> vs blend <b>${d.blend.toFixed(2)}</b>`
     : `Range <b>${d.min.toFixed(2)} – ${d.max.toFixed(2)}</b>`;
 
-  if (scopeEl) scopeEl.innerHTML = `Within <b>${escHtml(ev.title)}</b> · ${detailOddsSource === 'live' ? 'live board' : 'closing prices'}`;
+  const sourceLabel = detailOddsSource === 'inplay' ? 'in-play prices'
+    : detailOddsSource === 'pregame' ? 'pregame prices' : 'closing prices';
+  if (scopeEl) scopeEl.innerHTML = `Within <b>${escHtml(ev.title)}</b> · ${escHtml(sourceLabel)}`;
   const discs = findDiscrepancies(detailRows).sort((a, b) => b.pct - a.pct);
   setDiscCount(discs.length);
 
@@ -2387,7 +2400,8 @@ async function openDetailDirect(id) {
           <span class="dh-pill ${ev.ended ? 'final' : ev.live ? 'live' : 'upcoming'}">${statusText}</span>
           ${ev.venue ? `<span>${escHtml(ev.venue)}</span>` : ''}
           <span>${odds.rows.length} price line${odds.rows.length === 1 ? '' : 's'}</span>
-          ${odds.source === 'live' ? '<span class="dh-pill live">Live board</span>'
+          ${odds.source === 'inplay' ? '<span class="dh-pill live">In-play</span>'
+            : odds.source === 'pregame' ? '<span class="dh-pill upcoming">Pregame</span>'
             : odds.source === 'closing' ? '<span class="dh-pill final">Closing</span>' : ''}
         </div>
       </div>
@@ -2494,7 +2508,20 @@ function renderOddsTable(rows) {
   for (const g of groups.values()) {
     g.sort((a, b) => (a.outcomeNo ?? 99) - (b.outcomeNo ?? 99) || String(a.selection).localeCompare(String(b.selection)));
   }
+  /* Order by how real a line is, not by its number. A book like Betfair quotes
+     an entire ladder — an AFL spread ran from -99.5 up, every one a single book
+     at 1.01 — so pure line order buries the market under a hundred rows nobody
+     wants. `is_main` marks exactly one line per book per market, so those lead,
+     then the most widely quoted, and only then the line itself. */
+  const groupRank = (rows) => {
+    const main = rows.some(r => r.main) ? 1 : 0;
+    const books = Math.max(...rows.map(r => Object.keys(r.prices || {}).length));
+    return [main, books];
+  };
   const ordered = [...groups.entries()].sort((a, b) => {
+    const [ma, ba] = groupRank(a[1]), [mb, bb] = groupRank(b[1]);
+    if (ma !== mb) return mb - ma;
+    if (ba !== bb) return bb - ba;
     const la = a[1][0].lineGroup, lb = b[1][0].lineGroup;
     if (la == null && lb == null) return 0;
     if (la == null) return -1;
