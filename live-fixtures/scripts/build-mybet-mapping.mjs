@@ -48,6 +48,20 @@ const MAX_START_SKEW_MS = 120 * 60 * 1000
 // tennis "not before" slots drift hours, and a flat gate discards exact-name
 // candidates outright.
 const MAX_START_SKEW_WIDE_MS = 6 * 60 * 60 * 1000
+
+/** How far back and forward a fixture's mapping is still worth re-deriving. */
+const WINDOW_BACK_MS = 3 * 86_400_000
+const WINDOW_FWD_MS = 21 * 86_400_000
+
+/** A fixture still inside the re-derivation window. Unparseable or missing
+ *  start times are kept — better to do redundant work than silently stop
+ *  mapping a fixture whose start the feed has not published yet. */
+function withinMappingWindow(scheduledStart, now = Date.now()) {
+  if (!scheduledStart) return true
+  const t = Date.parse(scheduledStart)
+  if (!Number.isFinite(t)) return true
+  return t >= now - WINDOW_BACK_MS && t <= now + WINDOW_FWD_MS
+}
 const MIN_EVENT_SIM_WIDE = 0.9
 const MIN_COMP_SIM = 0.4
 // Event-evidence competition derivation (Stage 3): this many mapped events must
@@ -207,6 +221,10 @@ async function main(opts = { writeSnapshot: true }) {
   console.log(`• Stage 1: paired ${compResults.filter((r) => r.gutsy_competition).length}/${compResults.length} competitions (mybet has leagues for a subset).`)
 
   // ---- Stage 2: events by team names + time across the whole sport ----
+  // Window is generous on both sides: back far enough to cover a fixture that
+  // settles late or has its start corrected, forward far enough to cover every
+  // fixture mybet has listed. A fixture outside it is finished and its mapping
+  // is fixed, so re-deriving it every pass bought nothing.
   // Bucket mybet events by `${canonSport}|${YYYY-MM-DD}` so a candidate pool is
   // "same sport, same day (±1)". No competition gate — mybet competitions are
   // too sparse to rely on.
@@ -230,9 +248,25 @@ async function main(opts = { writeSnapshot: true }) {
 
   const eventResults = []
   let inWindow = 0
+  let skippedOld = 0
   for (const r of opticRows) {
     if (!r.optic_fixture_id) continue
     if (r.league && EXCLUDE_LEAGUES.has(r.league)) continue
+    // Only fixtures whose mapping can still change. live_fixtures keeps its
+    // whole back-catalogue — 12,900 of 14,241 rows are more than two days old
+    // — and re-pairing all of them against 60k+ mybet events every ten minutes
+    // was the bulk of this pass.
+    //
+    // SKIP rather than record a null result. A fixture that reaches the loop
+    // and finds no candidate is written as `gutsy_event_id: null`, and the
+    // upsert merges on (provider, optic_fixture_id) — so emitting a null for
+    // an old fixture would overwrite a mapping it already has. Skipping leaves
+    // the existing row untouched, which is safe precisely because
+    // `event_mapping` is never deleted from, only upserted into.
+    if (!withinMappingWindow(r.scheduled_start)) {
+      skippedOld++
+      continue
+    }
     const opticStart = r.scheduled_start ? Date.parse(r.scheduled_start) : NaN
     const cands = Number.isFinite(opticStart) ? candidates(canonSport(r.sport ?? ''), opticStart) : []
     if (!cands.length) {
@@ -282,7 +316,7 @@ async function main(opts = { writeSnapshot: true }) {
   const eventUpserts = eventResults.filter((r) => existingEvent.get(r.optic_fixture_id) !== 'manual')
   const paired = eventResults.filter((r) => r.gutsy_event_id).length
   await upsertAll('event_mapping?on_conflict=provider,optic_fixture_id', eventUpserts)
-  console.log(`• Stage 2: ${inWindow}/${eventResults.length} fixtures had a same-sport/day candidate, paired ${paired} events.`)
+  console.log(`• Stage 2: ${inWindow}/${eventResults.length} fixtures had a same-sport/day candidate, paired ${paired} events (skipped ${skippedOld} outside the window).`)
 
   // ---- Stage 3: derive competitions from where mapped events land ----
   // On mybet the event's `league` IS the tournament, so a name-similarity match
