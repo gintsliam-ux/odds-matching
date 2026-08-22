@@ -107,7 +107,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 }
 
-// Both rebuilds run in one invocation. Measured ~13s combined (7s SwiftBet +
-// 6s mybet), well inside the workflow curl's 120s budget, but keep the
-// generous ceiling for cold starts and larger deltas.
+// Both rebuilds run in one invocation, SEQUENTIALLY.
+//
+// Measured 2026-08-22: ~105s on prod, ~33s locally (SwiftBet ~21s, mybet ~12s).
+// The gap is cold start plus Vercel→Atlas/Supabase latency across ~15 paginated
+// pages. An earlier note here claimed ~13s; that predated both the growth in
+// `live_fixtures` and a spell where the pass was aborting early on a permission
+// error, so it never reflected a completed run at current volume.
+//
+// Running the two CONCURRENTLY was tried and is slower, not faster: they
+// contend on the same Atlas and Supabase connections, and mybet's Mongo read
+// alone went 4.4s → 15s. The work is I/O-bound on shared upstream resources,
+// so overlapping it just makes the two fight. Left sequential deliberately.
 export const config = { maxDuration: 300 }

@@ -49,11 +49,12 @@ jobs:
       - name: Trigger mapping refresh
         run: |
           echo "Pinging mapping-tick…"
-          # 200s, not 120: the tick now rebuilds BOTH books in one invocation
-          # and was measured at 64s on prod (13s locally — the gap is cold start
-          # plus Vercel→Atlas latency). A cold start on a big delta could have
-          # blown a 120s budget and produced exactly the timeout emails this
-          # workflow was fixed to stop sending.
+          # 200s, not 120: the tick rebuilds BOTH books in one invocation and
+          # was measured at ~105s on prod (~33s locally — the gap is cold start
+          # plus Vercel→Atlas/Supabase latency). A cold start on a big delta
+          # could have blown a 120s budget and produced exactly the timeout
+          # emails this workflow was fixed to stop sending. The endpoint itself
+          # allows 300s, so 200 here still fails before Vercel would.
           curl -sS --fail-with-body \
                --max-time 200 \
                --retry 2 --retry-delay 10 --retry-all-errors \
