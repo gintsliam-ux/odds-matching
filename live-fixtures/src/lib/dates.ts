@@ -26,14 +26,14 @@ export function addDays(dateStr: string, n: number): string {
   return dt.toISOString().slice(0, 10)
 }
 
-/** "TODAY" / "YESTERDAY" / "TOMORROW" / "WED 28" relative to today. */
+/** "TODAY" / "YESTERDAY" / "TOMORROW" / "WED 28/08" relative to today. */
 export function dayLabel(dateStr: string, today: string): string {
   if (dateStr === today) return 'TODAY'
   if (dateStr === addDays(today, -1)) return 'YESTERDAY'
   if (dateStr === addDays(today, 1)) return 'TOMORROW'
   const [y, m, d] = dateStr.split('-').map(Number)
   const wd = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][new Date(Date.UTC(y, m - 1, d)).getUTCDay()]
-  return `${wd} ${d}`
+  return `${wd} ${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`
 }
 
 /** Offset of Melbourne from UTC, in ms, at a given instant. */

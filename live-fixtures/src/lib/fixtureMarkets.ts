@@ -562,8 +562,10 @@ function toFlucs(
     put('open', num(r.open_price), r.open_at)
 
     // A daily capture per day the market was open, before the countdown stages.
+    // Labelled day-first (DD/MM) like every other date in the app.
     for (const [date, price] of Object.entries(r.daily_prices)) {
-      put(`9am ${date.slice(5)}`, num(price), `${date}T09:00:00Z`)
+      const [, mm, dd] = date.split('-')
+      put(`9am ${dd}/${mm}`, num(price), `${date}T09:00:00Z`)
     }
 
     for (const s of STAGES) {

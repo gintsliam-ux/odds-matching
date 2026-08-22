@@ -232,7 +232,10 @@ export function normaliseFlucs(
         ? raw
             .filter((e): e is Record<string, unknown> => !!e && typeof e === 'object')
             .map((e) => [
-              typeof e.date === 'string' ? `${stage} ${String(e.date).slice(5)}` : stage,
+              // Day-first (DD/MM), matching the rest of the app.
+              typeof e.date === 'string'
+                ? `${stage} ${String(e.date).slice(8, 10)}/${String(e.date).slice(5, 7)}`
+                : stage,
               e,
             ])
         : [[stage, raw as Record<string, unknown>]]

@@ -1280,12 +1280,12 @@ const FLUC_STAGE_LABEL: Record<string, string> = {
   current: 'Current',
 }
 
-/** The daily stage arrives as "9am 08-12" once normaliseFlucs has split the
- *  array into one entry per captured day. Show it as "9am · 08-12". */
+/** The daily stage arrives as "9am 12/08" — day-first — once the flucs have
+ *  been split into one entry per captured day. Show it as "9am · 12/08". */
 function stageLabel(stage: string): string {
   const known = FLUC_STAGE_LABEL[stage]
   if (known) return known
-  const daily = /^(\S+)\s+(\d{2}-\d{2})$/.exec(stage)
+  const daily = /^(\S+)\s+(\d{2}\/\d{2})$/.exec(stage)
   return daily ? `${daily[1]} · ${daily[2]}` : stage
 }
 

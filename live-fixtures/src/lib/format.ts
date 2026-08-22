@@ -39,10 +39,11 @@ export function melbTime(iso: string | null): string {
   return p ? `${p.hour}:${p.minute}` : '—'
 }
 
-/** Full Melbourne datetime, "2026-05-27 09:30 MEL". Used in the detail view. */
+/** Full Melbourne datetime, "27/05/26 09:30 MEL". Used in the detail view.
+ *  Day-first throughout the app; the year is the 2-digit tail. */
 export function melbDateTime(iso: string | null): string {
   const p = melbParts(iso)
-  return p ? `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} MEL` : '—'
+  return p ? `${p.day}/${p.month}/${p.year.slice(-2)} ${p.hour}:${p.minute} MEL` : '—'
 }
 
 /** Compact Melbourne day+time, "27/05 09:30". Matches the SwiftBet bet-time
@@ -52,23 +53,19 @@ export function melbDayTime(iso: string | null): string {
   return p ? `${p.day}/${p.month} ${p.hour}:${p.minute} MEL` : '—'
 }
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-
-/** "Jun 7 15:00" in Melbourne. Compact form for cramped table cells. */
+/** "07/06 15:00" in Melbourne. Compact form for cramped table cells. */
 export function melbDateTimeShort(iso: string | null): string {
   const p = melbParts(iso)
   if (!p) return '—'
-  const mon = MONTHS[Number(p.month) - 1]
-  return `${mon} ${Number(p.day)} ${p.hour}:${p.minute}`
+  return `${p.day}/${p.month} ${p.hour}:${p.minute}`
 }
 
-/** "Jun 7 05:00" in UTC. */
+/** "07/06 05:00" in UTC. */
 export function utcDateTimeShort(iso: string | null): string {
   if (!iso) return '—'
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return '—'
-  const mon = MONTHS[d.getUTCMonth()]
-  return `${mon} ${d.getUTCDate()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`
+  return `${pad(d.getUTCDate())}/${pad(d.getUTCMonth() + 1)} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`
 }
 
 /**
@@ -120,12 +117,12 @@ export function fmtLine(v: number | null): string {
   return v > 0 ? `+${v}` : String(v)
 }
 
-/** "2026-05-28 09:30 UTC" — full datetime for the detail view. */
+/** "28/05/26 09:30 UTC" — full datetime for the detail view. */
 export function fmtDateTime(iso: string | null): string {
   if (!iso) return '—'
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return '—'
-  const date = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`
+  const date = `${pad(d.getUTCDate())}/${pad(d.getUTCMonth() + 1)}/${String(d.getUTCFullYear()).slice(-2)}`
   return `${date} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`
 }
 
