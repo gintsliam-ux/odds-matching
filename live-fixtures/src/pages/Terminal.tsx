@@ -7,7 +7,7 @@ import { DateBar } from '../components/DateBar'
 import { GridSkeleton } from '../components/Skeleton'
 import { useTerminal } from '../components/Layout'
 import { favouriteMatches, useFavourites } from '../lib/favourites'
-import { prettyLeague, prettySport, sportGroupKey, slugToSport } from '../lib/sports'
+import { displaySport, prettyLeague, prettySport, sportGroupKey, slugToSport } from '../lib/sports'
 import { melbDateTimeShort } from '../lib/format'
 import type { GolfTournament } from '../lib/golfOutrights'
 import { useSportUniverse } from '../hooks/useSportUniverse'
@@ -213,32 +213,53 @@ export default function Terminal() {
   }, [source, sport, league])
 
   // Counts per sport in the current scope (for the SPORT dropdown badges).
+  //
+  // Keyed by GROUP, not by the feed's `sport`. OPTIC files some competitions
+  // under a sport named after the league — `afl`, `mlb`, `nfl`, `nrl`, `ucl`,
+  // `laliga`, `epl` — so counting the raw value split one sport across two
+  // entries and the picker offered "afl" beside "aussierules". A sport is
+  // chosen here; the league dropdown beside it chooses the tournament.
   const sportCounts = useMemo(() => {
     const m = new Map<string, number>()
-    for (const f of routeScoped) m.set(f.sport, (m.get(f.sport) ?? 0) + 1)
+    for (const f of routeScoped) {
+      const key = sportGroupKey(f.sport)
+      m.set(key, (m.get(key) ?? 0) + 1)
+    }
     return m
   }, [routeScoped])
 
   // Hybrid sport list: union of universe + anything in scope (covers a future
   // sport before its first universe-cache load). In-scope sports come first.
+  //
+  // Options are GROUP keys with a proper display label, so the feed's
+  // league-as-sport buckets collapse into the sport they belong to. The value
+  // stays a group key because `sportMatches` already accepts one, and any old
+  // link carrying a raw sport still resolves through its other branch.
   const sportsForFilter = useMemo(() => {
-    const all = new Set<string>([...universe.sports, ...sportCounts.keys()])
+    const label = new Map<string, string>()
+    const add = (raw: string) => {
+      const key = sportGroupKey(raw)
+      if (!label.has(key)) label.set(key, displaySport(raw))
+    }
+    for (const s of universe.sports) add(universe.rawSport.get(s) ?? s)
+    for (const key of sportCounts.keys()) if (!label.has(key)) label.set(key, displaySport(key))
     // Golf has no fixtures to filter, so the universe never offers it. Include
     // it anyway when tournaments exist — picking it jumps to the golf board
     // rather than filtering this one to nothing. See the select's onChange.
-    if (golfActive.length > 0) all.add('golf')
+    if (golfActive.length > 0 && !label.has('golf')) label.set('golf', 'Golf')
     return (
-      [...all]
+      [...label.entries()]
         // Nothing on the board means nothing to filter to, so the option is
         // dead weight — the list was mostly zeroes. The current selection is
         // kept regardless, or choosing a sport that then empties would blank
         // the control instead of showing what is selected.
-        .filter((s) => (sportCounts.get(s) ?? 0) > 0 || s === sportFilter || sportGroupKey(s) === 'golf')
+        .filter(([key]) => (sportCounts.get(key) ?? 0) > 0 || key === sportFilter || key === 'golf')
+        .map(([key, name]) => ({ key, name }))
         .sort((a, b) => {
-          const ca = sportCounts.get(a) ?? 0
-          const cb = sportCounts.get(b) ?? 0
+          const ca = sportCounts.get(a.key) ?? 0
+          const cb = sportCounts.get(b.key) ?? 0
           if ((ca > 0) !== (cb > 0)) return ca > 0 ? -1 : 1 // active sports first
-          return a.localeCompare(b)
+          return a.name.localeCompare(b.name)
         })
     )
   }, [universe, sportCounts, golfActive, sportFilter])
@@ -363,12 +384,11 @@ export default function Terminal() {
               className="appearance-none rounded-md border border-[var(--line)] bg-[var(--panel)] py-1.5 pl-3 pr-8 text-[12px] font-bold tracking-wider text-gray-200 focus:border-gray-600 focus:outline-none"
             >
               <option value="all">ALL ({routeScoped.length})</option>
-              {sportsForFilter.map((s) => {
-                const isGolfOpt = sportGroupKey(s) === 'golf'
-                const n = isGolfOpt ? golfActive.length : (sportCounts.get(s) ?? 0)
+              {sportsForFilter.map(({ key, name }) => {
+                const n = key === 'golf' ? golfActive.length : (sportCounts.get(key) ?? 0)
                 return (
-                  <option key={s} value={s}>
-                    {s.toUpperCase()} ({n})
+                  <option key={key} value={key}>
+                    {name.toUpperCase()} ({n})
                   </option>
                 )
               })}

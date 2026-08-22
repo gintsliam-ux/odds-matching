@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Check, ChevronDown, Trash2, X } from 'lucide-react'
 import type { Fixture } from '../lib/types'
-import { sportEmoji } from '../lib/sports'
+import { displaySport, sportEmoji, sportGroupKey } from '../lib/sports'
 import { useSportUniverse } from '../hooks/useSportUniverse'
 import { addFavourite, removeFavourite, updateFavourite, type Favourite } from '../lib/favourites'
 
@@ -35,10 +35,21 @@ export function FavouriteEditor({ fixtures, favourite, onClose }: Props) {
 
   // Full universe (every sport + league in `live_fixtures`), merged with any
   // current-scope entries (covers brand-new sports before the universe loads).
+  // One chip per SPORT, not per feed bucket. OPTIC files some competitions
+  // under a sport named after the league (afl, mlb, nfl, ucl…), which offered
+  // "afl" and "aussierules" as separate things to favourite. Chips carry the
+  // display name and match by group — see favouriteMatches.
   const allSports = useMemo(() => {
-    const set = new Set<string>(universe.sports)
-    for (const f of fixtures) if (f.sport) set.add(f.sport)
-    return [...set].sort()
+    const m = new Map<string, string>()
+    const add = (raw: string) => {
+      const key = sportGroupKey(raw)
+      if (!m.has(key)) m.set(key, displaySport(raw))
+    }
+    for (const s of universe.sports) add(universe.rawSport.get(s) ?? s)
+    for (const f of fixtures) if (f.sport) add(f.sport)
+    return [...m.entries()]
+      .map(([key, label]) => ({ key, label }))
+      .sort((a, b) => a.label.localeCompare(b.label))
   }, [universe, fixtures])
 
   const allLeagues = useMemo(() => {
@@ -53,7 +64,8 @@ export function FavouriteEditor({ fixtures, favourite, onClose }: Props) {
   const shownLeagues = useMemo(() => {
     const q = query.trim().toLowerCase()
     return allLeagues.filter((l) => {
-      if (filterSport !== 'all' && l.sport !== filterSport) return false
+      // filterSport is a sport GROUP key; a league's tag is the feed's sport.
+      if (filterSport !== 'all' && sportGroupKey(l.sport) !== filterSport) return false
       if (q && !l.league.toLowerCase().includes(q) && !l.sport.toLowerCase().includes(q)) return false
       return true
     })
@@ -134,12 +146,15 @@ export function FavouriteEditor({ fixtures, favourite, onClose }: Props) {
         <div className="px-5 pt-4">
           <div className="mb-2 text-[10px] tracking-widest text-gray-600">SPORTS</div>
           <div className="flex flex-wrap gap-1.5">
-            {allSports.map((s) => {
-              const on = sports.has(s)
+            {allSports.map(({ key, label }) => {
+              // A favourite saved before sports were grouped holds a raw value
+              // ("afl"), so selection is tested by group too — otherwise the
+              // chip for a sport already in the favourite would read as off.
+              const on = sports.has(key) || [...sports].some((s) => sportGroupKey(s) === key)
               return (
                 <button
-                  key={s}
-                  onClick={() => pickSport(s)}
+                  key={key}
+                  onClick={() => pickSport(key)}
                   className={[
                     'flex items-center gap-1.5 rounded border px-2.5 py-1 text-[11px] font-bold tracking-wider transition-colors',
                     on
@@ -147,8 +162,8 @@ export function FavouriteEditor({ fixtures, favourite, onClose }: Props) {
                       : 'border-[var(--line)] text-gray-400 hover:border-gray-600',
                   ].join(' ')}
                 >
-                  <span>{sportEmoji(s)}</span>
-                  {s.toUpperCase()}
+                  <span>{sportEmoji(key)}</span>
+                  {label.toUpperCase()}
                 </button>
               )
             })}
@@ -167,9 +182,9 @@ export function FavouriteEditor({ fixtures, favourite, onClose }: Props) {
                 title="Filter the league list by sport"
               >
                 <option value="all">ALL SPORTS</option>
-                {allSports.map((s) => (
-                  <option key={s} value={s}>
-                    {s.toUpperCase()}
+                {allSports.map(({ key, label }) => (
+                  <option key={key} value={key}>
+                    {label.toUpperCase()}
                   </option>
                 ))}
               </select>

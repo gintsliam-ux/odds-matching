@@ -225,6 +225,12 @@ const PARENT_SPORT: Record<string, string> = {
   aussierules: 'Australian Rules',
   nrl: 'Rugby League',
   ucl: 'Soccer',
+  // Same league-as-sport pattern as `ucl`. Without these the feed's own
+  // buckets surfaced as sports in their own right, so the picker offered
+  // "Laliga" and "Epl" beside "Soccer" instead of listing them as its
+  // tournaments.
+  laliga: 'Soccer',
+  epl: 'Soccer',
   kbo: 'Baseball',
   npb: 'Baseball',
   rugbyunion: 'Rugby Union',
