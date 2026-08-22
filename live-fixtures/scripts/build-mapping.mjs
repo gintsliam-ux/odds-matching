@@ -48,6 +48,12 @@ const SPORT_MAP = {
   amfootball: 'american football',
   nfl: 'american football',
   cfl: 'american football',
+  // mybet's label for the sport. Without it `gridiron` canonicalised to
+  // itself, never equalled `american football`, and every one of mybet's
+  // Gridiron events sat unmatchable against OPTIC's amfootball/nfl fixtures —
+  // the sport read 0% mapped on both providers while 376 candidates were
+  // sitting in the feed.
+  gridiron: 'american football',
   basketball: 'basketball',
   nba: 'basketball',
   wnba: 'basketball',
