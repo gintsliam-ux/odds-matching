@@ -1053,17 +1053,24 @@ const SPORTS = {
    after these, alphabetically — jsonb keys mean a new book needs no change
    here to show up at all. */
 const BOOK_META = {
-  pinnacle:  { label: 'Pinnacle', logo: 'pinnacle' },
-  bet365:    { label: 'Bet365',   logo: 'bet365' },
-  sportsbet: { label: 'Sportsbet', logo: 'sportsbet' },
-  tab:       { label: 'TAB',      logo: 'tab' },
-  ladbrokes: { label: 'Ladbrokes', logo: 'ladbrokes' },
-  fanduel:   { label: 'FanDuel',  logo: 'fanduel' },
-  fanatics:  { label: 'Fanatics', logo: 'fanatics' },
-  betfair:   { label: 'Betfair' },
-  draftkings:{ label: 'DraftKings' },
+  pinnacle:   { label: 'Pinnacle', logo: 'pinnacle' },
+  bet365:     { label: 'Bet365',   logo: 'bet365' },
+  sportsbet:  { label: 'Sportsbet', logo: 'sportsbet' },
+  tab:        { label: 'TAB',      logo: 'tab' },
+  tabtouch:   { label: 'TABtouch' },   // no usable mark published — renders as text
+  ladbrokes:  { label: 'Ladbrokes', logo: 'ladbrokes' },
+  fanduel:    { label: 'FanDuel',  logo: 'fanduel' },
+  fanatics:   { label: 'Fanatics', logo: 'fanatics' },
+  betfair:    { label: 'Betfair',  logo: 'betfair' },
+  /* The lay side of the exchange is the same brand, so it carries the same
+     mark — but a lay price is the opposite side of the bet and must never be
+     mistaken for a back price, hence the tag. */
+  betfair_lay:{ label: 'Betfair',  logo: 'betfair', tag: 'Lay' },
+  draftkings: { label: 'DraftKings', logo: 'draftkings' },
+  betmgm:     { label: 'BetMGM' },
 };
-const BOOK_ORDER = ['pinnacle', 'bet365', 'sportsbet', 'tab', 'ladbrokes', 'fanduel', 'fanatics'];
+const BOOK_ORDER = ['pinnacle', 'bet365', 'sportsbet', 'tab', 'tabtouch', 'ladbrokes',
+  'fanduel', 'fanatics', 'draftkings', 'betmgm', 'betfair', 'betfair_lay'];
 function bookLabel(key) { return BOOK_META[key]?.label || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()); }
 function sortBooks(keys) {
   return keys.slice().sort((a, b) => {
@@ -1088,6 +1095,13 @@ const MARKET_NAMES = {
 // Hockey's first period arrives under the 1h_ prefix; relabel so it doesn't read as a half.
 const HOCKEY_SPORTS = new Set(['icehockey']);
 const HOCKEY_PERIOD_NAMES = { '1h_moneyline': '1st Period Winner', '1h_spread': '1st Period Handicap', '1h_total': '1st Period Total' };
+
+/* `pair_key` uses -99999 to mean "this market has no line" — moneyline, BTTS,
+   draw-no-bet, double chance. Left as a number it groups and labels like a real
+   line, which is where "Line -99999" came from. Normalise it to null at the
+   read boundary so every downstream check for an unlined market just works. */
+const NO_LINE = -99999;
+const lineGroupOf = (v) => (v == null || v === NO_LINE ? null : v);
 
 /* ---- Discrepancy config ---------------------------------------------------- */
 const DISC_THRESHOLDS = { prob: [0.005, 0.01, 0.02], range: [0.05, 0.10, 0.15] };
@@ -1297,11 +1311,26 @@ function competitionKeyFor(leagueId, fallbackTournament) {
 /* Every competition a sport has ever run. Two columns over that sport's
    fixtures, paged in parallel — soccer's 51k rows are 52 pages, about two
    seconds, where the old schema needed one request per distinct name. */
-const LEAGUE_CACHE_TTL = 7 * 86400000;
-/* v2: the backend merged the duplicate optic_league ids (americanfootball_* into
-   amfootball_*, and soccer's `_-_` spellings). A cache keyed v1 would keep
-   showing the retired ids as dimmed "other periods" rows for up to a week. */
-const leagueCacheKey = (key) => `ol.leagues.v2.${key}`;
+/* Six hours, not seven days. The competition vocabulary is being reworked
+   upstream and a week-long cache means the sidebar shows names that no longer
+   exist for a week after they go — and, worse, shows a competition twice while
+   only one of the two is real. Six hours still spares a returning visitor the
+   52-page scan without outliving a day's changes. */
+const LEAGUE_CACHE_TTL = 6 * 3600000;
+/* v3: the tournament labels were rewritten (the country moved out of the name
+   and into the category), so every cached label from before that is stale.
+   Bumping the key retires v1 and v2 in one go rather than waiting them out. */
+const leagueCacheKey = (key) => `ol.leagues.v3.${key}`;
+
+/* Old generations otherwise sit in localStorage forever — v1 keys were still
+   there after the v2 bump. Clear them once at load. */
+(function dropStaleLeagueCaches() {
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (/^ol\.leagues\.v[12]\./.test(k)) localStorage.removeItem(k);
+    }
+  } catch {}
+})();
 
 function readLeagueCache(key) {
   try {
@@ -1448,7 +1477,7 @@ function normaliseClosing(r) {
        markets, and line_group folds them into one group of four rows. On one
        live NFL spread that was 35 groups of up to four against 50 clean pairs.
        odds_sp is not fully backfilled yet, hence the fallbacks. */
-    lineGroup: r.pair_key != null ? r.pair_key : (r.line_group != null ? r.line_group : r.line),
+    lineGroup: lineGroupOf(r.pair_key != null ? r.pair_key : (r.line_group != null ? r.line_group : r.line)),
     outcomeNo: r.outcome_no,
     outcomes: r.n_outcomes,
     prices: r.book_prices || {},
@@ -1469,12 +1498,12 @@ function collapseLive(rows) {
   const by = new Map();
   for (const r of rows) {
     if (r.status && r.status !== 'active') continue;
-    const key = `${r.market_id} ${r.pair_key ?? r.line_group} ${r.selection}`;
+    const key = `${r.market_id} ${lineGroupOf(r.pair_key ?? r.line_group)} ${r.selection}`;
     let hit = by.get(key);
     if (!hit) {
       hit = {
         market: r.market_id, marketName: r.market_name, selection: r.selection,
-        line: r.line, lineGroup: r.pair_key != null ? r.pair_key : r.line_group,
+        line: r.line, lineGroup: lineGroupOf(r.pair_key != null ? r.pair_key : r.line_group),
         outcomeNo: r.outcome_no, outcomes: null, main: false,
         prices: {}, fairs: {}, overround: {},
         blend: null, prob: null, nBooks: 0, tier: null, ogBlend: null, ogProb: null,
@@ -2482,12 +2511,10 @@ function selectionLabel(row) {
 
 function lineLabel(row) {
   const m = String(row.market || '').toLowerCase();
-  if (row.lineGroup == null && row.line == null) {
-    if (m === 'dnb') return 'Draw No Bet';
-    if (m === 'btts') return 'Both Teams';
-    if (m === 'double_chance') return 'Double Chance';
-    return 'H2H';
-  }
+  /* A market with no line still needs a word in the line column, and the market
+     is the only true thing to put there — "Match Winner", not "H2H", so it
+     reads the same as the tab above it. */
+  if (row.lineGroup == null && row.line == null) return formatMarketType(m) || 'Match Winner';
   const g = row.lineGroup != null ? row.lineGroup : Math.abs(row.line);
   if (m.includes('total') || m === 'total_sets') return `O/U ${g}`;
   return `Line ${g}`;   // the sign lives on each selection, not on the group
@@ -2616,17 +2643,21 @@ function renderOddsTable(rows) {
   return html + '</tbody></table></div>';
 }
 
-const BOOK_LOGO_FILES = new Set(['pinnacle', 'bet365', 'sportsbet', 'tab', 'ladbrokes', 'fanduel', 'fanatics']);
+const BOOK_LOGO_FILES = new Set(['pinnacle', 'bet365', 'sportsbet', 'tab', 'ladbrokes', 'fanduel',
+  'fanatics', 'betfair', 'draftkings']);
 function bookHeader(key, isFair) {
-  const file = BOOK_META[key]?.logo;
-  const label = bookLabel(key) + (isFair ? ' Fair' : '');
+  const meta = BOOK_META[key] || {};
+  const file = meta.logo;
+  const tag = meta.tag ? `<span class="bk-fair">${escHtml(meta.tag)}</span>` : '';
+  const label = [bookLabel(key), meta.tag, isFair ? 'Fair' : null].filter(Boolean).join(' ');
+  const fair = isFair ? '<span class="bk-fair">Fair</span>' : '';
   if (!file || !BOOK_LOGO_FILES.has(file)) {
-    return `<span class="bk"><span class="bk-name">${escHtml(bookLabel(key))}</span>${isFair ? '<span class="bk-fair">Fair</span>' : ''}</span>`;
+    return `<span class="bk"><span class="bk-name">${escHtml(bookLabel(key))}</span>${tag}${fair}</span>`;
   }
   return `<span class="bk">
       <img class="bk-logo" src="assets/books/${file}.png" alt="${escAttr(label)}"
            onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'bk-name',textContent:'${jsStr(bookLabel(key))}'}))">
-      ${isFair ? '<span class="bk-fair">Fair</span>' : ''}
+      ${tag}${fair}
     </span>`;
 }
 
