@@ -67,6 +67,10 @@ async function load(): Promise<SportUniverse> {
     const { data, error } = await sb
       .from('fixtures')
       .select('sport,optic_league,tournament,category,status,season_type,scheduled_start')
+      // Ordered, or PostgREST gives no stable slice across pages: rows shift
+      // between requests, so a paged read both repeats and DROPS rows. That is
+      // what made `fixtures` look like it held 2,681 duplicate ids.
+      .order('fixture_id', { ascending: true })
       .range(from, from + PAGE - 1)
     if (error) throw error
     const rows = (data ?? []) as {

@@ -64,6 +64,9 @@ export async function fetchCompetitionMappings(provider: Provider = 'swift'): Pr
         'optic_sport,optic_league,optic_tournament,gutsy_sport,gutsy_competition,gutsy_competition_id,confidence,source,verified,verified_at',
       )
       .eq('provider', provider)
+      // Ordered: a paged PostgREST read without one is not a stable slice —
+      // rows shift between requests, so pages both repeat and DROP rows.
+      .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
     if (error) throw error
     const rows = (data ?? []) as CompRow[]
@@ -326,6 +329,9 @@ export async function fetchEventMappings(provider: Provider = 'swift'): Promise<
       .from('event_mapping')
       .select('optic_fixture_id,gutsy_event_id,confidence,source,swift_actual_start')
       .eq('provider', provider)
+      // Ordered: a paged PostgREST read without one is not a stable slice —
+      // rows shift between requests, so pages both repeat and DROP rows.
+      .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
     if (error) throw error
     const rows =

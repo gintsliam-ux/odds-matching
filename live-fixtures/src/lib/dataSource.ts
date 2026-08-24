@@ -295,10 +295,12 @@ function resolveLogo(sport: string, league: string, name: string, feedLogo: stri
  * (flag CDN, ESPN pattern, or the prefetched cache), so they cost nothing.
  */
 async function enrich(input: Fixture[]): Promise<Fixture[]> {
-  // `fixture_id` is not unique on `fixtures` — roughly 2,900 rows in a 45-day
-  // window repeat an id with byte-identical content. The board's own window is
-  // clean today, but that is luck rather than a guarantee, and a duplicate
-  // renders as a duplicate card.
+  // Deduped defensively, but no longer for the reason first assumed:
+  // `fixtures.fixture_id` is the PRIMARY KEY and cannot repeat. The "2,681
+  // duplicates" measured earlier were an artefact of paging PostgREST without
+  // an ORDER BY, which does not return a stable slice — the same read ordered
+  // gives 13,943 rows and 13,943 distinct ids. Kept because it is one Map and
+  // costs nothing, and the board must never render a card twice.
   const fixtures = [...new Map(input.map((f) => [f.id, f])).values()]
   if (!fixtures.length) return fixtures
   const prices = await fetchCardOdds(fixtures.map((f) => f.id))

@@ -177,6 +177,9 @@ export async function fetchGolfPrices(tournamentId: string): Promise<GolfPrice[]
       .from(OUTRIGHTS)
       .select('golfer,price,sportsbook')
       .eq('tournament_id', tournamentId)
+      // Ordered: a paged PostgREST read without one is not a stable slice —
+      // rows shift between requests, so pages both repeat and DROP rows.
+      .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
       .returns<Array<{ golfer: string | null; price: number | null; sportsbook: string | null }>>()
     if (error) throw error
