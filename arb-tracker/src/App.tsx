@@ -41,6 +41,14 @@ function localDay(value: string | number | Date): string {
   ).padStart(2, '0')}`;
 }
 
+/** True if the event falls on `date` (multi-day events match any day in range). */
+function onDate(e: SportEvent, date: string): boolean {
+  if (!date) return true;
+  const start = localDay(e.startsAt);
+  const end = e.endsAt ? localDay(e.endsAt) : start;
+  return date >= start && date <= end;
+}
+
 // Filters survive a page refresh via localStorage. `dateTouched` distinguishes
 // "still on the auto-today default" (rolls forward to today on a new day) from
 // a date the user actually picked or cleared (restored exactly).
@@ -161,17 +169,21 @@ export default function App() {
     [events],
   );
 
+  // Leagues shown in the filter are scoped to the selected sport(s) AND date —
+  // so the dropdown only lists competitions that actually have events that day.
   const leagueOptions = useMemo(() => {
-    const inSport = events.filter(
-      (e) => sportSel.length === 0 || sportSel.includes(e.sport),
+    const inScope = events.filter(
+      (e) => (sportSel.length === 0 || sportSel.includes(e.sport)) && onDate(e, date),
     );
-    return Array.from(new Set(inSport.map(leagueLabel))).sort();
-  }, [events, sportSel]);
+    return Array.from(new Set(inScope.map(leagueLabel))).sort();
+  }, [events, sportSel, date]);
 
   function handleSport(next: string[]) {
     setSportSel(next);
     const allowed = new Set(
-      events.filter((e) => next.length === 0 || next.includes(e.sport)).map(leagueLabel),
+      events
+        .filter((e) => (next.length === 0 || next.includes(e.sport)) && onDate(e, date))
+        .map(leagueLabel),
     );
     setLeagueSel((prev) => prev.filter((l) => allowed.has(l)));
   }
@@ -183,12 +195,7 @@ export default function App() {
       events.filter((e) => {
         if (sportSel.length && !sportSel.includes(e.sport)) return false;
         if (leagueSel.length && !leagueSel.includes(leagueLabel(e))) return false;
-        // Multi-day events (golf tournaments) match any day in [start, end].
-        if (date) {
-          const start = localDay(e.startsAt);
-          const end = e.endsAt ? localDay(e.endsAt) : start;
-          if (date < start || date > end) return false;
-        }
+        if (!onDate(e, date)) return false;
         return true;
       }),
     [events, sportSel, leagueSel, date],

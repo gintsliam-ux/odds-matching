@@ -83,11 +83,15 @@ function MultiPill({
   selected,
   options,
   onChange,
+  alignRight = false,
 }: {
   label: string;
   selected: string[];
   options: string[];
   onChange: (v: string[]) => void;
+  /** Anchor the menu to the right edge (grows leftward) — for the right column,
+   * so a wide menu stays inside the rail instead of being clipped off-screen. */
+  alignRight?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useOutsideClose(() => setOpen(false));
@@ -119,7 +123,9 @@ function MultiPill({
       </button>
 
       {open && (
-        <div className="absolute left-0 z-20 mt-1 max-h-64 min-w-[160px] max-w-[240px] overflow-auto rounded-lg border border-surface-border bg-surface-raised p-1 shadow-xl">
+        <div
+          className={`absolute ${alignRight ? 'right-0' : 'left-0'} z-20 mt-1 max-h-64 w-[min(300px,calc(100vw-1.75rem))] overflow-auto rounded-lg border border-surface-border bg-surface-raised p-1 shadow-xl`}
+        >
           <button
             type="button"
             onClick={() => onChange([])}
@@ -138,10 +144,10 @@ function MultiPill({
                 key={opt}
                 type="button"
                 onClick={() => toggle(opt)}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-slate-200 hover:bg-white/5"
+                className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm text-slate-200 hover:bg-white/5"
               >
                 <span
-                  className={`grid h-4 w-4 shrink-0 place-items-center rounded border ${
+                  className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded border ${
                     on
                       ? 'border-emerald-500 bg-emerald-500 text-white'
                       : 'border-slate-600'
@@ -149,7 +155,7 @@ function MultiPill({
                 >
                   {on && <Check size={12} />}
                 </span>
-                <span className="truncate">{opt}</span>
+                <span className="min-w-0 break-words">{opt}</span>
               </button>
             );
           })}
@@ -186,6 +192,7 @@ export function FilterBar({
           selected={leagueSel}
           options={leagueOptions}
           onChange={onLeague}
+          alignRight
         />
       </div>
     </div>
