@@ -1444,11 +1444,24 @@ function toEvent(r) {
    prices, vig-stripped fairs, the blend and its tier — but it is written when a
    market closes, so anything still open reads from the live board instead and
    shows prices without the fair columns. */
+/* Name only the columns this page reads. `optic_clv` and `close_delta` were in
+   here, unused, and were dropped upstream — which 400s the whole request, so
+   every event page went blank over two columns nothing rendered. Asking for
+   less is the fix; falling back to `*` is the seatbelt, because the next column
+   to go should cost a wasted round trip, not the page. */
+const SP_COLUMNS =
+  'market_id,market_name,selection,line,line_group,pair_key,outcome_no,n_outcomes,' +
+  'book_prices,book_fairs,book_overround,fair_blend,fair_prob,n_books,blend_books,blend_tier,og_blend,og_prob';
+
 async function loadFixtureOdds(fixtureId) {
-  const closing = await sb('odds_sp',
-    `select=market_id,market_name,selection,line,line_group,pair_key,outcome_no,n_outcomes,book_prices,book_fairs,` +
-    `book_overround,fair_blend,fair_prob,n_books,blend_books,blend_tier,og_blend,og_prob,optic_clv,close_delta` +
-    `&fixture_id=eq.${encodeURIComponent(fixtureId)}&limit=2000`);
+  const id = encodeURIComponent(fixtureId);
+  let closing;
+  try {
+    closing = await sb('odds_sp', `select=${SP_COLUMNS}&fixture_id=eq.${id}&limit=2000`);
+  } catch (err) {
+    console.warn('odds_sp column list rejected, falling back to *', err);
+    closing = await sb('odds_sp', `select=*&fixture_id=eq.${id}&limit=2000`);
+  }
   if (closing.length) return { source: 'closing', rows: closing.map(normaliseClosing) };
 
   /* `odds` now carries both pregame and in-play rows for the same selection,
@@ -1456,7 +1469,7 @@ async function loadFixtureOdds(fixtureId) {
      price. Take in-play when the fixture has any, pregame otherwise. */
   const live = await sb('odds',
     `select=market_id,market_name,selection,line,line_group,pair_key,outcome_no,is_main,sportsbook,is_lay,is_live,` +
-    `open_price,current_price,close_price,status&fixture_id=eq.${encodeURIComponent(fixtureId)}` +
+    `open_price,current_price,close_price,status&fixture_id=eq.${id}` +
     `&is_lay=eq.false&limit=3000`);
   if (!live.length) return { source: 'none', rows: [] };
   const inPlay = live.filter(r => r.is_live);
