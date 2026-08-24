@@ -246,6 +246,18 @@ async function main(opts = { writeSnapshot: true }) {
     return out
   }
 
+  // Candidate pairs first, assignment second. A fixture used to take its best
+  // event independently of every other fixture, so nothing stopped two fixtures
+  // claiming the SAME mybet event — 74 events were double-claimed, including
+  // cross-division pairs (Saudi League against Division 1) and cross-grade ones
+  // (WNBL1 against NBL1). One event is one game; at least one of each pair was
+  // wrong, and a wrong pairing attributes real bets to the wrong fixture.
+  //
+  // The 1:1 rule that stage 1 applies to competitions now applies here too:
+  // collect every (fixture, event) pair that clears the gates, then assign
+  // greedily by score so the strongest claim wins and each side is used once.
+  const pairs = []
+  const reached = []
   const eventResults = []
   let inWindow = 0
   let skippedOld = 0
@@ -274,9 +286,6 @@ async function main(opts = { writeSnapshot: true }) {
       continue
     }
     inWindow++
-    let best = null
-    let bestScore = 0
-    let bestSkew = Infinity
     for (const e of cands) {
       const estart = e.start ? Date.parse(e.start) : NaN
       if (!Number.isFinite(estart)) continue
@@ -302,13 +311,27 @@ async function main(opts = { writeSnapshot: true }) {
       const s = teamScore(r.home_team, r.away_team, e.home, e.away)
       const floor = skew <= MAX_START_SKEW_MS ? MIN_EVENT_SIM : MIN_EVENT_SIM_WIDE
       if (s < floor) continue
-      // Tie-break on time so identical names resolve to the nearest candidate.
-      if (s > bestScore || (s === bestScore && skew < bestSkew)) { bestScore = s; best = e; bestSkew = skew }
+      pairs.push({ fixture: r.optic_fixture_id, event: e, score: s, skew })
     }
+    reached.push(r.optic_fixture_id)
+  }
+
+  // Strongest claim first; ties go to the nearer start time, which is what the
+  // per-fixture tie-break used to do.
+  pairs.sort((a, b) => b.score - a.score || a.skew - b.skew)
+  const claimedFixture = new Map()
+  const claimedEvent = new Set()
+  for (const p of pairs) {
+    if (claimedFixture.has(p.fixture) || claimedEvent.has(String(p.event._id))) continue
+    claimedFixture.set(p.fixture, p)
+    claimedEvent.add(String(p.event._id))
+  }
+  for (const id of reached) {
+    const win = claimedFixture.get(id)
     eventResults.push({
-      optic_fixture_id: r.optic_fixture_id,
-      gutsy_event_id: best ? best._id : null,
-      confidence: +bestScore.toFixed(3),
+      optic_fixture_id: id,
+      gutsy_event_id: win ? win.event._id : null,
+      confidence: win ? +win.score.toFixed(3) : 0,
       source: 'auto',
       provider: PROVIDER,
     })

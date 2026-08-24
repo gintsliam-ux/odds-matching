@@ -767,6 +767,13 @@ async function main(opts = { writeSnapshot: true }) {
   // mappings corrected, 0 regressions across ~3000 known-good pairs.
   const MAX_START_SKEW_WIDE_MS = 6 * 60 * 60 * 1000
   const MIN_EVENT_SIM_WIDE = 0.9
+  // Candidate pairs first, assignment second — the same 1:1 rule stage 1 uses
+  // for competitions. A fixture used to take its best event with no regard for
+  // what any other fixture had taken, so two fixtures could claim the SAME
+  // SwiftBet event. One event is one game, so at least one of each pair was
+  // wrong, and a wrong pairing attributes real bets to the wrong fixture.
+  const pairs = []
+  const reached = []
   const eventResults = []
   let opticPairedComp = 0
   for (const r of opticRows) {
@@ -794,9 +801,6 @@ async function main(opts = { writeSnapshot: true }) {
     }
     opticPairedComp++
     const opticTeams = `${r.home_team ?? ''} ${r.away_team ?? ''}`
-    let best = null
-    let bestScore = 0
-    let bestSkew = Infinity
     // Time and name are gated JOINTLY. A tight window needs only a loose name
     // match; beyond it the name must be near-exact. Scheduled times for boxing
     // undercards, UFC prelims and tennis "not before" slots routinely drift 2-4
@@ -818,19 +822,29 @@ async function main(opts = { writeSnapshot: true }) {
         )
         const floor = skew <= MAX_START_SKEW_MS ? MIN_EVENT_SIM : MIN_EVENT_SIM_WIDE
         if (tsim < floor) continue
-        // Tie-break on time: identical names (common for a rescheduled slot)
-        // should resolve to the nearest candidate.
-        if (tsim > bestScore || (tsim === bestScore && skew < bestSkew)) {
-          bestScore = tsim
-          bestSkew = skew
-          best = e
-        }
+        pairs.push({ fixture: r.optic_fixture_id, event: e, score: tsim, skew })
       }
     }
+    reached.push(r.optic_fixture_id)
+  }
+
+  // Strongest claim first; ties go to the nearer start time, which is what the
+  // per-fixture tie-break did — identical names on a rescheduled slot should
+  // still resolve to the closest candidate.
+  pairs.sort((a, b) => b.score - a.score || a.skew - b.skew)
+  const claimedFixture = new Map()
+  const claimedEvent = new Set()
+  for (const p of pairs) {
+    if (claimedFixture.has(p.fixture) || claimedEvent.has(String(p.event._id))) continue
+    claimedFixture.set(p.fixture, p)
+    claimedEvent.add(String(p.event._id))
+  }
+  for (const id of reached) {
+    const win = claimedFixture.get(id)
     eventResults.push({
-      optic_fixture_id: r.optic_fixture_id,
-      gutsy_event_id: best ? best._id : null,
-      confidence: +bestScore.toFixed(3),
+      optic_fixture_id: id,
+      gutsy_event_id: win ? win.event._id : null,
+      confidence: win ? +win.score.toFixed(3) : 0,
       source: 'auto',
     })
   }
