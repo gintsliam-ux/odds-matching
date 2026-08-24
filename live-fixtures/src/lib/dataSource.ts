@@ -1,12 +1,27 @@
-import type { Fixture, FixtureStatus, PeriodScore } from './types'
-import { prettyLeague, prettySport, reclassifySport, sportGroupKey } from './sports'
+import type { Fixture } from './types'
+import { prettySport, reclassifySport, sportGroupKey } from './sports'
 import { espnLogoUrl } from './teamLogos'
 import { cachedLogo, ensureLogoCache } from './logoCache'
 import { countryFlagUrl } from './countryFlags'
 import { melbDayRangeUtc } from './dates'
 import { getSupabase } from './supabase'
+import { mapFixture, type FixtureRow } from './oddsLibrary'
+import { fetchCardOdds } from './cardOdds'
 
-const TABLE = 'live_fixtures'
+// The Odds Library's fixture table. `live_fixtures` stopped being written on
+// 2026-08-24 — 0 rows in the hour this was changed, against 734 for `fixtures`
+// — and by then 424 of the next week's 804 upcoming fixtures existed only
+// here, so the board was missing more than half its slate and both matchers
+// were pairing against a frozen list.
+//
+// Prices are NOT on this table: `fixtures` carries no odds columns at all.
+// The board's odds column comes from `odds` via fetchCardOdds, joined in after
+// the rows land.
+const TABLE = 'fixtures'
+/** Column the fixture id lives under here (`optic_fixture_id` on the old one). */
+const ID_COL = 'fixture_id'
+/** Raw league slug column (`league` on the old one). */
+const LEAGUE_COL = 'optic_league'
 
 // Window for the board: everything scheduled up to this far ahead, plus all
 // currently-live games regardless of their (possibly stale) scheduled_start.
@@ -23,32 +38,7 @@ const UPCOMING_HORIZON_H = 24
 const RECENT_COMPLETED_H = 24
 const ROW_LIMIT = 1000
 
-// The feed sometimes leaves `is_live=true` long after a game ends (seen 10–20h),
-// which would otherwise show a runaway live clock.
-//
-// The test for that is whether the feed has STOPPED UPDATING, not how long ago
-// the game started. "No sport runs longer than 8h" is simply untrue: a Test
-// match runs five days, and West Indies v Pakistan sat 62.7 h past its
-// actual_start with live_updated_at moving seconds earlier — genuinely live,
-// and shown as completed.
-//
-// A live game's feed ticks constantly; a runaway flag's does not. This window
-// has to clear the longest real lull in play (rain, innings break, half-time)
-// while still catching a dead feed sooner than the old rule did.
-const STALE_LIVE_FEED_H = 3
-// Fallback only, for rows carrying no heartbeat at all.
-const STALE_LIVE_H = 8
-/** A scheduled fixture that never got odds, live data, or an actual_start
- *  and is this many hours past kickoff is a ghost — postponed, cancelled, or
- *  duplicated. Demote to completed in the UI so it doesn't sit forever as
- *  "upcoming" stuck-overdue. */
-const STALE_GHOST_H = 4
 
-/** A fixture with no actual_start and no live data this many hours past its
- *  scheduled kickoff is not upcoming, whether or not it was ever priced. Set
- *  well beyond a real delay: rain-affected cricket and "not before" tennis
- *  slots drift hours, never half a day. */
-const STALE_UPCOMING_H = 12
 
 const COLUMNS = '*'
 
@@ -65,11 +55,11 @@ export async function fetchFixtures(): Promise<Fixture[]> {
     .or(`is_live.eq.true,and(scheduled_start.gte.${lo},scheduled_start.lte.${hi})`)
     .order('scheduled_start', { ascending: true })
     .limit(ROW_LIMIT)
-    .returns<Row[]>()
+    .returns<FixtureRow[]>()
 
   if (error) throw error
   const nowMs = Date.now()
-  return (data ?? []).map((r) => mapRow(r, nowMs))
+  return enrich((data ?? []).map((r) => mapFixture(r, nowMs)))
 }
 
 /** All UPCOMING or COMPLETED fixtures on a given Melbourne calendar day — backs
@@ -89,11 +79,11 @@ export async function fetchFixturesByDate(
     .lt('scheduled_start', hi)
     .order('scheduled_start', { ascending: status === 'upcoming' })
     .limit(1000)
-    .returns<Row[]>()
+    .returns<FixtureRow[]>()
 
   if (error) throw error
   const nowMs = Date.now()
-  return (data ?? []).map((r) => mapRow(r, nowMs))
+  return enrich((data ?? []).map((r) => mapFixture(r, nowMs)))
 }
 
 /**
@@ -125,10 +115,10 @@ export async function fetchOverdueUpcomingFixtures(opts: {
     .lt('scheduled_start', hi)
     .order('scheduled_start', { ascending: false })
     .limit(limit)
-    .returns<Row[]>()
+    .returns<FixtureRow[]>()
   if (error) throw error
   const nowMs = Date.now()
-  return (data ?? []).map((r) => mapRow(r, nowMs))
+  return enrich((data ?? []).map((r) => mapFixture(r, nowMs)))
 }
 
 /**
@@ -159,10 +149,10 @@ export async function fetchRecentlyCompletedFixtures(opts: {
     .lt('updated_at', hi)
     .order('updated_at', { ascending: false })
     .limit(limit)
-    .returns<Row[]>()
+    .returns<FixtureRow[]>()
   if (error) throw error
   const nowMs = Date.now()
-  return (data ?? []).map((r) => mapRow(r, nowMs))
+  return enrich((data ?? []).map((r) => mapFixture(r, nowMs)))
 }
 
 export const SPORT_PAGE_SIZE = 200
@@ -209,11 +199,11 @@ export async function fetchFixturesBySport(
   const { data, error } = await q
     .order('scheduled_start', { ascending: false })
     .range(from, to)
-    .returns<Row[]>()
+    .returns<FixtureRow[]>()
   if (error) throw error
   const rows = data ?? []
   const nowMs = Date.now()
-  return { rows: rows.map((r) => mapRow(r, nowMs)), hasMore: rows.length === SPORT_PAGE_SIZE }
+  return { rows: await enrich(rows.map((r) => mapFixture(r, nowMs))), hasMore: rows.length === SPORT_PAGE_SIZE }
 }
 
 /**
@@ -239,17 +229,17 @@ export async function fetchFixturesByTournament(
   // ZERO resolve to more than one sport after reclassification, so dropping the
   // sport predicate loses no precision. The post-filter below keeps it honest
   // anyway.
-  let q = getSupabase().from(TABLE).select(COLUMNS).eq('league', rawLeague)
+  let q = getSupabase().from(TABLE).select(COLUMNS).eq(LEAGUE_COL, rawLeague)
   if (rawSeasonType) q = q.eq('season_type', rawSeasonType)
   const { data, error } = await q
     .order('scheduled_start', { ascending: false })
     .limit(1000)
-    .returns<Row[]>()
+    .returns<FixtureRow[]>()
   if (error) throw error
   const nowMs = Date.now()
   const want = sportGroupKey(prettySport(reclassifySport(rawSport, rawLeague)))
   return (data ?? [])
-    .map((r) => mapRow(r, nowMs))
+    .map((r) => mapFixture(r, nowMs))
     .filter((f) => !want || sportGroupKey(f.sport) === want)
 }
 
@@ -259,14 +249,16 @@ export async function fetchFixtureById(id: string): Promise<Fixture | null> {
   const { data, error } = await getSupabase()
     .from(TABLE)
     .select(COLUMNS)
-    .eq('optic_fixture_id', id)
+    .eq(ID_COL, id)
     .limit(1)
-    .returns<Row[]>()
+    .returns<FixtureRow[]>()
 
   if (error) throw error
   await ensureLogoCache()
   const row = data?.[0]
-  return row ? mapRow(row, Date.now()) : null
+  if (!row) return null
+  const [one] = await enrich([mapFixture(row, Date.now())])
+  return one
 }
 
 /** Logo precedence: feed column → national-team flag → ESPN majors →
@@ -287,259 +279,47 @@ function resolveLogo(sport: string, league: string, name: string, feedLogo: stri
 
 // --- column mapping -------------------------------------------------------
 
-interface Row {
-  optic_fixture_id: string | null
-  sport: string | null
-  league: string | null
-  home_team: string | null
-  away_team: string | null
-  scheduled_start: string | null
-  actual_start: string | null
-  status: string | null
-  is_live: boolean | null
-  home_score: number | null
-  away_score: number | null
-  /**
-   * The closing_* columns were DROPPED from live_fixtures. Everything they held
-   * now lives in pregame_odds (per book, per line), so the odds below are
-   * derived from that instead. Declared optional purely so a re-added column
-   * would still type-check.
-   */
-  closing_bookmaker?: string | null
-  /** Which book the live in-play prices come from. */
-  live_bookmaker?: string | null
-  /** The live (in-play) spread and total, added alongside live_bookmaker.
-   *  Each carries its OWN line, which need not match any pregame line. */
-  live_spread_line?: number | null
-  live_spread_home?: number | null
-  live_spread_away?: number | null
-  live_total_line?: number | null
-  live_total_over?: number | null
-  live_total_under?: number | null
-  live_h2h_home: number | null
-  live_h2h_draw: number | null
-  live_h2h_away: number | null
-  live_updated_at: string | null
-  updated_at: string | null
-  venue: string | null
-  broadcast: string | null
-  season_type: string | null
-  period_scores: { home?: Record<string, number | null>; away?: Record<string, number | null> } | null
-  pregame_odds: import('./types').PregameOdds | null
-  flucs: import('./types').Flucs | null
-  open_at: string | null
-  close_at: string | null
-  // Optional logo/headshot columns — not present yet, but read if the scraper
-  // ever persists OpticOdds' team/player image URLs.
-  home_team_logo?: string | null
-  away_team_logo?: string | null
-  home_logo?: string | null
-  away_logo?: string | null
-}
 
-/** `{home:{period_1:N,..}, away:{...}}` → ordered [{index, home, away}]. */
-function parsePeriods(ps: Row['period_scores']): PeriodScore[] {
-  if (!ps || typeof ps !== 'object') return []
-  const home = ps.home ?? {}
-  const away = ps.away ?? {}
-  const idx = new Set<number>()
-  for (const k of [...Object.keys(home), ...Object.keys(away)]) {
-    const m = /(?:period|set|inning|quarter)_?(\d+)/i.exec(k) ?? /^(\d+)$/.exec(k)
-    if (m) idx.add(Number(m[1]))
-  }
-  return [...idx]
-    .sort((a, b) => a - b)
-    .map((i) => ({
-      index: i,
-      home: numOrNull(home[`period_${i}`]),
-      away: numOrNull(away[`period_${i}`]),
-    }))
-}
 
-function numOrNull(v: unknown): number | null {
-  if (v == null || v === '') return null
-  const n = Number(v)
-  return Number.isFinite(n) ? n : null
-}
+
 
 /**
- * A single representative h2h price per outcome, taken across the books in
- * `pregame_odds` — the board's odds column and the "before kickoff" reference
- * now that closing_h2h_* is gone.
+ * Fill in what `fixtures` cannot carry.
  *
- * MEDIAN, not best and not a favoured book: the best price is an outlier by
- * construction, and picking one book leaves the column blank whenever that book
- * is absent (Pinnacle covers most fixtures but far from all).
+ * The Odds Library splits concerns: `fixtures` is the fixture, `odds` is the
+ * price, and logos are resolved from names. `mapFixture` therefore returns
+ * null for both, and the board fills them here rather than in the mapper —
+ * which keeps the mapper synchronous and pure.
+ *
+ * Odds are fetched in one batched call for the whole page. Logos are local
+ * (flag CDN, ESPN pattern, or the prefetched cache), so they cost nothing.
  */
-function consensusH2h(pregame: unknown): { home: number | null; draw: number | null; away: number | null } {
-  const h2h = (pregame as { h2h?: Record<string, unknown> } | null)?.h2h
-  const out = { home: null as number | null, draw: null as number | null, away: null as number | null }
-  if (!h2h || typeof h2h !== 'object') return out
-  for (const side of ['home', 'draw', 'away'] as const) {
-    const vals: number[] = []
-    for (const [book, v] of Object.entries(h2h)) {
-      if (book === 'line' || !v || typeof v !== 'object') continue
-      const n = (v as Record<string, unknown>)[side]
-      if (typeof n === 'number' && Number.isFinite(n)) vals.push(n)
+async function enrich(input: Fixture[]): Promise<Fixture[]> {
+  // `fixture_id` is not unique on `fixtures` — roughly 2,900 rows in a 45-day
+  // window repeat an id with byte-identical content. The board's own window is
+  // clean today, but that is luck rather than a guarantee, and a duplicate
+  // renders as a duplicate card.
+  const fixtures = [...new Map(input.map((f) => [f.id, f])).values()]
+  if (!fixtures.length) return fixtures
+  const prices = await fetchCardOdds(fixtures.map((f) => f.id))
+  for (const f of fixtures) {
+    f.homeLogo = resolveLogo(f.rawSport, f.rawLeague, f.homeName, null)
+    f.awayLogo = resolveLogo(f.rawSport, f.rawLeague, f.awayName, null)
+    const p = prices.get(f.id)
+    if (p) {
+      f.oddsHome = p.home
+      f.oddsDraw = p.draw
+      f.oddsAway = p.away
+      if (p.live) f.liveH2h = { home: p.home, draw: p.draw, away: p.away }
+      else f.closingH2h = { home: p.home, draw: p.draw, away: p.away }
     }
-    if (!vals.length) continue
-    vals.sort((a, b) => a - b)
-    const mid = Math.floor(vals.length / 2)
-    out[side] = vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2
   }
-  return out
+  return fixtures
 }
 
-function mapRow(r: Row, nowMs: number): Fixture {
-  let status = normStatus(r.status, r.is_live)
+// mapRow lived here. Row mapping is now mapFixture in oddsLibrary.ts —
+// one mapper for one source, rather than two drifting copies of the same
+// status guards. `enrich` above adds the logos and prices that live
+// outside the fixtures table.
 
-  // Demote runaway "live" rows (stale is_live flag) to completed — judged on
-  // the feed's heartbeat, falling back to elapsed time when there is none.
-  if (status === 'live') {
-    const beat = r.live_updated_at ?? r.updated_at
-    const beatMs = beat ? Date.parse(beat) : NaN
-    if (Number.isFinite(beatMs)) {
-      if (nowMs - beatMs > STALE_LIVE_FEED_H * 3_600_000) status = 'completed'
-    } else {
-      const ref = r.actual_start ?? r.scheduled_start
-      if (ref && nowMs - new Date(ref).getTime() > STALE_LIVE_H * 3_600_000) status = 'completed'
-    }
-  }
-  // Ghost upcoming fixtures: scheduled in the past with no actual_start, no
-  // pregame_odds and no live data — game didn't happen. Mark completed so they
-  // fall out of upcoming counts and stop firing the "OPTIC still upcoming"
-  // notification. The closing-line arm of this test went with the columns; it
-  // was never load-bearing, since a fixture with a closing line always had
-  // pregame odds too.
-  // An actual_start in the past means the fixture HAS begun, so "upcoming" is
-  // simply wrong — 5 rows carried one while still marked upcoming, one of them
-  // 272 h past its scheduled time with a score of 6. It is either still running
-  // (the live branch above already had its chance) or it finished.
-  if (status === 'upcoming' && r.actual_start && Date.parse(r.actual_start) < nowMs) {
-    status = 'completed'
-  }
-  if (status === 'upcoming' && !r.actual_start && r.scheduled_start) {
-    const overdueMs = nowMs - new Date(r.scheduled_start).getTime()
-    const noLive = r.live_h2h_home == null && r.live_updated_at == null
-    if (overdueMs > STALE_GHOST_H * 3_600_000) {
-      const noPregame =
-        !r.pregame_odds || (typeof r.pregame_odds === 'object' && Object.keys(r.pregame_odds).length === 0)
-      if (noPregame && noLive) status = 'completed'
-    }
-    // Having been PRICED says the fixture was real, not that it is still
-    // coming. 178 of the 297 rows sitting more than 12 h past their start were
-    // escaping the test above on the pregame-odds condition alone — 40 of them
-    // carrying a final score, so they had plainly been played and simply never
-    // settled upstream. Cross-checked against the new `fixtures` table, 105 of
-    // these read `completed` there and 37 `cancelled`.
-    //
-    // A genuine delay is hours, not half a day: the distribution here is 1 row
-    // 1-3 h late, 10 at 3-12 h, then 82 at 12-48 h and 220 beyond 48 h. So the
-    // odds condition is dropped past STALE_UPCOMING_H, while the "· delay?"
-    // badge still flags the short overdue window it was built for.
-    // No `noLive` condition here, unlike the ghost test above. There it means
-    // "nothing ever happened, so the game didn't". Here the fixture is already
-    // half a day past its start, and live data is evidence it DID happen — 14
-    // rows were surviving on that clause alone, one of them 272 h late.
-    if (status === 'upcoming' && overdueMs > STALE_UPCOMING_H * 3_600_000) {
-      status = 'completed'
-    }
-  }
-  const live = status === 'live'
 
-  // Live games clock off when they actually started; everything else off the
-  // scheduled time. The footer kickoff label uses the same reference.
-  const startTime =
-    (live ? r.actual_start ?? r.scheduled_start : r.scheduled_start ?? r.actual_start) ??
-    new Date().toISOString()
-
-  const liveH2h = { home: r.live_h2h_home, draw: r.live_h2h_draw, away: r.live_h2h_away }
-  // The last price we hold before kickoff, taken across the books in
-  // pregame_odds. It used to come from closing_h2h_*, which no longer exists —
-  // leaving the board's odds column blank on 486 of the 703 recent fixtures
-  // that have no live price but do have pregame books.
-  const closingH2h = consensusH2h(r.pregame_odds)
-
-  // The feed's `sport` needs correcting from the league: generic `rugby` rows
-  // mix Union + League, and a few leagues arrive filed under the wrong sport
-  // outright. Note the resolveLogo calls below deliberately keep `r.sport` —
-  // entity_logos is keyed by the *raw* feed sport, so correcting it here would
-  // miss the cache.
-  const rawSport = reclassifySport(r.sport ?? '', r.league ?? '')
-  return {
-    id: r.optic_fixture_id ?? `${r.home_team}-${r.away_team}-${r.scheduled_start}`,
-    sport: prettySport(rawSport),
-    league: prettyLeague(r.league ?? ''),
-    rawSport,
-    rawLeague: r.league ?? '',
-    status,
-    startTime,
-    homeName: r.home_team ?? 'Home',
-    awayName: r.away_team ?? 'Away',
-    homeLogo: resolveLogo(r.sport ?? '', r.league ?? '', r.home_team ?? '', r.home_team_logo ?? r.home_logo ?? null),
-    awayLogo: resolveLogo(r.sport ?? '', r.league ?? '', r.away_team ?? '', r.away_team_logo ?? r.away_logo ?? null),
-    homeScore: r.home_score ?? null,
-    awayScore: r.away_score ?? null,
-    clock: null,
-    // Prefer live prices when in-play, fall back to the closing line.
-    oddsHome: liveH2h.home ?? closingH2h.home,
-    oddsDraw: liveH2h.draw ?? closingH2h.draw,
-    oddsAway: liveH2h.away ?? closingH2h.away,
-
-    opticId: r.optic_fixture_id,
-    scheduledStart: r.scheduled_start,
-    actualStart: r.actual_start,
-    venue: r.venue,
-    broadcast: r.broadcast,
-    seasonType: r.season_type,
-    liveUpdatedAt: r.live_updated_at,
-    updatedAt: r.updated_at,
-    bookmaker: r.closing_bookmaker ?? null,
-    liveBookmaker: r.live_bookmaker ?? null,
-    liveH2h,
-    liveSpread: {
-      line: r.live_spread_line ?? null,
-      home: r.live_spread_home ?? null,
-      away: r.live_spread_away ?? null,
-    },
-    liveTotal: {
-      line: r.live_total_line ?? null,
-      over: r.live_total_over ?? null,
-      under: r.live_total_under ?? null,
-    },
-    closingH2h,
-    spread: {
-      line: null,
-      home: null,
-      away: null,
-    },
-    total: {
-      line: null,
-      over: null,
-      under: null,
-    },
-    periods: parsePeriods(r.period_scores),
-    pregameOdds: r.pregame_odds ?? null,
-    flucs: r.flucs ?? null,
-    openAt: r.open_at ?? null,
-    closeAt: r.close_at ?? null,
-  }
-}
-
-/** Statuses that mean "not going to be played, or already isn't". None of them
- *  belong in Upcoming, and the board has no fourth bucket to put them in. The
- *  new `fixtures` table already carries `cancelled` (61 rows); `live_fixtures`
- *  has never emitted one, but it fell through to `upcoming` if it ever did,
- *  which would have shown a cancelled game as one about to start. */
-const TERMINAL_STATUSES = [
-  'completed', 'final', 'finished', 'ended', 'closed', 'ft',
-  'cancelled', 'canceled', 'abandoned', 'postponed', 'walkover', 'retired', 'void',
-]
-
-function normStatus(status: string | null, isLive: boolean | null): FixtureStatus {
-  if (isLive === true) return 'live'
-  const s = (status ?? '').toLowerCase()
-  if (['live', 'in_play', 'inplay', 'playing', 'started'].includes(s)) return 'live'
-  if (TERMINAL_STATUSES.includes(s)) return 'completed'
-  return 'upcoming'
-}

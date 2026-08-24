@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { getSupabase } from '../lib/supabase'
-import { prettyLeague, prettySport, reclassifySport, sportGroupKey } from '../lib/sports'
+import { prettySport, reclassifySport, sportGroupKey } from '../lib/sports'
+import { leagueLabel } from '../lib/oddsLibrary'
 
 export interface SportUniverse {
   sports: string[] // distinct prettified sports across the whole table
@@ -48,7 +49,7 @@ export interface TournamentActivity {
 let cached: SportUniverse | null = null
 let inflight: Promise<SportUniverse> | null = null
 
-// Loads the full (sport, league) universe from `live_fixtures` once per session.
+// Loads the full (sport, league) universe from `fixtures` once per session.
 // PostgREST caps responses at 1000 rows; we paginate. Dropdowns use this so
 // every sport/league is always listable — current scope decides counts.
 async function load(): Promise<SportUniverse> {
@@ -64,13 +65,15 @@ async function load(): Promise<SportUniverse> {
   const activityByTournament = new Map<string, TournamentActivity>()
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await sb
-      .from('live_fixtures')
-      .select('sport,league,status,season_type,scheduled_start')
+      .from('fixtures')
+      .select('sport,optic_league,tournament,category,status,season_type,scheduled_start')
       .range(from, from + PAGE - 1)
     if (error) throw error
     const rows = (data ?? []) as {
       sport: string | null
-      league: string | null
+      optic_league: string | null
+      tournament: string | null
+      category: string | null
       status: string | null
       season_type: string | null
       scheduled_start: string | null
@@ -79,15 +82,16 @@ async function load(): Promise<SportUniverse> {
       // Reclassify generic "rugby" rows so they merge into rugby_union /
       // rugby_league based on the competition. Matches what mapRow does for
       // the Fixture objects, so the sidebar key lines up with f.sport.
-      const rs = reclassifySport(r.sport ?? '', r.league ?? '')
-      const rl = r.league ?? ''
+      const rs = reclassifySport(r.sport ?? '', r.optic_league ?? '')
+      const rl = r.optic_league ?? ''
       // Drop rows whose raw sport field is empty — they'd surface as a broken
       // "Unknown" sidebar entry whose by-sport DB fetch returns nothing
       // (universe map has no rawSport for them, so the fetcher queries
       // `sport='Unknown'` which doesn't exist).
       if (!rs) continue
       const s = prettySport(rs)
-      const l = prettyLeague(rl)
+      // Same label the board renders, or the sport/league routes stop matching.
+      const l = leagueLabel(r.tournament, r.category, rl)
       if (!s) continue
       if (rs && !rawSport.has(s)) rawSport.set(s, rs)
       // Track every original raw slug that funneled into this prettified

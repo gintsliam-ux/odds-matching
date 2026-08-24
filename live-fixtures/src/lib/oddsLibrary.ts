@@ -1,17 +1,15 @@
 /**
  * Read layer for the Odds Library schema — `fixtures`, `odds`, `odds_sp`.
  *
- * NOT WIRED INTO THE UI YET. The board still reads `live_fixtures` via
- * dataSource.ts. This module exists so the switch is a one-line change in the
- * pages once two operational gaps close (measured 2026-08-20):
+ * This is the board's source. `dataSource.ts` queries `fixtures` and maps every
+ * row through `mapFixture` here.
  *
- *   · `odds` has ZERO rows with is_live=true — capture.mjs live isn't on cron,
- *     so there is no in-play pricing to replace live_fixtures.live_h2h_*.
- *   · Pregame coverage is thin on upcoming fixtures, which is when the board is
- *     actually used.
+ * The switch happened on 2026-08-24, when `live_fixtures` stopped being
+ * written: zero rows in the hour it was checked against 734 for `fixtures`,
+ * and 424 of the next week's 804 upcoming fixtures existed only in the new
+ * table — so the board was missing more than half its slate.
  *
- * Everything here is written against the real column names and verified against
- * live data. What the new schema gets right, and what this leans on:
+ * What the new schema gets right, and what this leans on:
  *
  *   · `normalized_selection` is 100% populated — home/away/draw/over/under — so
  *     sides are read from a field instead of string-matching `selection`
@@ -24,6 +22,9 @@
  *     markets, and abs() collapses them into one.
  *   · `odds_sp.fair_blend` is vig-stripped per book and blended, so a fair
  *     price no longer has to be derived in the client.
+ *
+ * What it does NOT carry: prices. `fixtures` has no odds columns at all, so the
+ * board's odds column is fetched separately — see cardOdds.ts.
  */
 
 import { getSupabase } from './supabase'
@@ -165,7 +166,22 @@ const FIXTURE_COLS =
  */
 const STALE_LIVE_H = 8
 
-/** `cancelled` has no place on a live board; it reads as finished. */
+/** A fixture with no actual_start this many hours past its scheduled kickoff is
+ *  not upcoming. Well beyond a real delay — rain-affected cricket and "not
+ *  before" tennis slots drift hours, never half a day. */
+const STALE_UPCOMING_H = 12
+
+/**
+ * Feed status, corrected for the two ways it goes stale.
+ *
+ * `cancelled` and everything else terminal reads as finished — the board has
+ * no fourth bucket, and anything but `upcoming` or `live` is over.
+ *
+ * The guards match the ones the old table needed. `fixtures` is far better
+ * behaved (14 stale-upcoming rows against live_fixtures' 313), so these are
+ * mostly belt-and-braces here, but a fixture stuck upcoming is the exact
+ * symptom that sent the board full of games that had already started.
+ */
 function mapStatus(row: FixtureRow, nowMs = Date.now()): FixtureStatus {
   switch (row.status) {
     case 'live': {
@@ -174,8 +190,14 @@ function mapStatus(row: FixtureRow, nowMs = Date.now()): FixtureStatus {
       if (Number.isFinite(started) && nowMs - started > STALE_LIVE_H * 3_600_000) return 'completed'
       return 'live'
     }
-    case 'upcoming':
+    case 'upcoming': {
+      // An actual_start in the past means it began, whatever `status` says.
+      const actual = row.actual_start ? Date.parse(row.actual_start) : NaN
+      if (Number.isFinite(actual) && actual < nowMs) return 'completed'
+      const sched = row.scheduled_start ? Date.parse(row.scheduled_start) : NaN
+      if (Number.isFinite(sched) && nowMs - sched > STALE_UPCOMING_H * 3_600_000) return 'completed'
       return 'upcoming'
+    }
     default:
       return 'completed'
   }
@@ -214,6 +236,30 @@ function periodList(row: FixtureRow): PeriodScore[] {
  * The odds fields are left null here — prices come from `odds`/`odds_sp` via
  * fetchMarkets, not from the fixture row.
  */
+/**
+ * Display name for a competition.
+ *
+ * Exported because the sidebar builds its league lists straight from the table
+ * and has to agree with the board's labels character-for-character — the two
+ * are matched by string in the sport/league routes.
+ *
+ * Prefer `tournament`, qualified by `category` where that adds something. The
+ * Odds Library's slugs lead with the sport, so prettifying `optic_league`
+ * yields "Soccer Hungary Nb Ii" — the sport repeated beside itself — and is a
+ * last resort.
+ */
+export function leagueLabel(
+  tournament: string | null | undefined,
+  category: string | null | undefined,
+  opticLeague: string | null | undefined,
+): string {
+  if (!tournament) return prettyLeague(opticLeague ?? '')
+  if (category && category !== 'International' && !tournament.includes(category)) {
+    return `${category} · ${tournament}`
+  }
+  return tournament
+}
+
 export function mapFixture(row: FixtureRow, nowMs = Date.now()): Fixture {
   const status = mapStatus(row, nowMs)
   const { home, away } = names(row)
@@ -224,11 +270,7 @@ export function mapFixture(row: FixtureRow, nowMs = Date.now()): Fixture {
   // beside itself in the UI. `tournament` is the display name the schema
   // provides for exactly this ("Serie A", "Cincinnati", "UFC 300"), and
   // `category` disambiguates same-named competitions across countries.
-  const league = row.tournament
-    ? row.category && row.category !== 'International' && !row.tournament.includes(row.category)
-      ? `${row.category} · ${row.tournament}`
-      : row.tournament
-    : prettyLeague(row.optic_league ?? '')
+  const league = leagueLabel(row.tournament, row.category, row.optic_league)
   const startTime =
     (status === 'live' ? row.actual_start ?? row.scheduled_start : row.scheduled_start) ??
     row.scheduled_start ??
