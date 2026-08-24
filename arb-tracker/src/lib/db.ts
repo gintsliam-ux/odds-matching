@@ -74,6 +74,7 @@ function localLeagueLogo(sport: string, cat: string, name: string): string | und
   if (sport === 'mma' && is('ufc')) return '/logos/leagues/ufc.png';
   if (sport === 'amfootball' && is('ncaaf')) return '/logos/leagues/ncaaf.png';
   if (sport === 'amfootball' && is('nfl')) return '/logos/leagues/nfl.png';
+  if (sport === 'darts' && is('modus')) return '/logos/leagues/modus.png';
   return undefined;
 }
 
