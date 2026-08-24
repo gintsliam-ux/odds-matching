@@ -1,4 +1,4 @@
-// Logo resolver. Reads distinct team/player names from `live_fixtures`,
+// Logo resolver. Reads distinct team/player names from `fixtures`,
 // resolves a logo/headshot URL for each (Wikipedia search → REST summary), and
 // upserts them into `entity_logos`. Majors (MLB/NFL/NHL/NBA/WNBA) are skipped —
 // the app resolves those from ESPN's CDN directly.
@@ -130,7 +130,11 @@ export async function runResolver(opts = {}) {
   ;({ REST, H } = credentials())
 
   log('Loading fixtures…')
-  const rows = await getAll('live_fixtures?select=sport,league,home_team,away_team')
+  // `fixtures`; live_fixtures was retired 2026-08-24. Ordered by the primary
+  // key because a paged PostgREST read without ORDER BY is not a stable slice.
+  const rows = await getAll(
+    'fixtures?select=sport,league:optic_league,home_team,away_team&source=eq.optic&order=fixture_id.asc',
+  )
   log(`${rows.length} fixture rows.`)
 
   // distinct (sport, name), skipping majors

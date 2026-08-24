@@ -553,7 +553,7 @@ function DetailsTab({
 
 function OpticPanel({ fixture: f, now }: { fixture: Fixture; now: Date }) {
   return (
-    <SourcePanel kind="OPTIC" subtitle="live_fixtures">
+    <SourcePanel kind="OPTIC" subtitle="fixtures">
       <Grid>
         <Field label="SPORT" value={f.sport.toUpperCase()} />
         <Field label="LEAGUE" value={f.league} />

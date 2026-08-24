@@ -22,6 +22,10 @@ const MONGO_COLL = env.MONGO_COLL ?? process.env.MONGO_COLL ?? 'events'
 if (!SUP_URL || !SUP_KEY) bail('Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY')
 if (!MONGO_URI) bail('Missing MONGO_URI')
 
+/** How far back a fixture is still worth loading for matching. Comfortably
+ *  clears the event window while keeping the query near the old table's size. */
+const MATCH_HORIZON_D = 45
+
 const REST = `${SUP_URL}/rest/v1`
 const HDR = { apikey: SUP_KEY, Authorization: `Bearer ${SUP_KEY}` }
 
@@ -515,10 +519,32 @@ export async function runMapping(opts = {}) {
 }
 
 async function main(opts = { writeSnapshot: true }) {
-  console.log('• Loading OpticOdds live_fixtures…')
-  const opticRows = await getAllSupabase(
-    'live_fixtures?select=optic_fixture_id,sport,league,season_type,home_team,away_team,scheduled_start',
-  )
+  console.log('• Loading OpticOdds fixtures…')
+  // `fixtures`, not `live_fixtures`. The old table was retired on 2026-08-24
+  // (its four live-tracker crons removed); nothing writes it now. By then 424
+  // of the next week's 804 upcoming fixtures existed only here, none of which
+  // this matcher could see, so none could be paired to a book.
+  //
+  // Bounded twice, because `fixtures` is much larger than what it replaces:
+  //   · source=optic — the rest is the archive migration, carrying synthetic
+  //     `syn_...` ids no book has ever listed, and none has ever appeared in
+  //     event_mapping.
+  //   · last MATCH_HORIZON_D days — older fixtures are settled and their
+  //     mapping cannot change.
+  //
+  // Ordered by the PRIMARY KEY. A paged PostgREST read without ORDER BY is not
+  // a stable slice: rows shift between requests, so pages repeat and drop
+  // records. `fixtures` has no `id` column — its key is `fixture_id`.
+  //
+  // Column names differ, so both are aliased back to what the matcher already
+  // calls them and nothing downstream changes.
+  const horizon = new Date(Date.now() - MATCH_HORIZON_D * 86_400_000).toISOString()
+  const opticRows = (
+    await getAllSupabase(
+      'fixtures?select=optic_fixture_id:fixture_id,sport,league:optic_league,season_type,home_team,away_team,scheduled_start' +
+        `&source=eq.optic&scheduled_start=gte.${horizon}&order=fixture_id.asc`,
+    )
+  ).filter((r) => r.optic_fixture_id)
   console.log(`  ${opticRows.length} fixtures.`)
 
   console.log('• Loading gutsy.events from Mongo…')
@@ -986,7 +1012,21 @@ async function deleteAllAutoUnverified() {
   if (!r.ok) bail(`delete auto unverified → ${r.status}: ${await r.text()}`)
 }
 
-async function upsertAll(pathAndQuery, items) {
+/** Drop rows repeating a conflict key within one batch. Postgres refuses an
+ *  ON CONFLICT DO UPDATE that would touch a row twice — and fails the whole
+ *  statement, not the row. Keeps the last occurrence, which is what a second
+ *  upsert would have left anyway. */
+function dedupeOnConflict(pathAndQuery, items) {
+  const m = /on_conflict=([^&]+)/.exec(pathAndQuery)
+  if (!m) return items
+  const cols = decodeURIComponent(m[1]).split(',')
+  const byKey = new Map()
+  for (const it of items) byKey.set(cols.map((c) => String(it[c] ?? '')).join('\u0000'), it)
+  return [...byKey.values()]
+}
+
+async function upsertAll(pathAndQuery, itemsRaw) {
+  const items = dedupeOnConflict(pathAndQuery, itemsRaw)
   const CHUNK = 500
   for (let i = 0; i < items.length; i += CHUNK) {
     const slice = items.slice(i, i + CHUNK)

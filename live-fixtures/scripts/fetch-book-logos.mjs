@@ -151,19 +151,21 @@ async function booksInUse() {
   const key = process.env.VITE_SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY
   if (!url || !key) throw new Error('Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY')
   const H = { apikey: key, Authorization: `Bearer ${key}` }
+  // Book names come from `odds.sportsbook` — one column, one row per quote.
+  // They used to be dug out of `live_fixtures.pregame_odds`, whose keys were
+  // the book names; that table was retired on 2026-08-24 and the new fixtures
+  // table carries no prices at all.
+  //
+  // Ordered by the primary key: a paged PostgREST read without ORDER BY is not
+  // a stable slice, so pages would repeat and drop rows.
   const seen = new Set()
-  for (let from = 0; ; from += 1000) {
-    const res = await fetch(
-      `${url}/rest/v1/live_fixtures?select=pregame_odds,live_bookmaker&pregame_odds=not.is.null&order=scheduled_start.desc&offset=${from}&limit=1000`,
-      { headers: H },
-    )
+  for (let from = 0; from < 200_000; from += 1000) {
+    const res = await fetch(`${url}/rest/v1/odds?select=sportsbook&order=id.asc`, {
+      headers: { ...H, Range: `${from}-${from + 999}`, 'Range-Unit': 'items' },
+    })
     const rows = await res.json()
     if (!Array.isArray(rows) || !rows.length) break
-    for (const r of rows) {
-      for (const blk of Object.values(r.pregame_odds ?? {}))
-        for (const k of Object.keys(blk ?? {})) if (k !== 'line') seen.add(k)
-      if (r.live_bookmaker) seen.add(r.live_bookmaker)
-    }
+    for (const r of rows) if (r.sportsbook) seen.add(r.sportsbook)
     if (rows.length < 1000) break
   }
   return [...seen]
