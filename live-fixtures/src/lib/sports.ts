@@ -221,6 +221,8 @@ const PARENT_SPORT: Record<string, string> = {
   nhl: 'Ice Hockey',
   nfl: 'American Football',
   amfootball: 'American Football',
+  gridiron: 'American Football', // mybet's name for it
+  cfl: 'American Football',
   afl: 'Australian Rules',
   aussierules: 'Australian Rules',
   nrl: 'Rugby League',
@@ -231,6 +233,12 @@ const PARENT_SPORT: Record<string, string> = {
   // tournaments.
   laliga: 'Soccer',
   epl: 'Soccer',
+  seriea: 'Soccer',
+  // SwiftBet's name for soccer. The Mapping page's sport tabs merge OPTIC
+  // tournaments with SwiftBet competitions, so without this the board showed
+  // "Football" and "Soccer" as two sports — beside "American Football", which
+  // is the one thing it does not mean.
+  football: 'Soccer',
   kbo: 'Baseball',
   npb: 'Baseball',
   rugbyunion: 'Rugby Union',

@@ -43,7 +43,14 @@ const SPORT_MAP = {
   ligue1: 'football',
   ucl: 'football',
   uel: 'football',
-  football: 'american football', // OpticOdds rare use; usually `amfootball`
+  // "Football" is SOCCER here, not gridiron. SwiftBet labels its second-biggest
+  // sport that way — 3,620 events — while OPTIC has never once emitted
+  // `sport=football` (0 rows in live_fixtures and fixtures alike; it uses
+  // `soccer`, `ucl`, `laliga`, `epl`, `seriea`). Canonicalising it to american
+  // football meant SwiftBet's entire soccer catalogue could not match OPTIC
+  // soccer at all, which is why that pairing sat at 3%. Gridiron is covered by
+  // the four aliases below.
+  football: 'football',
   americanfootball: 'american football',
   amfootball: 'american football',
   nfl: 'american football',
