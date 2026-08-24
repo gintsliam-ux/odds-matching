@@ -115,7 +115,10 @@ function deriveLeague(
 
   // Tennis: the tour (ATP/WTA) is the wordmark badge; the tournament is the name.
   if (sport === 'tennis') {
-    const isTour = cat === 'ATP' || cat === 'WTA';
+    // Tour categories get a wordmark badge (the tournament rides in the name);
+    // other tennis categories fall back to a competition-entity logo.
+    const TOUR_LOGO: Record<string, string> = { ATP: 'atp', WTA: 'wta', 'ATP Challenger': 'atp-challenger' };
+    const slug = TOUR_LOGO[cat];
     return {
       league: {
         id,
@@ -123,8 +126,8 @@ function deriveLeague(
         category: context,
         code: code(name),
         sport: label,
-        logoUrl: isTour ? `/logos/leagues/${cat.toLowerCase()}.png` : compLogo(name),
-        wordmark: isTour,
+        logoUrl: slug ? `/logos/leagues/${slug}.png` : compLogo(name),
+        wordmark: !!slug,
       },
       subtitle: stage || undefined,
     };
