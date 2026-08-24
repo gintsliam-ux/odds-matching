@@ -44,6 +44,12 @@ const STALE_LIVE_H = 8
  *  "upcoming" stuck-overdue. */
 const STALE_GHOST_H = 4
 
+/** A fixture with no actual_start and no live data this many hours past its
+ *  scheduled kickoff is not upcoming, whether or not it was ever priced. Set
+ *  well beyond a real delay: rain-affected cricket and "not before" tennis
+ *  slots drift hours, never half a day. */
+const STALE_UPCOMING_H = 12
+
 const COLUMNS = '*'
 
 /** The board feed: all live games + everything scheduled in the near window. */
@@ -405,13 +411,38 @@ function mapRow(r: Row, nowMs: number): Fixture {
   // notification. The closing-line arm of this test went with the columns; it
   // was never load-bearing, since a fixture with a closing line always had
   // pregame odds too.
+  // An actual_start in the past means the fixture HAS begun, so "upcoming" is
+  // simply wrong — 5 rows carried one while still marked upcoming, one of them
+  // 272 h past its scheduled time with a score of 6. It is either still running
+  // (the live branch above already had its chance) or it finished.
+  if (status === 'upcoming' && r.actual_start && Date.parse(r.actual_start) < nowMs) {
+    status = 'completed'
+  }
   if (status === 'upcoming' && !r.actual_start && r.scheduled_start) {
     const overdueMs = nowMs - new Date(r.scheduled_start).getTime()
+    const noLive = r.live_h2h_home == null && r.live_updated_at == null
     if (overdueMs > STALE_GHOST_H * 3_600_000) {
       const noPregame =
         !r.pregame_odds || (typeof r.pregame_odds === 'object' && Object.keys(r.pregame_odds).length === 0)
-      const noLive = r.live_h2h_home == null && r.live_updated_at == null
       if (noPregame && noLive) status = 'completed'
+    }
+    // Having been PRICED says the fixture was real, not that it is still
+    // coming. 178 of the 297 rows sitting more than 12 h past their start were
+    // escaping the test above on the pregame-odds condition alone — 40 of them
+    // carrying a final score, so they had plainly been played and simply never
+    // settled upstream. Cross-checked against the new `fixtures` table, 105 of
+    // these read `completed` there and 37 `cancelled`.
+    //
+    // A genuine delay is hours, not half a day: the distribution here is 1 row
+    // 1-3 h late, 10 at 3-12 h, then 82 at 12-48 h and 220 beyond 48 h. So the
+    // odds condition is dropped past STALE_UPCOMING_H, while the "· delay?"
+    // badge still flags the short overdue window it was built for.
+    // No `noLive` condition here, unlike the ghost test above. There it means
+    // "nothing ever happened, so the game didn't". Here the fixture is already
+    // half a day past its start, and live data is evidence it DID happen — 14
+    // rows were surviving on that clause alone, one of them 272 h late.
+    if (status === 'upcoming' && overdueMs > STALE_UPCOMING_H * 3_600_000) {
+      status = 'completed'
     }
   }
   const live = status === 'live'
@@ -495,10 +526,20 @@ function mapRow(r: Row, nowMs: number): Fixture {
   }
 }
 
+/** Statuses that mean "not going to be played, or already isn't". None of them
+ *  belong in Upcoming, and the board has no fourth bucket to put them in. The
+ *  new `fixtures` table already carries `cancelled` (61 rows); `live_fixtures`
+ *  has never emitted one, but it fell through to `upcoming` if it ever did,
+ *  which would have shown a cancelled game as one about to start. */
+const TERMINAL_STATUSES = [
+  'completed', 'final', 'finished', 'ended', 'closed', 'ft',
+  'cancelled', 'canceled', 'abandoned', 'postponed', 'walkover', 'retired', 'void',
+]
+
 function normStatus(status: string | null, isLive: boolean | null): FixtureStatus {
   if (isLive === true) return 'live'
   const s = (status ?? '').toLowerCase()
   if (['live', 'in_play', 'inplay', 'playing', 'started'].includes(s)) return 'live'
-  if (['completed', 'final', 'finished', 'ended', 'closed', 'ft'].includes(s)) return 'completed'
+  if (TERMINAL_STATUSES.includes(s)) return 'completed'
   return 'upcoming'
 }
