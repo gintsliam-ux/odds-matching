@@ -17,6 +17,9 @@ function priceText(p: number | null | undefined): string {
   return p != null ? p.toFixed(2) : '–';
 }
 
+// Individuals (abbreviated by surname, may fly a flag) rather than teams.
+const PERSON_SPORTS = new Set(['Tennis', 'MMA', 'Boxing', 'Golf', 'Darts']);
+
 /** One team's line: crest/flag + abbreviation, then its score or H2H price. */
 function SideLine({
   event,
@@ -29,9 +32,10 @@ function SideLine({
   played: boolean;
   prices: Map<string, H2HPrices>;
 }) {
-  const isPerson = event.sport === 'Tennis';
+  const isPerson = PERSON_SPORTS.has(event.sport);
   const name = side === 'home' ? event.home : event.away;
   const country = side === 'home' ? event.homeCountry : event.awayCountry;
+  const logo = side === 'home' ? event.homeLogo : event.awayLogo;
   const score = side === 'home' ? event.homeScore : event.awayScore;
   const other = side === 'home' ? event.awayScore : event.homeScore;
   const winning = played && score != null && other != null && score > other;
@@ -44,7 +48,7 @@ function SideLine({
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="flex min-w-0 items-center gap-1.5">
-        <TeamLogo name={name} size={14} country={country} />
+        <TeamLogo name={name} size={14} country={country} logo={logo} />
         <span className="text-xs font-medium text-slate-200">
           {teamAbbr(name, isPerson)}
         </span>

@@ -7,28 +7,36 @@ function initials(name: string): string {
 }
 
 /**
- * The mark beside a competitor: a club crest for teams, a national flag for
- * individuals (tennis), and an initials circle when we have neither — which is
- * also what an unresolved player gets, so a missing flag reads as deliberate.
+ * The mark beside a competitor: a national flag for individuals when we know
+ * their country, otherwise a resolved crest/photo (from the entities view),
+ * then a local crest, and finally an initials circle. Candidates are tried in
+ * order — each 404 falls through to the next, so a missing image degrades
+ * gracefully rather than showing a broken tile.
  */
 export function TeamLogo({
   name,
   size = 22,
   country,
+  logo,
 }: {
   name: string;
   size?: number;
-  /** ISO-3166 alpha-2, lowercased. Flies a flag instead of looking for a crest. */
+  /** ISO-3166 alpha-2, lowercased. Flies a flag ahead of any crest. */
   country?: string | null;
+  /** Resolved crest/photo URL from the entities view, if any. */
+  logo?: string | null;
 }) {
-  const src = country ? `https://flagcdn.com/w80/${country}.png` : teamLogoUrl(name);
-  // Track *which* src failed, not a bare boolean — otherwise navigating to a new
-  // event reuses this instance with its stale "broken" still set, hiding the new
-  // team's good logo behind initials.
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  const broken = failedSrc === src;
+  const flag = country ? `https://flagcdn.com/w80/${country}.png` : null;
+  const candidates = [flag, logo || null, name ? teamLogoUrl(name) : null].filter(
+    (c): c is string => Boolean(c),
+  );
 
-  if (broken || (!country && !name)) {
+  // Track failed srcs (not a bare boolean) so a new event's fresh URLs aren't
+  // hidden behind a stale "broken" from the previous render of this instance.
+  const [failed, setFailed] = useState<Set<string>>(new Set());
+  const src = candidates.find((c) => !failed.has(c)) ?? null;
+
+  if (!src) {
     return (
       <span
         title={name}
@@ -42,6 +50,7 @@ export function TeamLogo({
 
   // Flags are 4:3, so they letterbox inside the square slot every other mark
   // uses — keeping rows aligned whether a competitor is a club or a person.
+  const isFlag = src === flag;
   return (
     <img
       src={src}
@@ -49,8 +58,8 @@ export function TeamLogo({
       title={name}
       width={size}
       height={size}
-      onError={() => setFailedSrc(src)}
-      className={`inline-block shrink-0 object-contain ${country ? 'rounded-[2px]' : ''}`}
+      onError={() => setFailed((prev) => new Set(prev).add(src))}
+      className={`inline-block shrink-0 object-contain ${isFlag ? 'rounded-[2px]' : ''}`}
       style={{ width: size, height: size }}
     />
   );

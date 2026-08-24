@@ -19,13 +19,17 @@ export interface Countdown {
 
 const MIN = 60_000;
 
-/** Effective status: a scheduled event whose start has passed reads as live. */
-export function effectiveStatus(event: SportEvent, now: number): EventStatus {
+/**
+ * Effective status, from the fixture's authoritative signals — NOT the clock.
+ * An event is live only if the feed says so (`status='live'`, the `is_live`
+ * flag, or a stamped `actualStart`); a scheduled start that has merely passed
+ * does NOT imply live (matches run late / get postponed, especially tennis).
+ */
+export function effectiveStatus(event: SportEvent, _now: number): EventStatus {
   if (event.status === 'final') return 'final';
-  // Off states stay off — never let the time check below promote them to live.
   if (event.status === 'cancelled') return 'cancelled';
-  if (event.status === 'live') return 'live';
-  return now >= new Date(event.startsAt).getTime() ? 'live' : 'upcoming';
+  if (event.status === 'live' || event.isLive || event.actualStart) return 'live';
+  return 'upcoming';
 }
 
 function pad(n: number): string {
@@ -56,6 +60,11 @@ export function countdownFor(event: SportEvent, now: number): Countdown {
   if (status === 'live') return { tone: 'live', label: 'LIVE', pulse: true };
 
   const ms = new Date(event.startsAt).getTime() - now;
+
+  // Start time has passed but the feed hasn't marked it live/final — it's late
+  // or postponed (common in tennis). Don't pulse a fake "00:00"; show "Delayed".
+  if (ms <= 0) return { tone: 'scheduled', label: 'Delayed', pulse: false };
+
   const totalSec = Math.max(0, Math.floor(ms / 1000));
   const mmss = `${pad(Math.floor(totalSec / 60))}:${pad(totalSec % 60)}`;
 

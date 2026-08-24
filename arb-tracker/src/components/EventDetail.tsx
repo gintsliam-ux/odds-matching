@@ -157,6 +157,8 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
   // Selection labels carry a competitor name; map it back to its flag.
   const countryFor = (team: string) =>
     team === home ? event.homeCountry : team === away ? event.awayCountry : null;
+  const logoFor = (team: string) =>
+    team === home ? event.homeLogo : team === away ? event.awayLogo : null;
   const clockText = liveLabel(event.sport, event.period, event.clock);
 
   return (
@@ -167,8 +169,15 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
         <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
           <span className="flex items-center gap-1.5">
             <LeagueBadge league={event.league} size={16} />
-            {/* Tennis names the tournament here — "ATP · Tennis" says nothing. */}
-            {event.league.name} · {event.subtitle ?? event.sport}
+            {/* category · competition · stage — e.g. "ATP · Cincinnati ·
+                Quarterfinals"; falls back to the sport for a second segment. */}
+            {(() => {
+              const parts = [event.league.category, event.league.name, event.subtitle].filter(
+                Boolean,
+              ) as string[];
+              if (parts.length === 1) parts.push(event.sport);
+              return parts.join(' · ');
+            })()}
           </span>
           <span>
             {outright ? dateRangeLabel(event.startsAt, event.endsAt) : metaLabel(event.startsAt)}
@@ -208,7 +217,7 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
             <span className="truncate text-right text-base font-semibold text-slate-100">
               {home}
             </span>
-            <TeamLogo name={home} size={40} country={event.homeCountry} />
+            <TeamLogo name={home} size={40} country={event.homeCountry} logo={event.homeLogo} />
           </div>
 
           {/* score / status */}
@@ -241,7 +250,7 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
 
           {/* away */}
           <div className="flex min-w-0 flex-1 items-center gap-2.5">
-            <TeamLogo name={away} size={40} country={event.awayCountry} />
+            <TeamLogo name={away} size={40} country={event.awayCountry} logo={event.awayLogo} />
             <span className="truncate text-base font-semibold text-slate-100">
               {away}
             </span>
@@ -319,6 +328,7 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
                 showExchange={showExchange}
                 onHover={setHover}
                 countryFor={countryFor}
+                logoFor={logoFor}
               />
             ))}
           </table>
@@ -345,12 +355,14 @@ function MarketRows({
   showExchange,
   onHover,
   countryFor,
+  logoFor,
 }: {
   group: MarketGroup;
   totalCols: number;
   showExchange: boolean;
   onHover: HoverFn;
   countryFor: (team: string) => string | null | undefined;
+  logoFor: (team: string) => string | null | undefined;
 }) {
   // Each market is its own <tbody> so its sticky name is bounded by the market
   // — the next market's name pushes it out and replaces it.
@@ -386,7 +398,7 @@ function MarketRows({
             <td className={`sticky left-0 z-10 px-3 py-2 text-slate-200 ${cellBg}`}>
               <span className="flex items-center gap-2">
                 {row.team ? (
-                  <TeamLogo name={row.team} size={18} country={countryFor(row.team)} />
+                  <TeamLogo name={row.team} size={18} country={countryFor(row.team)} logo={logoFor(row.team)} />
                 ) : row.label === 'Draw' ? (
                   // The draw outcome has no team — a soccer ball stands in, sized
                   // to match the team crests either side of it.

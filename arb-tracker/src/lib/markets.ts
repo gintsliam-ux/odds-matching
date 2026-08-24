@@ -10,14 +10,15 @@ export interface Bookmaker {
 }
 
 // The core fixed-odds columns, shown for every sport in this order. `id`
-// matches the odds table `sportsbook`.
+// matches the canonical `sportsbook` key in the odds table (see the `books`
+// reference table — e.g. `ladbrokes`, not `ladbrokes_australia`).
 export const BOOKMAKERS: Bookmaker[] = [
   { id: 'pinnacle', name: 'Pinnacle', color: '#c81e1e', mark: 'PIN', logoUrl: '/logos/brands/pinnacle.png' },
   { id: 'tab', name: 'TAB', color: '#009845', mark: 'TAB', logoUrl: '/logos/brands/tab.png' },
   { id: 'sportsbet', name: 'Sportsbet', color: '#2563eb', mark: 'SP', logoUrl: '/logos/brands/sportsbet.png' },
   { id: 'bet365', name: 'Bet365', color: '#059669', mark: '365', logoUrl: '/logos/brands/bet365.png' },
   { id: 'tabtouch', name: 'TABtouch', color: '#5b2d8e', mark: 'TT', logoUrl: '/logos/brands/tabtouch.png' },
-  { id: 'ladbrokes_australia', name: 'Ladbrokes', color: '#dc2626', mark: 'LAD', logoUrl: '/logos/brands/ladbrokes_australia.png' },
+  { id: 'ladbrokes', name: 'Ladbrokes', color: '#dc2626', mark: 'LAD', logoUrl: '/logos/brands/ladbrokes.png' },
 ];
 
 // Optional books that only some sports fetch — shown as a column only when the
@@ -39,7 +40,8 @@ const GOLF_BOOKS: Bookmaker[] = [
 
 /**
  * Canonical key for a golf player across books that spell them differently —
- * US books write "Cameron Young", TAB writes "YOUNG Cameron". Lowercase, drop
+ * US books write "Cameron Young", TAB writes "YOUNG Cameron". Used only as a
+ * fallback now that odds carry `normalized_selection`. Lowercase, drop
  * punctuation, sort the name tokens so order and case don't matter.
  */
 // Letters that don't decompose under NFD (so accent-stripping misses them).
@@ -108,16 +110,16 @@ export function eventBooks(rows: OddsRow[], leagueId?: string): Bookmaker[] {
   return [...has, ...missing];
 }
 
-// Betfair is the exchange. Back = `betfair_exchange_australia` (is_lay false),
-// lay = `betfair_exchange_australia_lay` (is_lay true, a separate sportsbook).
+// Betfair is the exchange. Back = the `betfair` book (is_lay false), lay = the
+// separate `betfair_lay` book.
 export const BETFAIR: Bookmaker = {
-  id: 'betfair_exchange_australia',
+  id: 'betfair',
   name: 'Betfair',
   color: '#f59e0b',
   mark: 'BF',
-  logoUrl: '/logos/brands/betfair_exchange_australia.png',
+  logoUrl: '/logos/brands/betfair.png',
 };
-const BETFAIR_LAY_ID = 'betfair_exchange_australia_lay';
+const BETFAIR_LAY_ID = 'betfair_lay';
 
 const BY_ID: Record<string, Bookmaker> = Object.fromEntries(
   [...BOOKMAKERS, ...OPTIONAL_BOOKS, ...GOLF_BOOKS, BETFAIR].map((b) => [b.id, b]),
@@ -190,7 +192,7 @@ export interface SelectionRow {
   bestBookId: string | null;
   bestPrice: number | null;
   bestDetail: PriceDetail | null;
-  /** True for both rows of the pick-'em main line (spread/total ladders). */
+  /** True for both rows of the main line (spread/total ladders). */
   isMain?: boolean;
   /** True on the first row of each line pair, for a divider above it. */
   groupStart?: boolean;
@@ -202,11 +204,27 @@ export interface MarketGroup {
   selections: SelectionRow[];
 }
 
-/** One row from a `<sport>_odds` table. */
+/** One row from the unified `odds` table. */
 export interface OddsRow {
   market_id: string;
+  market_name: string | null;
   selection: string;
+  /** home / away / draw / over / under / yes / no, or an outright slug. */
+  normalized_selection: string | null;
   line: number | null;
+  /** abs(line) — pairs totals (shared line) and handicaps (opposite signs). */
+  line_group: number | null;
+  /**
+   * The handicap line signed from the home side; both rows of a two-sided
+   * ladder (home -1.5 / away +1.5) share it. Groups spreads correctly, since
+   * home -1.5/away +1.5 and home +1.5/away -1.5 are DIFFERENT markets that
+   * abs(line) would wrongly merge.
+   */
+  pair_key: number | null;
+  /** 1 = home / Over / Yes, 2 = away / Under / No, 3 = Draw. */
+  outcome_no: number | null;
+  /** Exactly one line per book per market — the main line. */
+  is_main: boolean | null;
   sportsbook: string;
   is_lay: boolean;
   current_price: number | null;
@@ -225,81 +243,159 @@ export interface OddsRow {
   daily_prices: Record<string, number> | null;
 }
 
-// market_id -> display, in the order the grid shows them. `kind` drives the
-// ladder shape, since the id naming differs per sport (point_spread/run_line).
-// 'outright' is a flat field of selections (golf winner), no home/away or line.
-type MarketKind = 'h2h' | 'spread' | 'total' | 'outright';
+// Canonical market ids are shared across sports (spread, total, moneyline, …);
+// only the labels and which markets exist differ per sport. `kind` drives the
+// ladder shape. Markets with no rows are dropped, so a list can be a superset.
+type MarketKind = 'h2h' | 'spread' | 'total' | 'outright' | 'flat';
 interface MarketDef {
   id: string;
   label: string;
   kind: MarketKind;
 }
 
-const DEFAULT_MARKETS: MarketDef[] = [
-  { id: 'moneyline', label: 'Head to Head', kind: 'h2h' },
-  { id: 'point_spread', label: 'Line', kind: 'spread' },
-  { id: 'total_points', label: 'Total', kind: 'total' },
-  { id: '1st_half_moneyline', label: '1st Half — Head to Head', kind: 'h2h' },
-  { id: '1st_half_point_spread', label: '1st Half — Line', kind: 'spread' },
-  { id: '1st_half_total_points', label: '1st Half — Total', kind: 'total' },
+const D = (id: string, label: string, kind: MarketKind): MarketDef => ({ id, label, kind });
+
+// Generic team sports: H2H / Line / Total, plus halves.
+const TEAM_DEFAULT: MarketDef[] = [
+  D('moneyline', 'Head to Head', 'h2h'),
+  D('spread', 'Line', 'spread'),
+  D('total', 'Total', 'total'),
+  D('1h_moneyline', '1st Half — Head to Head', 'h2h'),
+  D('1h_spread', '1st Half — Line', 'spread'),
+  D('1h_total', '1st Half — Total', 'total'),
 ];
 
-// Baseball prices a run line rather than a spread, and its `1st_half_*` feed
-// markets are the first five innings.
-const MLB_MARKETS: MarketDef[] = [
-  { id: 'moneyline', label: 'Head to Head', kind: 'h2h' },
-  { id: 'run_line', label: 'Run Line', kind: 'spread' },
-  { id: 'total_runs', label: 'Total Runs', kind: 'total' },
-  { id: '1st_half_moneyline', label: 'First 5 Innings — Head to Head', kind: 'h2h' },
-  { id: '1st_half_run_line', label: 'First 5 Innings — Run Line', kind: 'spread' },
-  { id: '1st_half_total_runs', label: 'First 5 Innings — Total Runs', kind: 'total' },
-];
-
-// Tennis handicaps come in two flavours (games and sets) and the short-form
-// market is the opening set rather than a half.
-const TENNIS_MARKETS: MarketDef[] = [
-  { id: 'moneyline', label: 'Head to Head', kind: 'h2h' },
-  { id: 'game_spread', label: 'Game Handicap', kind: 'spread' },
-  { id: 'set_handicap', label: 'Set Handicap', kind: 'spread' },
-  { id: 'total_games', label: 'Total Games', kind: 'total' },
-  { id: '1st_set_moneyline', label: '1st Set — Head to Head', kind: 'h2h' },
-  { id: '1st_set_game_spread', label: '1st Set — Game Handicap', kind: 'spread' },
-  { id: '1st_set_total_games', label: '1st Set — Total Games', kind: 'total' },
-];
-
-// Soccer: 3-way result (the Draw rides through the h2h builder as an extra),
-// asian handicap, and goals lines.
 const SOCCER_MARKETS: MarketDef[] = [
-  { id: 'moneyline', label: 'Result', kind: 'h2h' },
-  { id: 'asian_handicap', label: 'Handicap', kind: 'spread' },
-  { id: 'total_goals', label: 'Total Goals', kind: 'total' },
-  { id: '1st_half_moneyline', label: '1st Half — Result', kind: 'h2h' },
-  { id: '1st_half_asian_handicap', label: '1st Half — Handicap', kind: 'spread' },
-  { id: '1st_half_total_goals', label: '1st Half — Total Goals', kind: 'total' },
+  D('moneyline', 'Result', 'h2h'),
+  D('spread', 'Handicap', 'spread'),
+  D('total', 'Total Goals', 'total'),
+  D('dnb', 'Draw No Bet', 'h2h'),
+  D('double_chance', 'Double Chance', 'flat'),
+  D('btts', 'Both Teams to Score', 'flat'),
+  D('asian_total', 'Asian Total', 'total'),
+  D('1h_moneyline', '1st Half — Result', 'h2h'),
+  D('1h_spread', '1st Half — Handicap', 'spread'),
+  D('1h_total', '1st Half — Total Goals', 'total'),
+  D('1h_asian_total', '1st Half — Asian Total', 'total'),
 ];
 
-// A UFC fight: who wins, and the rounds line.
-const UFC_MARKETS: MarketDef[] = [
-  { id: 'moneyline', label: 'Winner', kind: 'h2h' },
-  { id: 'total_rounds', label: 'Total Rounds', kind: 'total' },
+const GRIDIRON_MARKETS: MarketDef[] = [
+  D('moneyline', 'Head to Head', 'h2h'),
+  D('spread', 'Line', 'spread'),
+  D('total', 'Total Points', 'total'),
+  D('1h_moneyline', '1st Half — Head to Head', 'h2h'),
+  D('1h_spread', '1st Half — Line', 'spread'),
+  D('1h_total', '1st Half — Total Points', 'total'),
+  D('1q_moneyline', '1st Quarter — Head to Head', 'h2h'),
+  D('1q_spread', '1st Quarter — Line', 'spread'),
+  D('1q_total', '1st Quarter — Total Points', 'total'),
 ];
 
-// Golf: a single outright market — the field of players priced to win.
-const GOLF_MARKETS: MarketDef[] = [{ id: 'winner', label: 'Outright', kind: 'outright' }];
+const BASKETBALL_MARKETS: MarketDef[] = GRIDIRON_MARKETS;
+const AUSSIE_MARKETS: MarketDef[] = GRIDIRON_MARKETS;
 
+const RUGBY_MARKETS: MarketDef[] = [
+  D('moneyline', 'Head to Head', 'h2h'),
+  D('spread', 'Line', 'spread'),
+  D('total', 'Total Points', 'total'),
+  D('1h_moneyline', '1st Half — Head to Head', 'h2h'),
+  D('1h_spread', '1st Half — Line', 'spread'),
+  D('1h_total', '1st Half — Total Points', 'total'),
+];
+
+const HOCKEY_MARKETS: MarketDef[] = [
+  D('moneyline', 'Head to Head', 'h2h'),
+  D('spread', 'Puck Line', 'spread'),
+  D('total', 'Total', 'total'),
+  D('1p_moneyline', '1st Period — Head to Head', 'h2h'),
+  D('1p_spread', '1st Period — Puck Line', 'spread'),
+  D('1p_total', '1st Period — Total', 'total'),
+];
+
+// Baseball prices a run line; its half markets are the first five innings and
+// there are dedicated first-inning markets.
+const MLB_MARKETS: MarketDef[] = [
+  D('moneyline', 'Head to Head', 'h2h'),
+  D('spread', 'Run Line', 'spread'),
+  D('total', 'Total Runs', 'total'),
+  D('1h_moneyline', 'First 5 Innings — Head to Head', 'h2h'),
+  D('1h_spread', 'First 5 Innings — Run Line', 'spread'),
+  D('1h_total', 'First 5 Innings — Total Runs', 'total'),
+  D('1inn_moneyline', '1st Inning — Head to Head', 'h2h'),
+  D('1inn_spread', '1st Inning — Run Line', 'spread'),
+  D('1inn_total', '1st Inning — Total Runs', 'total'),
+];
+
+// Tennis handicaps come in two flavours (games and sets); the short-form market
+// is the opening set rather than a half.
+const TENNIS_MARKETS: MarketDef[] = [
+  D('moneyline', 'Head to Head', 'h2h'),
+  D('spread', 'Game Handicap', 'spread'),
+  D('set_spread', 'Set Handicap', 'spread'),
+  D('total', 'Total Games', 'total'),
+  D('total_sets', 'Total Sets', 'total'),
+  D('1s_moneyline', '1st Set — Head to Head', 'h2h'),
+  D('1s_spread', '1st Set — Game Handicap', 'spread'),
+  D('1s_total', '1st Set — Total Games', 'total'),
+];
+
+// A combat sport: who wins, and the rounds line.
+const COMBAT_MARKETS: MarketDef[] = [
+  D('moneyline', 'Winner', 'h2h'),
+  D('total', 'Total Rounds', 'total'),
+];
+
+const DARTS_MARKETS: MarketDef[] = [
+  D('moneyline', 'Head to Head', 'h2h'),
+  D('spread', 'Handicap', 'spread'),
+  D('total', 'Total Legs', 'total'),
+];
+
+const CRICKET_MARKETS: MarketDef[] = [
+  D('moneyline', 'Head to Head', 'h2h'),
+  D('spread', 'Handicap', 'spread'),
+  D('total', 'Total Runs', 'total'),
+];
+
+// Golf comes in two fixture shapes: a tournament (the `outright` field of
+// players) and 2-player matchups (a `moneyline` H2H). Empty markets drop out,
+// so each fixture shows only the one it has.
+const GOLF_MARKETS: MarketDef[] = [
+  D('moneyline', 'Head to Head', 'h2h'),
+  D('outright', 'Outright', 'outright'),
+];
+
+// Keyed by the sport slug (which is `league.id`).
 const LEAGUE_MARKETS: Record<string, MarketDef[]> = {
-  mlb: MLB_MARKETS,
-  atp: TENNIS_MARKETS,
-  wta: TENNIS_MARKETS,
   soccer: SOCCER_MARKETS,
-  ufc: UFC_MARKETS,
+  amfootball: GRIDIRON_MARKETS,
+  basketball: BASKETBALL_MARKETS,
+  aussierules: AUSSIE_MARKETS,
+  rugbyleague: RUGBY_MARKETS,
+  icehockey: HOCKEY_MARKETS,
+  baseball: MLB_MARKETS,
+  tennis: TENNIS_MARKETS,
+  mma: COMBAT_MARKETS,
+  boxing: COMBAT_MARKETS,
+  darts: DARTS_MARKETS,
+  cricket: CRICKET_MARKETS,
   golf: GOLF_MARKETS,
-  // nfl / ncaaf / wnba use DEFAULT_MARKETS (h2h / point_spread / total_points).
 };
 
 const signed = (n: number) => (n > 0 ? `+${n}` : `${n}`);
 
 const priceOfRow = (r: OddsRow) => r.current_price ?? r.open_price;
+
+/** Which side a row is on: 1 home/over, 2 away/under, 3 draw. */
+function sideOf(r: OddsRow): number | null {
+  if (r.outcome_no === 1 || r.outcome_no === 2 || r.outcome_no === 3) return r.outcome_no;
+  const n = r.normalized_selection;
+  if (n === 'home' || n === 'over' || n === 'yes') return 1;
+  if (n === 'away' || n === 'under' || n === 'no') return 2;
+  if (n === 'draw') return 3;
+  return null;
+}
+const isOverRow = (r: OddsRow) => sideOf(r) === 1;
 
 /** Lift a row into the hover card's view of it. */
 function detailFrom(r: OddsRow, price: number): PriceDetail {
@@ -336,17 +432,17 @@ function emptyCell(bookId: string): PriceCell {
   return { bookId, price: null, detail: null };
 }
 
+/** The cell for one book on a set of rows (pregame only — see fetchOdds). */
 function cellOf(rows: OddsRow[], bookId: string, isLay: boolean): PriceCell {
   for (const r of rows) {
-    if (r.sportsbook === bookId && r.is_lay === isLay) {
-      const p = priceOfRow(r);
-      if (p != null) return { bookId, price: p, detail: detailFrom(r, p) };
-    }
+    if (r.sportsbook !== bookId || r.is_lay !== isLay) continue;
+    const p = priceOfRow(r);
+    if (p != null) return { bookId, price: p, detail: detailFrom(r, p) };
   }
   return emptyCell(bookId);
 }
 
-/** Betfair lay: the dedicated `_lay` sportsbook, or legacy is_lay rows. */
+/** Betfair lay: the dedicated `betfair_lay` book, or legacy is_lay rows. */
 function betfairLayCell(rows: OddsRow[]): PriceCell {
   for (const r of rows) {
     if (r.sportsbook === BETFAIR_LAY_ID || (r.sportsbook === BETFAIR.id && r.is_lay)) {
@@ -393,22 +489,10 @@ function makeSelectionRow(
   for (const cell of prices) consider(cell);
   consider(betfairBack);
 
-  return {
-    key,
-    label,
-    team,
-    prices,
-    betfairBack,
-    betfairLay,
-    bestBookId,
-    bestPrice,
-    bestDetail,
-  };
+  return { key, label, team, prices, betfairBack, betfairLay, bestBookId, bestPrice, bestDetail };
 }
 
-const isOver = (sel: string) => sel.toLowerCase() === 'over';
-
-// How many lines to show either side of the pick-'em main line.
+// How many lines to show either side of the main line.
 const LADDER_RADIUS = 5;
 
 /** Mean of the takeable (non-lay) prices in a set of rows, or null. */
@@ -426,15 +510,33 @@ function meanPrice(rows: OddsRow[]): number | null {
 const PICKEM_TARGET = 1.9;
 
 /**
- * The "pick 'em" main line: the line/magnitude where BOTH sides price closest
- * to ~1.90 (evens). Falls back to the best-covered line when no line has both
- * sides priced.
+ * The main line for a ladder. The scraper marks it per book (`is_main`), so the
+ * consensus is the modal `is_main` key. Falls back to the pick-'em line (both
+ * sides closest to ~1.90), then the best-covered line.
  */
-function pickEmLine(
+function mainLine(
   marketRows: OddsRow[],
   keyNum: (r: OddsRow) => number,
   isSideA: (r: OddsRow) => boolean,
 ): number | null {
+  // Consensus of the scraper's own main-line flag: the modal is_main key.
+  const mainCounts = new Map<number, number>();
+  for (const r of marketRows) {
+    if (!r.is_main) continue;
+    const k = keyNum(r);
+    if (Number.isFinite(k)) mainCounts.set(k, (mainCounts.get(k) ?? 0) + 1);
+  }
+  let flagged: number | null = null;
+  let flaggedN = -1;
+  for (const [k, n] of mainCounts) {
+    if (n > flaggedN) {
+      flaggedN = n;
+      flagged = k;
+    }
+  }
+  if (flagged != null) return flagged;
+
+  // Fallback: the line where both outcomes price closest to evens.
   const groups = new Map<number, OddsRow[]>();
   for (const r of marketRows) {
     const k = keyNum(r);
@@ -454,7 +556,6 @@ function pickEmLine(
     const a = meanPrice(rs.filter(isSideA));
     const b = meanPrice(rs.filter((r) => !isSideA(r)));
     if (a != null && b != null) {
-      // Distance of both outcomes from evens — smallest wins.
       const score = Math.abs(a - PICKEM_TARGET) + Math.abs(b - PICKEM_TARGET);
       if (score < bestScore) {
         bestScore = score;
@@ -474,17 +575,23 @@ function ladderWindow(values: number[], main: number | null, radius: number): nu
   return sorted.slice(Math.max(0, i - radius), i + radius + 1);
 }
 
-/**
- * Pivot a fixture's odds rows into the H2H → Line → Total (full + 1H) grid.
- * H2H shows both teams; Spread/Total show the pick-'em main line plus five
- * lines either side, each with both outcomes (missing side => "–").
- */
+/** Title-case a flat outcome label ("yes" -> "Yes", "1X" stays "1X"). */
+function prettyOutcome(sel: string): string {
+  if (/^[0-9A-Z]+$/.test(sel)) return sel; // 1X / 12 / X2
+  return sel.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export interface BuiltMarkets {
   groups: MarketGroup[];
   /** Book columns in display order (no-odds books pushed to the far right). */
   books: Bookmaker[];
 }
 
+/**
+ * Pivot a fixture's odds rows into the per-market grid. Sides are keyed on the
+ * canonical `outcome_no` / `normalized_selection` rather than by matching the
+ * selection string to a team name.
+ */
 export function buildMarkets(
   rows: OddsRow[],
   home: string,
@@ -494,22 +601,21 @@ export function buildMarkets(
   const groups: MarketGroup[] = [];
   const books = eventBooks(rows, leagueId);
 
-  for (const def of LEAGUE_MARKETS[leagueId] ?? DEFAULT_MARKETS) {
+  for (const def of LEAGUE_MARKETS[leagueId] ?? TEAM_DEFAULT) {
     const marketRows = rows.filter((r) => r.market_id === def.id);
     if (marketRows.length === 0) continue;
 
     let selections: SelectionRow[];
 
     if (def.kind === 'outright') {
-      // A flat field, one row per player, shortest price first. Players are
-      // grouped by a normalized key so a book that spells them differently
-      // (TAB's "YOUNG Cameron" vs "Cameron Young") merges into one row.
+      // A flat field, one row per player, shortest price first. Merge a player's
+      // spellings across books with playerKey — NOT normalized_selection, which
+      // isn't cross-book stable for outrights (TAB writes "scheffler_scottie",
+      // US books "scottie_scheffler", and accents get dropped inconsistently).
       const byPlayer = new Map<string, OddsRow[]>();
       for (const r of marketRows) {
         const key = playerKey(r.selection);
-        const bucket = byPlayer.get(key);
-        if (bucket) bucket.push(r);
-        else byPlayer.set(key, [r]);
+        (byPlayer.get(key) ?? byPlayer.set(key, []).get(key)!).push(r);
       }
       selections = [...byPlayer.values()]
         .map((rs) => {
@@ -517,62 +623,72 @@ export function buildMarkets(
           return makeSelectionRow(books, name, name, rs);
         })
         .sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
+    } else if (def.kind === 'flat') {
+      // Named outcomes (Yes/No, 1X/12/X2), ordered by outcome_no.
+      const order = new Map<string, number>();
+      for (const r of marketRows) {
+        const k = r.normalized_selection || r.selection;
+        if (!order.has(k)) order.set(k, r.outcome_no ?? 99);
+      }
+      selections = [...order.keys()]
+        .sort((a, b) => (order.get(a) ?? 99) - (order.get(b) ?? 99))
+        .map((k) => {
+          const rs = marketRows.filter((r) => (r.normalized_selection || r.selection) === k);
+          return makeSelectionRow(books, k, prettyOutcome(rs[0].selection), rs);
+        });
     } else if (def.kind === 'total') {
-      const isSideA = (r: OddsRow) => isOver(r.selection);
-      const main = pickEmLine(marketRows, (r) => r.line ?? NaN, isSideA);
+      const main = mainLine(marketRows, (r) => r.line ?? NaN, isOverRow);
       const lines = [...new Set(marketRows.map((r) => r.line).filter((l): l is number => l != null))];
       selections = ladderWindow(lines, main, LADDER_RADIUS)
         .sort((a, b) => Math.abs(a) - Math.abs(b))
         .flatMap((L) => {
-        const over = marketRows.filter((r) => r.line === L && isOver(r.selection));
-        const under = marketRows.filter((r) => r.line === L && !isOver(r.selection));
-        const isMain = L === main;
-        return [
-          { ...makeSelectionRow(books, `over_${L}`, `Over ${L}`, over), isMain, groupStart: true },
-          { ...makeSelectionRow(books, `under_${L}`, `Under ${L}`, under), isMain },
-        ];
-      });
+          const over = marketRows.filter((r) => r.line === L && isOverRow(r));
+          const under = marketRows.filter((r) => r.line === L && !isOverRow(r));
+          const isMain = L === main;
+          return [
+            { ...makeSelectionRow(books, `over_${L}`, `Over ${L}`, over), isMain, groupStart: true },
+            { ...makeSelectionRow(books, `under_${L}`, `Under ${L}`, under), isMain },
+          ];
+        });
     } else if (def.kind === 'spread') {
-      // Key by the home-perspective handicap so home −X pairs with away +X
-      // (and stays separate from home +X). Away rows key on their negated line.
-      const isSideA = (r: OddsRow) => r.selection === home;
+      // Group on pair_key — the home-signed handicap that both rows of a pair
+      // share. home -1.5/away +1.5 and home +1.5/away -1.5 are different markets
+      // (different pair_key), which abs(line) would wrongly merge. Fall back to
+      // computing it from the home line when pair_key is absent.
       const keyNum = (r: OddsRow) =>
-        r.selection === home ? (r.line ?? 0) : -(r.line ?? 0);
-      const main = pickEmLine(marketRows, keyNum, isSideA);
+        r.pair_key ?? (sideOf(r) === 1 ? (r.line ?? 0) : -(r.line ?? 0));
+      const isSideA = (r: OddsRow) => sideOf(r) === 1;
+      const main = mainLine(marketRows, keyNum, isSideA);
       const keys = [...new Set(marketRows.map(keyNum))];
       selections = ladderWindow(keys, main, LADDER_RADIUS)
         .sort((a, b) => Math.abs(a) - Math.abs(b))
         .flatMap((K) => {
-        const hr = marketRows.filter((r) => r.selection === home && (r.line ?? 0) === K);
-        const ar = marketRows.filter((r) => r.selection === away && (r.line ?? 0) === -K);
-        const isMain = K === main;
-        return [
-          {
-            ...makeSelectionRow(books, `${home}_${K}`, `${home} ${signed(K)}`, hr, home),
-            isMain,
-            groupStart: true,
-          },
-          {
-            ...makeSelectionRow(books, `${away}_${K}`, `${away} ${signed(-K)}`, ar, away),
-            isMain,
-          },
-        ];
-      });
+          const hr = marketRows.filter((r) => sideOf(r) === 1 && keyNum(r) === K);
+          const ar = marketRows.filter((r) => sideOf(r) === 2 && keyNum(r) === K);
+          // Label from each side's actual signed line (home line = K).
+          const hLine = hr[0]?.line ?? K;
+          const aLine = ar[0]?.line ?? -K;
+          const isMain = K === main;
+          return [
+            {
+              ...makeSelectionRow(books, `${home}_${K}`, `${home} ${signed(hLine)}`, hr, home),
+              isMain,
+              groupStart: true,
+            },
+            {
+              ...makeSelectionRow(books, `${away}_${K}`, `${away} ${signed(aLine)}`, ar, away),
+              isMain,
+            },
+          ];
+        });
     } else {
-      // Moneyline: canonical [home, away], plus any extra outcome (e.g. Draw).
-      // Guard against feeds that mislabel a goalscorer market as moneyline
-      // (TAB does this) — those selections read "Name (TEAM)", which aren't H2H
-      // outcomes and would otherwise pollute the grid with a row per player.
-      const isPlayer = (s: string) => /\([A-Za-z]{2,4}\)\s*$/.test(s);
-      const rowsFor = (sel: string) => marketRows.filter((r) => r.selection === sel);
-      const extras = [...new Set(marketRows.map((r) => r.selection))].filter(
-        (s) => s !== home && s !== away && !isPlayer(s),
-      );
-      selections = [
-        makeSelectionRow(books, home, home, rowsFor(home), home),
-        ...extras.map((ex) => makeSelectionRow(books, ex, ex, rowsFor(ex))),
-        makeSelectionRow(books, away, away, rowsFor(away), away),
-      ];
+      // H2H / DNB: canonical home (oc1), away (oc2), plus Draw (oc3) in between.
+      const homeRows = marketRows.filter((r) => sideOf(r) === 1);
+      const awayRows = marketRows.filter((r) => sideOf(r) === 2);
+      const drawRows = marketRows.filter((r) => sideOf(r) === 3);
+      selections = [makeSelectionRow(books, home, home, homeRows, home)];
+      if (drawRows.length) selections.push(makeSelectionRow(books, 'Draw', 'Draw', drawRows));
+      selections.push(makeSelectionRow(books, away, away, awayRows, away));
     }
 
     groups.push({ key: def.id, label: def.label, selections });

@@ -23,6 +23,16 @@ const STATUS_ORDER: Record<EventStatus, number> = {
 // how far ahead upcoming fixtures reach.
 const TICKER_HORIZON_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * The league filter option/key. Keyed on the (category, name) PAIR, not name
+ * alone — "Hamburg" is both an ATP and a WTA tournament, so they must stay
+ * distinct ("ATP · Hamburg" / "WTA · Hamburg").
+ */
+function leagueLabel(e: SportEvent): string {
+  const { category, name } = e.league;
+  return category && category !== name ? `${category} · ${name}` : name;
+}
+
 /** Local YYYY-MM-DD for date-filter comparison. */
 function localDay(value: string | number | Date): string {
   const d = new Date(value);
@@ -155,15 +165,13 @@ export default function App() {
     const inSport = events.filter(
       (e) => sportSel.length === 0 || sportSel.includes(e.sport),
     );
-    return Array.from(new Set(inSport.map((e) => e.league.name))).sort();
+    return Array.from(new Set(inSport.map(leagueLabel))).sort();
   }, [events, sportSel]);
 
   function handleSport(next: string[]) {
     setSportSel(next);
     const allowed = new Set(
-      events
-        .filter((e) => next.length === 0 || next.includes(e.sport))
-        .map((e) => e.league.name),
+      events.filter((e) => next.length === 0 || next.includes(e.sport)).map(leagueLabel),
     );
     setLeagueSel((prev) => prev.filter((l) => allowed.has(l)));
   }
@@ -174,7 +182,7 @@ export default function App() {
     () =>
       events.filter((e) => {
         if (sportSel.length && !sportSel.includes(e.sport)) return false;
-        if (leagueSel.length && !leagueSel.includes(e.league.name)) return false;
+        if (leagueSel.length && !leagueSel.includes(leagueLabel(e))) return false;
         // Multi-day events (golf tournaments) match any day in [start, end].
         if (date) {
           const start = localDay(e.startsAt);

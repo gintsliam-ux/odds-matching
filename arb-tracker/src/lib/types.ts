@@ -13,6 +13,12 @@ export interface PeriodScore {
 export interface League {
   id: string;
   name: string;
+  /**
+   * The category (country / tour / competition group) this league sits under —
+   * England, ATP, International. Filters key on the (category, name) pair, since
+   * a name alone isn't unique (Hamburg is both an ATP and a WTA tournament).
+   */
+  category?: string;
   /** Short code shown in the emblem badge, e.g. "EPL". */
   code: string;
   sport: string;
@@ -35,7 +41,10 @@ export interface SportEvent {
   subtitle?: string;
   home: string;
   away: string;
-  /** ISO-3166 alpha-2, lowercased — tennis players fly a flag, teams don't. */
+  /** Resolved crest/photo URL from the entities view; falls back to a local crest. */
+  homeLogo?: string;
+  awayLogo?: string;
+  /** ISO-3166 alpha-2, lowercased — players fly a flag, teams don't. */
   homeCountry?: string | null;
   awayCountry?: string | null;
   /** Live/final scores when available (null until the game has started). */
@@ -49,6 +58,10 @@ export interface SportEvent {
   periodScores?: PeriodScore[];
   /** ISO timestamp of scheduled start. */
   startsAt: string;
+  /** ISO timestamp of the real jump, once the event actually started (else null). */
+  actualStart?: string | null;
+  /** Authoritative in-play flag from the fixture (not the scheduled-time guess). */
+  isLive?: boolean;
   /** ISO end for multi-day events (golf tournaments span ~4 days). */
   endsAt?: string;
   /** True for outright markets (golf): a field of players, no two-sided match. */
