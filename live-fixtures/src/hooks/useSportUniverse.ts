@@ -52,7 +52,12 @@ let inflight: Promise<SportUniverse> | null = null
 // Loads the full (sport, league) universe from `fixtures` once per session.
 // PostgREST caps responses at 1000 rows; we paginate. Dropdowns use this so
 // every sport/league is always listable — current scope decides counts.
+/** How far back the sidebar's league list reaches. Covers every competition
+ *  with a recent or upcoming fixture without paging the archive. */
+const UNIVERSE_HORIZON_D = 90
+
 async function load(): Promise<SportUniverse> {
+  const horizon = new Date(Date.now() - UNIVERSE_HORIZON_D * 86_400_000).toISOString()
   const sb = getSupabase()
   const PAGE = 1000
   const seen = new Map<string, Set<string>>() // sport -> leagues set
@@ -67,9 +72,15 @@ async function load(): Promise<SportUniverse> {
     const { data, error } = await sb
       .from('fixtures')
       .select('sport,optic_league,tournament,category,status,season_type,scheduled_start')
+      // BOUNDED. `fixtures` holds 141,824 rows where `live_fixtures` held
+      // 15,445, and this pages the whole result 1,000 at a time — unbounded it
+      // fired ~142 sequential requests before the sidebar could render, which
+      // hung the app on load. The universe only needs the leagues currently
+      // worth listing, so it reads the live slate, not the archive.
+      .eq('source', 'optic')
+      .gte('scheduled_start', horizon)
       // Ordered, or PostgREST gives no stable slice across pages: rows shift
-      // between requests, so a paged read both repeats and DROPS rows. That is
-      // what made `fixtures` look like it held 2,681 duplicate ids.
+      // between requests, so a paged read both repeats and DROPS rows.
       .order('fixture_id', { ascending: true })
       .range(from, from + PAGE - 1)
     if (error) throw error
