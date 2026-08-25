@@ -59,3 +59,60 @@ from pg_policies where schemaname = 'public';
 
 Match a new table to what the working tables already use rather than inventing a
 looser rule for it.
+
+## Paged reads need an ORDER BY, or the slice is not stable
+
+PostgREST gives no ordering guarantee across `.range()` pages. Without an
+explicit `ORDER BY` on a **unique** column, rows shift between requests, so a
+paged read both repeats and DROPS records — silently, with no error.
+
+This bit four reads in this app and four on the capture side on the same day.
+It also manufactured a bug report: `fixtures` appeared to hold 2,681 duplicate
+ids in a 45-day window. The same query ordered returns 13,943 rows and 13,943
+distinct ids. `fixture_id` is the primary key and cannot repeat.
+
+Ordering on a non-unique column is the same bug wearing a hat — `scheduled_start`
+has dozens of fixtures sharing a kickoff time. Order on the key, or add it as a
+tiebreak.
+
+```ts
+.order('fixture_id', { ascending: true })   // NOT scheduled_start alone
+.range(from, from + PAGE - 1)
+```
+
+Any figure computed through an unordered pager is unreliable, including counts
+that look plausible.
+
+## Matching a team name must be scored BOTH ways
+
+Deciding which side of a fixture a string names — a bet's outcome, a book's
+selection — cannot be done by asking "does the team's name appear in the text".
+That only measures one direction, and it cannot see a word the text has and the
+team does not.
+
+`Incheon United FC` shares `united` with `Loudoun United FC` and nothing checks
+that `incheon` appears nowhere. It resolved as the away side of Rhode Island v
+Loudoun United and the bet was graded against the wrong team. `Real Monarchs
+SLC` resolved as `Real Salt Lake` the same way.
+
+Three rules, all needed:
+
+1. **Score both directions**, weaker one governing — team-words-in-text AND
+   text-words-in-team.
+2. **Exclude club-type words**: united, city, real, athletic, atletico,
+   deportivo, sporting, racing, county, town, rovers, club, sport, football.
+   These identify the *type* of club, not the club.
+3. **Whole-word matching.** `includes('city')` finds "Cityscape".
+
+Require a strict winner and return null otherwise. Ungraded is safe; confidently
+wrong is not. Measured over 342,600 name × fixture pairs, this took wrong-team
+resolutions from 0.44% to 0.091% while still grading the fixture's own teams on
+291 of 300.
+
+## Read every rendered field before retiring a table
+
+Check what the UI actually renders out of a table before dropping it, not just
+what something obviously depends on. `live_fixtures.period_scores` held the only
+copy of the per-set breakdown — the data needed to grade tennis game and point
+markets — and `fixtures.scores` did not have it. It was found by auditing what
+the board displayed, hours before the table was due to be dropped.
