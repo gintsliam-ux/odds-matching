@@ -1,4 +1,5 @@
-// Logo resolver. Reads distinct team/player names from `fixtures`,
+// Logo resolver. Reads distinct team/player names from `fixtures`, resolves a
+// crest or flag for each, and upserts into `entities`.
 // resolves a logo/headshot URL for each (Wikipedia search → REST summary), and
 // upserts them into `entity_logos`. Majors (MLB/NFL/NHL/NBA/WNBA) are skipped —
 // the app resolves those from ESPN's CDN directly.
@@ -154,8 +155,11 @@ export async function runResolver(opts = {}) {
   // A --sport run is a repair: whatever is cached for those sports was resolved
   // under the old hint and is exactly what needs replacing.
   if (!force && only.size === 0) {
-    const existing = await getAll('entity_logos?select=sport,name,logo_url').catch((e) => {
-      log('Could not read entity_logos — did you run scripts/entity_logos.sql?')
+    // `entities`, not `entity_logos`. The latter does not exist — PostgREST
+    // answers 404 (PGRST205) — so this resolver has been reading nothing and
+    // upserting into nowhere, which is why logo coverage stopped moving.
+    const existing = await getAll('entities?select=sport,name,logo_url&order=id.asc').catch((e) => {
+      log('Could not read entities')
       throw e
     })
     // In retryNull mode, only skip rows that ALREADY have a logo (the null ones
@@ -346,7 +350,7 @@ function relevant(name, title) {
 async function flush(batch) {
   if (batch.length === 0) return
   const rows = batch.splice(0, batch.length)
-  const res = await fetch(`${REST}/entity_logos?on_conflict=sport,name`, {
+  const res = await fetch(`${REST}/entities?on_conflict=sport,name`, {
     method: 'POST',
     headers: { ...H, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
     body: JSON.stringify(rows),
