@@ -8,6 +8,7 @@ import { getSupabase } from './supabase'
 import { mapFixture, type FixtureRow } from './oddsLibrary'
 import { fetchCardOdds } from './cardOdds'
 import { fetchFixtureLogos } from './fixtureLogos'
+import { ensureBooks } from './books'
 
 // The Odds Library's fixture table. `live_fixtures` stopped being written on
 // 2026-08-24 — 0 rows in the hour this was changed, against 734 for `fixtures`
@@ -49,7 +50,7 @@ export async function fetchFixtures(): Promise<Fixture[]> {
   const lo = new Date(now - RECENT_COMPLETED_H * 3_600_000).toISOString()
   const hi = new Date(now + UPCOMING_HORIZON_H * 3_600_000).toISOString()
 
-  await ensureLogoCache()
+  await Promise.all([ensureLogoCache(), ensureBooks()])
   const { data, error } = await getSupabase()
     .from(TABLE)
     .select(COLUMNS)
@@ -69,7 +70,7 @@ export async function fetchFixturesByDate(
   dateStr: string,
   status: 'upcoming' | 'completed',
 ): Promise<Fixture[]> {
-  await ensureLogoCache()
+  await Promise.all([ensureLogoCache(), ensureBooks()])
   const [lo, hi] = melbDayRangeUtc(dateStr)
 
   const { data, error } = await getSupabase()
@@ -104,7 +105,7 @@ export async function fetchOverdueUpcomingFixtures(opts: {
   limit?: number
 } = {}): Promise<Fixture[]> {
   const { staleMinutes = 15, maxAgeHours = 48, limit = 200 } = opts
-  await ensureLogoCache()
+  await Promise.all([ensureLogoCache(), ensureBooks()])
   const now = Date.now()
   const hi = new Date(now - staleMinutes * 60_000).toISOString()
   const lo = new Date(now - maxAgeHours * 3_600_000).toISOString()
@@ -138,7 +139,7 @@ export async function fetchRecentlyCompletedFixtures(opts: {
   limit?: number
 } = {}): Promise<Fixture[]> {
   const { endedMinutes = 15, maxAgeHours = 24, limit = 120 } = opts
-  await ensureLogoCache()
+  await Promise.all([ensureLogoCache(), ensureBooks()])
   const now = Date.now()
   const hi = new Date(now - endedMinutes * 60_000).toISOString()
   const lo = new Date(now - maxAgeHours * 3_600_000).toISOString()
@@ -169,7 +170,7 @@ export async function fetchFixturesBySport(
   page = 0,
   rawLeagues: string[] = [],
 ): Promise<{ rows: Fixture[]; hasMore: boolean }> {
-  await ensureLogoCache()
+  await Promise.all([ensureLogoCache(), ensureBooks()])
   const from = page * SPORT_PAGE_SIZE
   const to = from + SPORT_PAGE_SIZE - 1
   const list = Array.isArray(rawSports) ? rawSports : [rawSports]
@@ -216,7 +217,7 @@ export async function fetchFixturesByTournament(
   rawLeague: string,
   rawSeasonType?: string | null,
 ): Promise<Fixture[]> {
-  await ensureLogoCache()
+  await Promise.all([ensureLogoCache(), ensureBooks()])
   // Query by LEAGUE, not sport+league.
   //
   // The feed files whole cricket competitions under the wrong sport — every one
@@ -255,7 +256,7 @@ export async function fetchFixtureById(id: string): Promise<Fixture | null> {
     .returns<FixtureRow[]>()
 
   if (error) throw error
-  await ensureLogoCache()
+  await Promise.all([ensureLogoCache(), ensureBooks()])
   const row = data?.[0]
   if (!row) return null
   const [one] = await enrich([mapFixture(row, Date.now())])

@@ -24,6 +24,7 @@ import { getMybetCatalog, type MybetCompetition, type MybetEvent } from '../lib/
 import { fetchMybetEvent, mybetEventUrl, type MybetLiveEvent } from '../lib/mybetStatus'
 import { fixturePath, idFromParam } from '../lib/routes'
 import { bookLogo } from '../lib/bookLogos'
+import { bookName } from '../lib/books'
 import { BRAND_TONE } from '../lib/brand'
 import {
   allLines,
@@ -769,7 +770,16 @@ function MybetPanel({ info, verdict }: { info: MappingInfo; verdict: Verdict }) 
 // Display book names with their actual casing — Pinnacle / DraftKings / FanDuel
 // look better than BETMGM / DRAFTKINGS. Map key is the lowercased feed key,
 // which is what the scraper writes into pregame_odds.
+/**
+ * Display name for a bookmaker.
+ *
+ * Prefers the `books` table, which knows every book the feed carries and the
+ * name worth showing. The literals below remain only as a fallback for the
+ * moment before that table lands in the session cache.
+ */
 function titleCaseBook(b: string): string {
+  const fromDb = bookName(b)
+  if (fromDb && fromDb !== b) return fromDb
   const map: Record<string, string> = {
     pinnacle: 'Pinnacle',
     betmgm: 'BetMGM',

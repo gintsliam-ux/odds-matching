@@ -319,34 +319,7 @@ function toEventMapping(r: EventMappingRow, provider: Provider): EventMapping {
   }
 }
 
-/** Whole-table read. Kept for callers that genuinely need every row — the
- *  mapping page does NOT; use fetchEventMappingsFor. */
-export async function fetchEventMappings(provider: Provider = 'swift'): Promise<EventMapping[]> {
-  const out: EventMapping[] = []
-  const PAGE = 1000
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await getSupabase()
-      .from('event_mapping')
-      .select('optic_fixture_id,gutsy_event_id,confidence,source,swift_actual_start')
-      .eq('provider', provider)
-      // Ordered: a paged PostgREST read without one is not a stable slice —
-      // rows shift between requests, so pages both repeat and DROP rows.
-      .order('id', { ascending: true })
-      .range(from, from + PAGE - 1)
-    if (error) throw error
-    const rows =
-      (data as { optic_fixture_id: string; gutsy_event_id: string | null; confidence: number; source: 'auto' | 'manual'; swift_actual_start: string | null }[]) ?? []
-    for (const r of rows) {
-      out.push({
-        provider,
-        optic_fixture_id: r.optic_fixture_id,
-        swift_event_id: r.gutsy_event_id,
-        confidence: r.confidence ?? 0,
-        source: r.source ?? 'auto',
-        swift_actual_start: r.swift_actual_start ?? null,
-      })
-    }
-    if (rows.length < PAGE) break
-  }
-  return out
-}
+// fetchEventMappings (whole-table, 32.6k rows / 33 paged requests) was removed:
+// nothing called it. Callers use fetchEventMappingsFor(ids) for the fixtures
+// actually on screen.
+
