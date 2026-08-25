@@ -54,8 +54,15 @@ export default function Layout() {
   // Restrict the board + counts to MAPPED events (league mapped to ≥1 brand).
   // Fall back to everything until the mapping set loads (avoids an empty flash).
   const mappedLeagues = useMappedLeagues()
+  // Compare RAW slugs. `mappedLeagues` is built from
+  // competition_mapping.optic_league — "aussierules_afl" — while `f.league` is
+  // the display label, "ATP Doubles · Winston Salem, USA, Doubles". Those never
+  // match, so this filter removed every fixture on the board and the terminal
+  // only showed anything during the brief window before the mapping set loaded
+  // and the size===0 fallback stopped applying. Measured: 0 of 56 live fixtures
+  // survived against f.league, 41 of 56 against f.rawLeague.
   const fixtures = useMemo(
-    () => (mappedLeagues.size === 0 ? ordered : ordered.filter((f) => mappedLeagues.has(f.league))),
+    () => (mappedLeagues.size === 0 ? ordered : ordered.filter((f) => mappedLeagues.has(f.rawLeague))),
     [ordered, mappedLeagues],
   )
   // SWIFT (Mongo) feed health — shown next to the OpticOdds feed pulse in the
