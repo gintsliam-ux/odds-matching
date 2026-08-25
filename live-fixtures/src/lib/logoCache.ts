@@ -28,8 +28,12 @@ async function load(): Promise<void> {
     // page past PostgREST's 1000-row cap so the whole cache loads
     for (let from = 0; ; from += PAGE) {
       const { data, error } = await getSupabase()
-        .from('entity_logos')
+        .from('entities')
         .select('sport,name,logo_url')
+        // `entities`, not `entity_logos` — the latter does not exist and its
+        // 404 was swallowed by the catch below, so every logo silently vanished.
+        // Ordered: a paged PostgREST read without one is not a stable slice.
+        .order('name', { ascending: true })
         .not('logo_url', 'is', null)
         .range(from, from + PAGE - 1)
       if (error) throw error

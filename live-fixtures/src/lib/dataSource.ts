@@ -7,6 +7,7 @@ import { melbDayRangeUtc } from './dates'
 import { getSupabase } from './supabase'
 import { mapFixture, type FixtureRow } from './oddsLibrary'
 import { fetchCardOdds } from './cardOdds'
+import { fetchFixtureLogos } from './fixtureLogos'
 
 // The Odds Library's fixture table. `live_fixtures` stopped being written on
 // 2026-08-24 — 0 rows in the hour this was changed, against 734 for `fixtures`
@@ -301,10 +302,15 @@ async function enrich(input: Fixture[]): Promise<Fixture[]> {
   // returns 13,943 rows and 13,943 distinct ids. The pagers were fixed instead.
   const fixtures = input
   if (!fixtures.length) return fixtures
-  const prices = await fetchCardOdds(fixtures.map((f) => f.id))
+  const ids = fixtures.map((f) => f.id)
+  const [prices, logos] = await Promise.all([fetchCardOdds(ids), fetchFixtureLogos(ids)])
   for (const f of fixtures) {
-    f.homeLogo = resolveLogo(f.rawSport, f.rawLeague, f.homeName, null)
-    f.awayLogo = resolveLogo(f.rawSport, f.rawLeague, f.awayName, null)
+    // `fixture_entities` already ties a logo to this fixture and side, so it is
+    // exact. resolveLogo (flag CDN / ESPN pattern / name cache) is the fallback
+    // for fixtures the table has no row for.
+    const known = logos.get(f.id)
+    f.homeLogo = known?.home ?? resolveLogo(f.rawSport, f.rawLeague, f.homeName, null)
+    f.awayLogo = known?.away ?? resolveLogo(f.rawSport, f.rawLeague, f.awayName, null)
     const p = prices.get(f.id)
     if (p) {
       f.oddsHome = p.home
