@@ -53,8 +53,13 @@ let inflight: Promise<SportUniverse> | null = null
 // PostgREST caps responses at 1000 rows; we paginate. Dropdowns use this so
 // every sport/league is always listable — current scope decides counts.
 /** How far back the sidebar's league list reaches. Covers every competition
- *  with a recent or upcoming fixture without paging the archive. */
-const UNIVERSE_HORIZON_D = 90
+ *  with a recent or upcoming fixture without paging the archive.
+ *
+ *  30 days, not 90: it halves the read to ~11 requests and costs 16 leagues,
+ *  all of them dormant. Everything scheduled from that point on is included,
+ *  so live and upcoming are covered in full — the bound only trims how far
+ *  back the finished fixtures reach. */
+const UNIVERSE_HORIZON_D = 30
 
 async function load(): Promise<SportUniverse> {
   const horizon = new Date(Date.now() - UNIVERSE_HORIZON_D * 86_400_000).toISOString()
