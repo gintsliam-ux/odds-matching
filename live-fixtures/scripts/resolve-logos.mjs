@@ -1,7 +1,7 @@
 // Logo resolver. Reads distinct team/player names from `fixtures`, resolves a
 // crest or flag for each, and upserts into `entities`.
 // resolves a logo/headshot URL for each (Wikipedia search → REST summary), and
-// upserts them into `entity_logos`. Majors (MLB/NFL/NHL/NBA/WNBA) are skipped —
+// upserts them into `entities`. Majors (MLB/NFL/NHL/NBA/WNBA) are skipped —
 // the app resolves those from ESPN's CDN directly.
 //
 // Usage:  node scripts/resolve-logos.mjs              (only unresolved names)
@@ -164,6 +164,9 @@ export async function runResolver(opts = {}) {
     })
     // In retryNull mode, only skip rows that ALREADY have a logo (the null ones
     // get re-resolved). Default mode skips every existing row.
+    // Cheap win before the network work: youth and reserve sides take the
+    // parent club's crest.
+    await inheritFromParents(existing, log)
     const skip = existing.filter((e) => !retryNull || e.logo_url)
     for (const e of skip) wanted.delete(`${e.sport.toLowerCase()}|${e.name}`)
     log(
@@ -347,15 +350,107 @@ function relevant(name, title) {
   return false
 }
 
-async function flush(batch) {
-  if (batch.length === 0) return
-  const rows = batch.splice(0, batch.length)
+let skipped = 0
+
+async function upsertRows(rows) {
   const res = await fetch(`${REST}/entities?on_conflict=sport,name`, {
     method: 'POST',
     headers: { ...H, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
     body: JSON.stringify(rows),
   })
-  if (!res.ok) throw new Error(`upsert ${res.status}: ${await res.text()}`)
+  return res.ok ? null : `${res.status}: ${(await res.text()).slice(0, 160)}`
+}
+
+/**
+ * Upsert a batch, falling back to row-at-a-time when the batch is rejected.
+ *
+ * `entities` carries TWO unique indexes: (sport, name) and (sport, normalized).
+ * The conflict target here is the first, so a row that satisfies it can still
+ * violate the second — "Real Madrid CF" and "Real Madrid" normalise to the same
+ * thing — and Postgres fails the WHOLE statement rather than that row. A
+ * nightly job that loses 500 good rows to one collision, and reports success
+ * because the batch was retried and the count logged, is how the other three
+ * silent writers in this codebase behaved.
+ *
+ * So: try the batch, and on failure retry each row alone so the collision costs
+ * one row and gets named in the log.
+ */
+/**
+ * Youth, reserve and B sides inherit the parent club's crest.
+ *
+ * "Midtjylland U19", "Dundalk U20", "Arabe Unido B" have no crest of their own
+ * and no search will ever find one — but the parent club is usually already
+ * resolved. Stripping the suffix and inheriting covers a chunk of the gap for a
+ * regex and a lookup, with no new source.
+ *
+ * Returns the parent name, or null when the name carries no such suffix.
+ */
+const AGE_SUFFIX = /\s+(?:U\s?1[5-9]|U\s?2[0-3]|B|II|A)$/i
+
+function parentName(name) {
+  const m = AGE_SUFFIX.exec(name)
+  if (!m) return null
+  const parent = name.slice(0, m.index).trim()
+  // "FC B" would leave "FC"; anything this short is not a club.
+  return parent.length >= 4 ? parent : null
+}
+
+/**
+ * Fill youth/reserve sides from their parent's crest.
+ *
+ * Runs over what is ALREADY cached with a null logo — those names are skipped
+ * by the resolver proper, so they would never be revisited otherwise.
+ */
+async function inheritFromParents(existing, log = () => {}) {
+  // Club-type words are dropped before comparing: the youth side is filed as
+  // "Silkeborg U19" while the senior club is "Silkeborg IF", so an exact-name
+  // parent lookup finds nothing at all — measured, 0 of 263. Normalising the
+  // suffix away finds 57.
+  const norm = (s) =>
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, '')
+      .replace(/\b(fc|fk|if|sk|bk|cf|ac|as|sc|club|football)\b/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+  const byNorm = new Map()
+  for (const e of existing) {
+    if (!e.logo_url) continue
+    const k = `${(e.sport || '').toLowerCase()}|${norm(e.name)}`
+    if (!byNorm.has(k)) byNorm.set(k, e)
+  }
+
+  const batch = []
+  let found = 0
+  for (const e of existing) {
+    if (e.logo_url) continue
+    const parent = parentName(e.name)
+    if (!parent) continue
+    const p = byNorm.get(`${(e.sport || '').toLowerCase()}|${norm(parent)}`)
+    if (!p?.logo_url) continue
+    batch.push({ sport: e.sport, name: e.name, logo_url: p.logo_url, source: 'parent' })
+    found++
+    if (batch.length >= 50) await flush(batch)
+  }
+  await flush(batch)
+  log(`Inherited ${found} crests from parent clubs.`)
+  return found
+}
+
+async function flush(batch) {
+  if (batch.length === 0) return
+  const rows = batch.splice(0, batch.length)
+  const err = await upsertRows(rows)
+  if (!err) return
+  log(`  batch of ${rows.length} rejected (${err}) — retrying row by row`)
+  for (const row of rows) {
+    const rowErr = await upsertRows([row])
+    if (rowErr) {
+      skipped++
+      log(`  skipped ${row.sport}/${row.name}: ${rowErr}`)
+    }
+  }
 }
 
 async function getJSON(url) {
