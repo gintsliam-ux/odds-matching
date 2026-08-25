@@ -265,8 +265,8 @@ export default function MappingPage() {
     mybetMappings: CompetitionMapping[]
     /** User explicitly marked this tournament as unmapped — auto-map skips it. */
     stickyUnmapped: boolean
-    /** Live/upcoming, or finished within ACTIVE_WINDOW_D. Drives the default
-     *  "active only" list — see the note on ACTIVE_WINDOW_D. */
+    /** Has a live or upcoming fixture. Drives the default "active only" list;
+     *  finished tournaments are reachable through the all-periods toggle. */
     isActive: boolean
     /** Golf only: OpticOdds' tournament id, so the row can open its page.
      *  Golf has no fixtures, so the usual drill into events has nothing to
@@ -283,21 +283,24 @@ export default function MappingPage() {
   // Via useNow rather than a bare Date.now(): reading the clock during render
   // is impure (the lint rule catches it) and the cutoff would freeze at mount.
   // A minute's granularity is far finer than a 7-day window needs.
-  const ACTIVE_WINDOW_D = 7
-  const nowTick = useNow(60_000)
-  const activeCutoffMs = useMemo(
-    () => nowTick.getTime() - ACTIVE_WINDOW_D * 86_400_000,
-    [nowTick],
-  )
   const isActiveKey = useCallback(
     (k: string) => {
       const act = universe.activityByTournament.get(k)
       // No activity row at all = a competition_mapping left over for a
       // tournament the feed no longer carries. That's exactly the stale case.
       if (!act) return false
-      return act.active > 0 || act.lastMs >= activeCutoffMs
+      // Live or upcoming ONLY. The `lastMs >= activeCutoffMs` arm — anything
+      // finished within ACTIVE_WINDOW_D — made sense when the board held a
+      // ±24 h window. It does not now the board carries 30 days of completed
+      // fixtures: it put 480 tournaments in the default list at 40% paired,
+      // against 147 at 61% for live/upcoming alone. The extra 333 are
+      // finished competitions nobody can act on, and most of them are low-tier
+      // events no book carries, so they read as a wall of "unmapped".
+      //
+      // Everything is still reachable through the all-periods toggle.
+      return act.active > 0
     },
-    [universe, activeCutoffMs],
+    [universe],
   )
 
   const tournaments = useMemo<TournamentRow[]>(() => {
