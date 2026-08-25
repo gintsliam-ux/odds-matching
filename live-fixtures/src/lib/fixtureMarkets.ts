@@ -487,6 +487,13 @@ function toBookOdds(
   for (const r of rows) {
     const price = num(r.current_price)
     if (price == null) continue
+    // A suspended or voided market has no price to quote. `closed` is kept:
+    // a pregame market closes at kickoff, so on a started fixture that IS the
+    // closing price — which is the whole point of the grid after the event.
+    // Before this, `status` was read only to badge suspension while the
+    // suspended price still populated the grid.
+    const st = (r.status ?? 'active').toLowerCase()
+    if (st === 'suspended' || st === 'void') continue
     const side = sideOf(r.normalized_selection, r.selection, r.outcome_no, kind, home, away, marketId)
     // A selection that resolves to no side (double chance's compound keys)
     // has no SidePrices slot; those markets render from `outcomes` instead,

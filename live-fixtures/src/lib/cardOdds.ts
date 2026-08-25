@@ -35,9 +35,10 @@ interface Row {
   outcome_no: number | null
   current_price: number | null
   is_live: boolean | null
+  status: string | null
 }
 
-const SELECT = 'fixture_id,normalized_selection,outcome_no,current_price,is_live'
+const SELECT = 'fixture_id,normalized_selection,outcome_no,current_price,is_live,status'
 
 const num = (v: unknown): number | null =>
   typeof v === 'number' && Number.isFinite(v) && v > 1 ? v : null
@@ -84,7 +85,33 @@ async function fetchChunk(ids: string[]): Promise<Row[]> {
  * stage the best (highest) price across books is used, matching what the
  * detail page's Best column shows.
  */
-export async function fetchCardOdds(fixtureIds: string[]): Promise<Map<string, CardPrice>> {
+/**
+ * Whether a row's price is worth showing on a card.
+ *
+ * `status` was previously ignored entirely, so a market that had closed, been
+ * suspended or VOIDED still rendered its last `current_price` as though it
+ * were live and takeable. Measured over 787 card prices on upcoming fixtures:
+ * 109 closed, 51 void, 8 suspended — 21% of the board quoting dead markets
+ * with nothing to distinguish them.
+ *
+ * `closed` is not always wrong: a pregame market closes at kickoff, so on a
+ * live or finished fixture the closing price is exactly what to show. It is
+ * only wrong on a fixture that has not started, where it means the market was
+ * pulled or the row is stale. `suspended` and `void` are never a price.
+ */
+function usable(r: Row, notStarted: boolean): boolean {
+  const st = (r.status ?? 'active').toLowerCase()
+  if (st === 'suspended' || st === 'void') return false
+  if (st === 'closed') return !notStarted
+  return true
+}
+
+export async function fetchCardOdds(
+  fixtureIds: string[],
+  /** Fixtures that have not kicked off — a closed market on one of these is
+   *  stale, not a closing price. */
+  notStarted: Set<string> = new Set(),
+): Promise<Map<string, CardPrice>> {
   const ids = [...new Set(fixtureIds.filter(Boolean))]
   if (!ids.length) return new Map()
 
@@ -103,6 +130,7 @@ export async function fetchCardOdds(fixtureIds: string[]): Promise<Map<string, C
     const price = num(r.current_price)
     const side = sideOf(r)
     if (price == null || !side) continue
+    if (!usable(r, notStarted.has(r.fixture_id))) continue
     let e = byFixture.get(r.fixture_id)
     if (!e) {
       e = {

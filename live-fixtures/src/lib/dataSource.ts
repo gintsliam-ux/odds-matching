@@ -347,7 +347,13 @@ async function enrich(input: Fixture[]): Promise<Fixture[]> {
       return Number.isFinite(t) && t >= priceCutoff
     })
     .map((f) => f.id)
-  const [prices, logos] = await Promise.all([fetchCardOdds(wantPrice), fetchFixtureLogos(ids)])
+  // A closed market on a fixture that has not started is a stale row, not a
+  // closing price — see usable() in cardOdds.
+  const notStarted = new Set(fixtures.filter((f) => f.status === 'upcoming').map((f) => f.id))
+  const [prices, logos] = await Promise.all([
+    fetchCardOdds(wantPrice, notStarted),
+    fetchFixtureLogos(ids),
+  ])
   for (const f of fixtures) {
     // `fixture_entities` already ties a logo to this fixture and side, so it is
     // exact. resolveLogo (flag CDN / ESPN pattern / name cache) is the fallback
