@@ -36,32 +36,55 @@ const LEAGUE_COL = 'optic_league'
 //
 // 1000 is PostgREST's own per-response ceiling, so it is the most this can
 // fetch without paging.
-const UPCOMING_HORIZON_H = 24
-const RECENT_COMPLETED_H = 24
-const ROW_LIMIT = 1000
+/** How far back completed fixtures are carried on the board. */
+const COMPLETED_WINDOW_D = 30
+/** PostgREST's per-response ceiling. */
+const PAGE_SIZE = 1000
+/** Completed fixtures keep a price on the board for this long. */
+const PRICED_COMPLETED_H = 24
+/** Backstop so a runaway slate cannot page forever. */
+const BOARD_MAX_ROWS = 20000
 
 
 
 const COLUMNS = '*'
 
-/** The board feed: all live games + everything scheduled in the near window. */
+/**
+ * The board feed: every live and upcoming fixture, plus completed ones from
+ * the last COMPLETED_WINDOW_D days.
+ *
+ * No forward horizon. Upcoming means upcoming — 1,431 fixtures, some months
+ * out — because the sport and league boards browse the whole future slate and
+ * a 24 h cap silently truncated them to the next day.
+ *
+ * Backwards is bounded, because completed is where the volume is: 9,170 rows
+ * in 30 days against 1,431 upcoming. Paged, since the set exceeds PostgREST's
+ * 1,000-row ceiling; ordered by the primary key so the pages tile without
+ * repeating or dropping rows.
+ */
 export async function fetchFixtures(): Promise<Fixture[]> {
   const now = Date.now()
-  const lo = new Date(now - RECENT_COMPLETED_H * 3_600_000).toISOString()
-  const hi = new Date(now + UPCOMING_HORIZON_H * 3_600_000).toISOString()
+  const since = new Date(now - COMPLETED_WINDOW_D * 86_400_000).toISOString()
 
   await Promise.all([ensureLogoCache(), ensureBooks()])
-  const { data, error } = await getSupabase()
-    .from(TABLE)
-    .select(COLUMNS)
-    .or(`is_live.eq.true,and(scheduled_start.gte.${lo},scheduled_start.lte.${hi})`)
-    .order('scheduled_start', { ascending: true })
-    .limit(ROW_LIMIT)
-    .returns<FixtureRow[]>()
+  const rows: FixtureRow[] = []
+  for (let from = 0; from < BOARD_MAX_ROWS; from += PAGE_SIZE) {
+    const { data, error } = await getSupabase()
+      .from(TABLE)
+      .select(COLUMNS)
+      .eq('source', 'optic')
+      .or(`status.eq.live,status.eq.upcoming,and(status.eq.completed,scheduled_start.gte.${since})`)
+      .order('fixture_id', { ascending: true })
+      .range(from, from + PAGE_SIZE - 1)
+      .returns<FixtureRow[]>()
+    if (error) throw error
+    const page = data ?? []
+    rows.push(...page)
+    if (page.length < PAGE_SIZE) break
+  }
 
-  if (error) throw error
   const nowMs = Date.now()
-  return enrich((data ?? []).map((r) => mapFixture(r, nowMs)))
+  return enrich(rows.map((r) => mapFixture(r, nowMs)))
 }
 
 /** All UPCOMING or COMPLETED fixtures on a given Melbourne calendar day — backs
@@ -304,7 +327,24 @@ async function enrich(input: Fixture[]): Promise<Fixture[]> {
   const fixtures = input
   if (!fixtures.length) return fixtures
   const ids = fixtures.map((f) => f.id)
-  const [prices, logos] = await Promise.all([fetchCardOdds(ids), fetchFixtureLogos(ids)])
+  // Odds are fetched for a SUBSET. `odds` returns ~20 rows per fixture and
+  // PostgREST caps a page at 1,000, so a price costs roughly one request per
+  // 40 fixtures — bounded work for the 1,400 live and upcoming, and ~266
+  // requests if it covered a month of completed games too, which would stall
+  // the board exactly as the unbounded sidebar query did.
+  //
+  // A completed fixture keeps its price for a day, which covers "what did that
+  // close at" on last night's games; past that the detail page is the place to
+  // look, and it fetches per fixture.
+  const priceCutoff = Date.now() - PRICED_COMPLETED_H * 3_600_000
+  const wantPrice = fixtures
+    .filter((f) => {
+      if (f.status !== 'completed') return true
+      const t = f.startTime ? Date.parse(f.startTime) : NaN
+      return Number.isFinite(t) && t >= priceCutoff
+    })
+    .map((f) => f.id)
+  const [prices, logos] = await Promise.all([fetchCardOdds(wantPrice), fetchFixtureLogos(ids)])
   for (const f of fixtures) {
     // `fixture_entities` already ties a logo to this fixture and side, so it is
     // exact. resolveLogo (flag CDN / ESPN pattern / name cache) is the fallback
