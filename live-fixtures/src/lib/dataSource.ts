@@ -216,7 +216,10 @@ export async function fetchFixturesBySport(
   if (rawLeagues.length > 0) {
     const quote = (v: string) => `"${v.replace(/["\\]/g, '')}"`
     q = q.or(
-      `sport.in.(${list.map(quote).join(',')}),league.in.(${rawLeagues.map(quote).join(',')})`,
+      // LEAGUE_COL, not `league`: on `fixtures` the raw slug is `optic_league`.
+      // Referencing the old name made PostgREST 400 the whole query, so every
+      // sport page that passes leagues — which is all of them — loaded nothing.
+      `sport.in.(${list.map(quote).join(',')}),${LEAGUE_COL}.in.(${rawLeagues.map(quote).join(',')})`,
     )
   } else {
     q = list.length === 1 ? q.eq('sport', list[0]) : q.in('sport', list)
