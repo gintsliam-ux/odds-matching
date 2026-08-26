@@ -29,6 +29,18 @@ async function runMybetMapping() {
   await mod.runMybetMapping()
 }
 
+// Orphaned mappings accrue whenever fixtures are deleted and nothing prunes
+// them — 39% of event_mapping by the time it was first measured. This runs
+// here, on the DAILY cron, rather than in the ~10-min tick: it needs the full
+// fixture id set (~97 paged reads), where the matchers deliberately load a
+// windowed one.
+async function pruneOrphans(log: (m: string) => void) {
+  const mod = (await import('../../scripts/prune-orphan-mappings.mjs')) as {
+    pruneOrphanMappings: (o: { log: (m: string) => void }) => Promise<{ deleted: number }>
+  }
+  return mod.pruneOrphanMappings({ log })
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // GET-only to match Vercel Cron's behaviour, with a header-based shared
   // secret so the public URL can't trigger paid Mongo/Supabase work.
@@ -54,7 +66,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } catch (e) {
       mybetError = String((e as { message?: unknown })?.message ?? e)
     }
-    res.status(200).json({ ok: true, ms: Date.now() - t0, mybetError })
+    // Prune LAST and in its own catch: it is housekeeping, and a failure here
+    // must not discard a matcher run that already succeeded.
+    let pruned = 0
+    let pruneError: string | null = null
+    try {
+      const notes: string[] = []
+      const r = await pruneOrphans((m) => notes.push(m))
+      pruned = r.deleted
+      for (const n of notes) console.log(n)
+    } catch (e) {
+      pruneError = String((e as { message?: unknown })?.message ?? e)
+    }
+    res.status(200).json({ ok: true, ms: Date.now() - t0, mybetError, pruned, pruneError })
   } catch (e) {
     res.status(500).json({ ok: false, ms: Date.now() - t0, error: String((e as { message?: unknown })?.message ?? e) })
   }
