@@ -20,6 +20,9 @@ export interface CompetitionMapping {
    *  join against Fixture.rawLeague; `optic_league` above is prettified for
    *  display and matches nothing the fixture side holds. */
   optic_league_raw: string
+  /** The UNPRETTIFIED sport, as stored — `aussierules`. Pairs with
+   *  optic_league_raw for joining against Fixture.rawSport/rawLeague. */
+  optic_sport_raw: string
   /** Tennis only: the season_type (tournament name). '' for other sports. */
   optic_tournament: string
   swift_sport: string | null
@@ -89,6 +92,7 @@ export async function fetchCompetitionMappings(provider: Provider = 'swift'): Pr
         optic_sport: prettySport(r.optic_sport),
         optic_league: prettyLeague(r.optic_league),
         optic_league_raw: r.optic_league,
+        optic_sport_raw: r.optic_sport,
         optic_tournament: r.optic_tournament ?? '',
         swift_sport: r.gutsy_sport,
         swift_competition: r.gutsy_competition,

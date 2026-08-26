@@ -175,7 +175,12 @@ export default function MappingPage() {
         const groupComps = (list: CompetitionMapping[]) => {
           const cm = new Map<string, CompetitionMapping[]>()
           for (const c of list) {
-            const k = `${c.optic_sport}|${c.optic_league}|${c.optic_tournament}`
+            // RAW slugs. These rows are joined against tournament rows whose
+            // league comes from leagueLabel() — "AFL" — while optic_league is
+            // prettyLeague(slug), "Aussierules Afl". Keying on the prettified
+            // pair matched nothing, so every tournament read as unmapped and a
+            // save that wrote correctly still came back showing unmapped.
+            const k = `${c.optic_sport_raw}|${c.optic_league_raw}|${c.optic_tournament}`
             let arr = cm.get(k)
             if (!arr) cm.set(k, (arr = []))
             arr.push(c)
@@ -330,6 +335,7 @@ export default function MappingPage() {
         const k = `${sport}|${league}|`
         seen.add(k)
         const rl = universe.rawLeague.get(`${sport}|${league}`) ?? league
+        const mk = `${rs}|${rl}|`
         rows.push({
           sport,
           league,
@@ -338,9 +344,9 @@ export default function MappingPage() {
           rawLeague: rl,
           rawTournament: '',
           count: counts.get(k) ?? 0,
-          mappings: realMappings(compMap.get(k)),
-          mybetMappings: realMappings(mybetCompMap.get(k)),
-          stickyUnmapped: isStickyUnmapped(compMap.get(k)),
+          mappings: realMappings(compMap.get(mk)),
+          mybetMappings: realMappings(mybetCompMap.get(mk)),
+          stickyUnmapped: isStickyUnmapped(compMap.get(mk)),
           isActive: isActiveKey(k),
         })
       }
@@ -362,9 +368,9 @@ export default function MappingPage() {
         rawLeague: g.league,
         rawTournament: g.tournament,
         count: g.golfers,
-        mappings: realMappings(compMap.get(k)),
-        mybetMappings: realMappings(mybetCompMap.get(k)),
-        stickyUnmapped: isStickyUnmapped(compMap.get(k)),
+        mappings: realMappings(compMap.get(`golf|${g.league}|${g.tournament}`)),
+        mybetMappings: realMappings(mybetCompMap.get(`golf|${g.league}|${g.tournament}`)),
+        stickyUnmapped: isStickyUnmapped(compMap.get(`golf|${g.league}|${g.tournament}`)),
         isActive: isGolfTournamentActive(g),
         golfTournamentId: g.tournamentId,
       })
@@ -385,9 +391,9 @@ export default function MappingPage() {
         rawLeague: f.rawLeague,
         rawTournament: tournament,
         count: counts.get(k) ?? 0,
-        mappings: realMappings(compMap.get(k)),
-          mybetMappings: realMappings(mybetCompMap.get(k)),
-          stickyUnmapped: isStickyUnmapped(compMap.get(k)),
+        mappings: realMappings(compMap.get(`${f.rawSport}|${f.rawLeague}|${tournament}`)),
+          mybetMappings: realMappings(mybetCompMap.get(`${f.rawSport}|${f.rawLeague}|${tournament}`)),
+          stickyUnmapped: isStickyUnmapped(compMap.get(`${f.rawSport}|${f.rawLeague}|${tournament}`)),
           isActive: isActiveKey(k),
       })
     }
@@ -400,6 +406,7 @@ export default function MappingPage() {
         if (seen.has(k)) continue
         seen.add(k)
         const raw = rawFromFixture(c.optic_sport, c.optic_league) ?? rawFromUniverse(c.optic_sport, c.optic_league)
+        const mk = `${c.optic_sport_raw}|${c.optic_league_raw}|${c.optic_tournament}`
         rows.push({
           sport: c.optic_sport,
           league: c.optic_league,
@@ -408,9 +415,9 @@ export default function MappingPage() {
           rawLeague: raw.rl,
           rawTournament: c.optic_tournament,
           count: 0,
-          mappings: realMappings(compMap.get(k)),
-          mybetMappings: realMappings(mybetCompMap.get(k)),
-          stickyUnmapped: isStickyUnmapped(compMap.get(k)),
+          mappings: realMappings(compMap.get(mk)),
+          mybetMappings: realMappings(mybetCompMap.get(mk)),
+          stickyUnmapped: isStickyUnmapped(compMap.get(mk)),
           isActive: isActiveKey(k),
         })
       }
@@ -428,9 +435,9 @@ export default function MappingPage() {
         rawLeague: f.rawLeague,
         rawTournament: '',
         count: counts.get(k) ?? 0,
-        mappings: realMappings(compMap.get(k)),
-          mybetMappings: realMappings(mybetCompMap.get(k)),
-          stickyUnmapped: isStickyUnmapped(compMap.get(k)),
+        mappings: realMappings(compMap.get(`${f.rawSport}|${f.rawLeague}|`)),
+          mybetMappings: realMappings(mybetCompMap.get(`${f.rawSport}|${f.rawLeague}|`)),
+          stickyUnmapped: isStickyUnmapped(compMap.get(`${f.rawSport}|${f.rawLeague}|`)),
           isActive: isActiveKey(k),
       })
     }
