@@ -119,7 +119,19 @@ function MultiPill({
         >
           {display}
         </span>
-        <ChevronDown size={14} className="shrink-0 text-slate-500" />
+        {selected.length ? (
+          // One-click clear, right on the pill (matches the Date pill).
+          <X
+            size={14}
+            className="shrink-0 text-slate-500 hover:text-slate-200"
+            onClick={(e) => {
+              e.stopPropagation();
+              onChange([]);
+            }}
+          />
+        ) : (
+          <ChevronDown size={14} className="shrink-0 text-slate-500" />
+        )}
       </button>
 
       {open && (
@@ -129,11 +141,18 @@ function MultiPill({
           <button
             type="button"
             onClick={() => onChange([])}
-            className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-slate-400 hover:bg-white/5"
+            className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/5 ${
+              selected.length ? 'font-medium text-slate-100' : 'text-slate-400'
+            }`}
           >
-            All {label.toLowerCase()}s
-            {selected.length === 0 && <Check size={14} className="text-emerald-400" />}
+            {selected.length ? `Clear (${selected.length})` : `All ${label.toLowerCase()}s`}
+            {selected.length ? (
+              <X size={14} className="text-slate-400" />
+            ) : (
+              <Check size={14} className="text-emerald-400" />
+            )}
           </button>
+          {selected.length > 0 && <div className="my-1 border-t border-surface-border" />}
           {options.length === 0 && (
             <div className="px-2 py-1.5 text-xs text-slate-600">No options</div>
           )}
