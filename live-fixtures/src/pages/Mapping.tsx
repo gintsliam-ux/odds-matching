@@ -437,8 +437,11 @@ export default function MappingPage() {
     return rows
       .filter((r) => !EXCLUDE_LEAGUES.has(r.rawLeague))
       .sort((a, b) => {
-        const am = a.mappings.length > 0 ? 1 : 0
-        const bm = b.mappings.length > 0 ? 1 : 0
+        // EITHER brand counts as mapped, matching the filter chips. Sorting on
+        // SwiftBet alone pushed tournaments mybet fully covers to the bottom
+        // with the genuinely unmapped ones.
+        const am = a.mappings.length > 0 || a.mybetMappings.length > 0 ? 1 : 0
+        const bm = b.mappings.length > 0 || b.mybetMappings.length > 0 ? 1 : 0
         if (am !== bm) return bm - am
         return b.count - a.count || a.sport.localeCompare(b.sport) || a.league.localeCompare(b.league)
       })
@@ -471,7 +474,10 @@ export default function MappingPage() {
         swiftComps: 0,
       }
       e.total++
-      if (t.mappings.length > 0) e.paired++
+      // Paired on EITHER brand. Counting SwiftBet alone made boxing read
+      // "1 of 13" when mybet carries all 13 — the tab said there was work to
+      // do where there was none.
+      if (t.mappings.length > 0 || t.mybetMappings.length > 0) e.paired++
       m.set(key, e)
     }
     for (const c of swiftComps) {
@@ -559,7 +565,10 @@ export default function MappingPage() {
   // -----------------------------------------------------------------
 
   const totals = useMemo(() => {
-    const tPaired = visibleTournaments.filter((t) => t.mappings.length > 0).length
+    // EITHER brand, matching the tabs and the filter chips.
+    const tPaired = visibleTournaments.filter(
+      (t) => t.mappings.length > 0 || t.mybetMappings.length > 0,
+    ).length
     return { tPaired, tTotal: visibleTournaments.length }
   }, [visibleTournaments])
 
