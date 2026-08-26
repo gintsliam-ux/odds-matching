@@ -566,6 +566,16 @@ async function main(opts = { writeSnapshot: true }) {
   } finally {
     await mongo.close().catch(() => {})
   }
+  // Drop FUTURES competitions. "NBA 2025/26 Futures", "EPL 2026/27 Futures",
+  // "Wimbledon 2026 Futures" are outright/antepost markets on a season, not
+  // fixtures — there is no game for an OPTIC fixture to pair with, so they only
+  // pollute the candidate pool. They also mis-pair: `icehockey_nhl` was mapped
+  // to "NHL 2026 Futures" rather than the NHL competition itself.
+  const beforeFutures = gutsy.length
+  gutsy = gutsy.filter((e) => !IS_FUTURES.test(e?.competition?.name ?? ''))
+  if (beforeFutures !== gutsy.length) {
+    console.log(`  dropped ${beforeFutures - gutsy.length} futures/outright events.`)
+  }
   console.log(`  ${gutsy.length} mongo events.`)
 
   // Drop a small JSON snapshot of SWIFT competitions + events into public/ so
@@ -1000,6 +1010,10 @@ async function getAllSupabase(pathAndQuery) {
  * wiped within five minutes by the next mapping-tick and silently reverting to
  * Unmapped.
  */
+/** Season-long outright markets, not fixtures. Matched on the competition name
+ *  because that is where both books put it: "AFL Futures", "NFL 2027 Futures". */
+const IS_FUTURES = /\bfutures?\b/i
+
 const UNMANAGED_SPORTS = ['golf']
 const UNMANAGED_FILTER = `&optic_sport=not.in.(${UNMANAGED_SPORTS.join(',')})`
 

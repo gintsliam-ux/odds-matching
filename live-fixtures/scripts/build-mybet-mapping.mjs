@@ -136,7 +136,12 @@ async function main(opts = { writeSnapshot: true }) {
   } finally {
     await mongo.close().catch(() => {})
   }
-  const events = raw.map(normMybet).filter((e) => e.home && e.away)
+  // Same futures exclusion as the SwiftBet matcher — mybet files the
+  // competition in `league`. None match today, but a season-outright market
+  // arriving later would otherwise join the candidate pool silently.
+  const events = raw
+    .map(normMybet)
+    .filter((e) => e.home && e.away && !/\bfutures?\b/i.test(e.league ?? ''))
   console.log(`  ${raw.length} mybet events (${events.length} with both teams).`)
 
   if (opts.writeSnapshot) writeMybetSnapshots(events)
