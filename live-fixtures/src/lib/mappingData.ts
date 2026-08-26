@@ -16,6 +16,10 @@ export interface CompetitionMapping {
   provider: Provider
   optic_sport: string
   optic_league: string
+  /** The UNPRETTIFIED slug, exactly as stored — `aussierules_afl`. Needed to
+   *  join against Fixture.rawLeague; `optic_league` above is prettified for
+   *  display and matches nothing the fixture side holds. */
+  optic_league_raw: string
   /** Tennis only: the season_type (tournament name). '' for other sports. */
   optic_tournament: string
   swift_sport: string | null
@@ -84,6 +88,7 @@ export async function fetchCompetitionMappings(provider: Provider = 'swift'): Pr
         provider,
         optic_sport: prettySport(r.optic_sport),
         optic_league: prettyLeague(r.optic_league),
+        optic_league_raw: r.optic_league,
         optic_tournament: r.optic_tournament ?? '',
         swift_sport: r.gutsy_sport,
         swift_competition: r.gutsy_competition,
