@@ -828,8 +828,13 @@
      title attribute keeps the name reachable, and Fair columns stay labelled so
      the two halves of the table don't blur together. */
   .bk { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; }
-  .bk-logo {
-    width: 21px; height: 21px; border-radius: 4px; object-fit: contain;
+  /* Height-constrained, not boxed. Half these brands publish a wordmark rather
+   than a roundel — Betfair is 5.7:1 — and a fixed square with object-fit
+   contain renders those as a 3px sliver. Fix the height, let the width follow,
+   and cap it so one wide mark cannot widen its column. Note the white chip:
+   marks need to be dark, a white logo disappears here. */
+.bk-logo {
+    height: 21px; width: auto; max-width: 64px; border-radius: 4px; object-fit: contain;
     background: rgba(255,255,255,0.9); padding: 1px; flex-shrink: 0;
   }
   .bk-fair {
@@ -1057,9 +1062,10 @@ const BOOK_META = {
   bet365:     { label: 'Bet365',   logo: 'bet365' },
   sportsbet:  { label: 'Sportsbet', logo: 'sportsbet' },
   tab:        { label: 'TAB',      logo: 'tab' },
-  /* TABtouch publishes its wordmark as SVG only, and white — which is right
-     here, the page is near-black behind it. Hence the extension override. */
-  tabtouch:   { label: 'TABtouch', logo: 'tabtouch', ext: 'svg' },
+  /* Their wordmark is SVG-only and 4.8:1, which lands as a 4px sliver in a
+     21px square slot. The app icon is square, which is the shape this row was
+     built for. */
+  tabtouch:   { label: 'TABtouch', logo: 'tabtouch' },
   ladbrokes:  { label: 'Ladbrokes', logo: 'ladbrokes' },
   fanduel:    { label: 'FanDuel',  logo: 'fanduel' },
   fanatics:   { label: 'Fanatics', logo: 'fanatics' },
