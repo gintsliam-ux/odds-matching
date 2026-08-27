@@ -1057,7 +1057,9 @@ const BOOK_META = {
   bet365:     { label: 'Bet365',   logo: 'bet365' },
   sportsbet:  { label: 'Sportsbet', logo: 'sportsbet' },
   tab:        { label: 'TAB',      logo: 'tab' },
-  tabtouch:   { label: 'TABtouch' },   // no usable mark published — renders as text
+  /* TABtouch publishes its wordmark as SVG only, and white — which is right
+     here, the page is near-black behind it. Hence the extension override. */
+  tabtouch:   { label: 'TABtouch', logo: 'tabtouch', ext: 'svg' },
   ladbrokes:  { label: 'Ladbrokes', logo: 'ladbrokes' },
   fanduel:    { label: 'FanDuel',  logo: 'fanduel' },
   fanatics:   { label: 'Fanatics', logo: 'fanatics' },
@@ -2656,19 +2658,20 @@ function renderOddsTable(rows) {
   return html + '</tbody></table></div>';
 }
 
-const BOOK_LOGO_FILES = new Set(['pinnacle', 'bet365', 'sportsbet', 'tab', 'ladbrokes', 'fanduel',
-  'fanatics', 'betfair', 'draftkings']);
+const BOOK_LOGO_FILES = new Set(['pinnacle', 'bet365', 'sportsbet', 'tab', 'tabtouch', 'ladbrokes',
+  'fanduel', 'fanatics', 'betfair', 'draftkings']);
 function bookHeader(key, isFair) {
   const meta = BOOK_META[key] || {};
   const file = meta.logo;
   const tag = meta.tag ? `<span class="bk-fair">${escHtml(meta.tag)}</span>` : '';
   const label = [bookLabel(key), meta.tag, isFair ? 'Fair' : null].filter(Boolean).join(' ');
+  const nameSpan = `<span class="bk-name">${escHtml(bookLabel(key))}</span>`;
   const fair = isFair ? '<span class="bk-fair">Fair</span>' : '';
   if (!file || !BOOK_LOGO_FILES.has(file)) {
-    return `<span class="bk"><span class="bk-name">${escHtml(bookLabel(key))}</span>${tag}${fair}</span>`;
+    return `<span class="bk">${nameSpan}${tag}${fair}</span>`;
   }
   return `<span class="bk">
-      <img class="bk-logo" src="assets/books/${file}.png" alt="${escAttr(label)}"
+      <img class="bk-logo" src="assets/books/${file}.${meta.ext || 'png'}" alt="${escAttr(label)}"
            onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'bk-name',textContent:'${jsStr(bookLabel(key))}'}))">
       ${tag}${fair}
     </span>`;
