@@ -273,24 +273,47 @@ async function fetchFixtureEntities(
 }
 
 /** Load fixtures with odds in the live window, newest archive events pruned. */
+/**
+ * Retry a Supabase query on transient errors before giving up. The DB is shared
+ * with the scrapers, so a heavy query can occasionally hit the statement timeout
+ * under write load — a retry a beat later almost always succeeds, and beats
+ * blanking the whole board on a single blip.
+ */
+async function withRetry<T>(
+  run: () => PromiseLike<{ data: T | null; error: { message: string } | null }>,
+  tries = 3,
+): Promise<{ data: T | null; error: { message: string } | null }> {
+  let res: { data: T | null; error: { message: string } | null } = { data: null, error: null };
+  for (let i = 0; i < tries; i++) {
+    res = await run();
+    if (!res.error) return res;
+    if (i < tries - 1) await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+  }
+  return res;
+}
+
 async function fetchFixtures(
   client: NonNullable<typeof supabase>,
   since: string,
 ): Promise<FixtureRow[]> {
-  const PAGE = 1000;
+  // Smaller pages keep each query light, so it's less likely to trip the
+  // statement timeout under DB load (and each retry is cheaper).
+  const PAGE = 500;
   const byId = new Map<string, FixtureRow>();
 
   // Main: fixtures that started within the window (indexed on scheduled_start).
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await client
-      .from('fixtures')
-      .select(FIXTURE_COLUMNS)
-      .eq('has_odds', true)
-      .gte('scheduled_start', since)
-      .order('scheduled_start', { ascending: true })
-      .range(from, from + PAGE - 1);
+    const { data, error } = await withRetry<FixtureRow[]>(() =>
+      client
+        .from('fixtures')
+        .select(FIXTURE_COLUMNS)
+        .eq('has_odds', true)
+        .gte('scheduled_start', since)
+        .order('scheduled_start', { ascending: true })
+        .range(from, from + PAGE - 1) as unknown as PromiseLike<{ data: FixtureRow[] | null; error: { message: string } | null }>,
+    );
     if (error) throw new Error(`fixtures: ${error.message}`);
-    const rows = data as unknown as FixtureRow[];
+    const rows = (data ?? []) as FixtureRow[];
     for (const r of rows) byId.set(r.fixture_id, r);
     if (rows.length < PAGE) break;
   }
@@ -298,14 +321,16 @@ async function fetchFixtures(
   // Multi-day events (golf tournaments) that began earlier but are still running,
   // keyed off end_date. Scoped to sport=golf so it's a cheap partition scan —
   // an un-indexed end_date filter across all 139k fixtures times out.
-  const { data: golf, error: gErr } = await client
-    .from('fixtures')
-    .select(FIXTURE_COLUMNS)
-    .eq('has_odds', true)
-    .eq('sport', 'golf')
-    .gte('end_date', since)
-    .order('scheduled_start', { ascending: true });
-  if (!gErr && golf) for (const r of golf as unknown as FixtureRow[]) byId.set(r.fixture_id, r);
+  const { data: golf } = await withRetry<FixtureRow[]>(() =>
+    client
+      .from('fixtures')
+      .select(FIXTURE_COLUMNS)
+      .eq('has_odds', true)
+      .eq('sport', 'golf')
+      .gte('end_date', since)
+      .order('scheduled_start', { ascending: true }) as unknown as PromiseLike<{ data: FixtureRow[] | null; error: { message: string } | null }>,
+  );
+  if (golf) for (const r of golf) byId.set(r.fixture_id, r);
 
   return [...byId.values()];
 }
@@ -475,19 +500,21 @@ export async function fetchOdds(event: SportEvent): Promise<OddsRow[]> {
   const PAGE = 1000;
   const all: OddsRow[] = [];
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await client
-      .from('odds')
-      .select(
-        'market_id,market_name,selection,normalized_selection,line,line_group,pair_key,outcome_no,' +
-          'is_main,sportsbook,is_lay,current_price,open_price,status,flucs,open_at,' +
-          'price_6h,price_3h,price_1h,price_30m,price_10m,close_price,current_at,daily_prices',
-      )
-      .eq('fixture_id', event.id)
-      .eq('is_live', false)
-      .order('id', { ascending: true })
-      .range(from, from + PAGE - 1);
+    const { data, error } = await withRetry<OddsRow[]>(() =>
+      client
+        .from('odds')
+        .select(
+          'market_id,market_name,selection,normalized_selection,line,line_group,pair_key,outcome_no,' +
+            'is_main,sportsbook,is_lay,current_price,open_price,status,flucs,open_at,' +
+            'price_6h,price_3h,price_1h,price_30m,price_10m,close_price,current_at,daily_prices',
+        )
+        .eq('fixture_id', event.id)
+        .eq('is_live', false)
+        .order('id', { ascending: true })
+        .range(from, from + PAGE - 1) as unknown as PromiseLike<{ data: OddsRow[] | null; error: { message: string } | null }>,
+    );
     if (error) throw new Error(`odds: ${error.message}`);
-    const rows = data as unknown as OddsRow[];
+    const rows = (data ?? []) as OddsRow[];
     all.push(...rows);
     if (rows.length < PAGE) break;
   }
