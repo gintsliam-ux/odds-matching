@@ -258,9 +258,11 @@ const D = (id: string, label: string, kind: MarketKind): MarketDef => ({ id, lab
 // Generic team sports: H2H / Line / Total, plus halves.
 const TEAM_DEFAULT: MarketDef[] = [
   D('moneyline', 'Head to Head', 'h2h'),
+  D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Line', 'spread'),
   D('total', 'Total', 'total'),
   D('1h_moneyline', '1st Half — Head to Head', 'h2h'),
+  D('1h_moneyline_3way', '1st Half — Head to Head — 3-Way', 'h2h'),
   D('1h_spread', '1st Half — Line', 'spread'),
   D('1h_total', '1st Half — Total', 'total'),
 ];
@@ -281,9 +283,11 @@ const SOCCER_MARKETS: MarketDef[] = [
 
 const GRIDIRON_MARKETS: MarketDef[] = [
   D('moneyline', 'Head to Head', 'h2h'),
+  D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Line', 'spread'),
   D('total', 'Total Points', 'total'),
   D('1h_moneyline', '1st Half — Head to Head', 'h2h'),
+  D('1h_moneyline_3way', '1st Half — Head to Head — 3-Way', 'h2h'),
   D('1h_spread', '1st Half — Line', 'spread'),
   D('1h_total', '1st Half — Total Points', 'total'),
   D('1q_moneyline', '1st Quarter — Head to Head', 'h2h'),
@@ -296,18 +300,22 @@ const AUSSIE_MARKETS: MarketDef[] = GRIDIRON_MARKETS;
 
 const RUGBY_MARKETS: MarketDef[] = [
   D('moneyline', 'Head to Head', 'h2h'),
+  D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Line', 'spread'),
   D('total', 'Total Points', 'total'),
   D('1h_moneyline', '1st Half — Head to Head', 'h2h'),
+  D('1h_moneyline_3way', '1st Half — Head to Head — 3-Way', 'h2h'),
   D('1h_spread', '1st Half — Line', 'spread'),
   D('1h_total', '1st Half — Total Points', 'total'),
 ];
 
 const HOCKEY_MARKETS: MarketDef[] = [
   D('moneyline', 'Head to Head', 'h2h'),
+  D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Puck Line', 'spread'),
   D('total', 'Total', 'total'),
   D('1p_moneyline', '1st Period — Head to Head', 'h2h'),
+  D('1p_moneyline_3way', '1st Period — Head to Head — 3-Way', 'h2h'),
   D('1p_spread', '1st Period — Puck Line', 'spread'),
   D('1p_total', '1st Period — Total', 'total'),
 ];
@@ -316,6 +324,7 @@ const HOCKEY_MARKETS: MarketDef[] = [
 // there are dedicated first-inning markets.
 const MLB_MARKETS: MarketDef[] = [
   D('moneyline', 'Head to Head', 'h2h'),
+  D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Run Line', 'spread'),
   D('total', 'Total Runs', 'total'),
   D('1h_moneyline', 'First 5 Innings — Head to Head', 'h2h'),
@@ -330,6 +339,7 @@ const MLB_MARKETS: MarketDef[] = [
 // is the opening set rather than a half.
 const TENNIS_MARKETS: MarketDef[] = [
   D('moneyline', 'Head to Head', 'h2h'),
+  D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Game Handicap', 'spread'),
   D('set_spread', 'Set Handicap', 'spread'),
   D('total', 'Total Games', 'total'),
@@ -347,12 +357,14 @@ const COMBAT_MARKETS: MarketDef[] = [
 
 const DARTS_MARKETS: MarketDef[] = [
   D('moneyline', 'Head to Head', 'h2h'),
+  D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Handicap', 'spread'),
   D('total', 'Total Legs', 'total'),
 ];
 
 const CRICKET_MARKETS: MarketDef[] = [
   D('moneyline', 'Head to Head', 'h2h'),
+  D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Handicap', 'spread'),
   D('total', 'Total Runs', 'total'),
 ];
@@ -362,6 +374,7 @@ const CRICKET_MARKETS: MarketDef[] = [
 // so each fixture shows only the one it has.
 const GOLF_MARKETS: MarketDef[] = [
   D('moneyline', 'Head to Head', 'h2h'),
+  D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('outright', 'Outright', 'outright'),
 ];
 
