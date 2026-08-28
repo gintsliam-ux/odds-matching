@@ -618,6 +618,17 @@ export function buildMarkets(
     const marketRows = rows.filter((r) => r.market_id === def.id);
     if (marketRows.length === 0) continue;
 
+    // A 3-way market with only one book is noise when the 2-way moneyline is
+    // also present — hide it (needs ≥2 books). A 3-way with no 2-way
+    // counterpart still shows regardless of book count.
+    if (def.id.endsWith('_3way')) {
+      const baseId = def.id.slice(0, -'_3way'.length);
+      const baseHasPrices = rows.some(
+        (r) => r.market_id === baseId && !r.is_lay && (r.current_price ?? r.open_price) != null,
+      );
+      if (baseHasPrices && coverage(marketRows) < 2) continue;
+    }
+
     let selections: SelectionRow[];
 
     if (def.kind === 'outright') {
