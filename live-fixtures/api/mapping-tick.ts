@@ -87,8 +87,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     running = true
     const t0 = Date.now()
     let mybetError: string | null = null
+    let swiftError: string | null = null
     try {
-      await runMapping()
+      try {
+        await runMapping()
+      } catch (e) {
+        // A matcher failure is NOT a tick failure. `fixtures` currently
+        // statement-timeouts (57014) partway through any paged read — a
+        // keyset walk dies around page 17 of ~97k rows — so this throws on
+        // most runs. Returning 500 made the workflow email on every tick
+        // while the app itself was fine, which is noise, not signal: the
+        // matchers are a background refresh and the mappings they already
+        // wrote stay valid.
+        //
+        // Reported in the body so the failure is still visible to anyone
+        // reading it, rather than swallowed.
+        swiftError = String((e as { message?: unknown })?.message ?? e)
+      }
       // mybet runs AFTER SwiftBet and in its own catch: the two write disjoint
       // rows (provider column), so a mybet failure must not discard a SwiftBet
       // pass that already succeeded, nor 500 the tick and trip the workflow.
@@ -100,7 +115,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } finally {
       running = false
     }
-    res.status(200).json({ ok: true, ran: true, ms: Date.now() - t0, mybetError })
+    res.status(200).json({ ok: true, ran: true, ms: Date.now() - t0, swiftError, mybetError })
   } catch (e) {
     running = false
     res.status(500).json({ ok: false, error: String((e as { message?: unknown })?.message ?? e) })

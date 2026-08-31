@@ -538,13 +538,33 @@ async function main(opts = { writeSnapshot: true }) {
   //
   // Column names differ, so both are aliased back to what the matcher already
   // calls them and nothing downstream changes.
-  const horizon = new Date(Date.now() - MATCH_HORIZON_D * 86_400_000).toISOString()
+  // Filter on `source` ONLY, then window in memory.
+  //
+  // `scheduled_start` and `status` carry no index on `fixtures`, so any
+  // server-side filter on them scans ~97k rows and PostgREST cancels the
+  // statement (57014). That is what had been failing every mapping-tick:
+  //   source=eq.optic + scheduled_start=gte.<45d>  → 500 after 3.1s
+  //   source=eq.optic alone                        → 200 in 0.5s
+  // Add an index on (source, scheduled_start) and the date filter can move
+  // back to the server; until then this is the only shape the database serves.
+  const horizonMs = Date.now() - MATCH_HORIZON_D * 86_400_000
   const opticRows = (
     await getAllSupabase(
-      'fixtures?select=optic_fixture_id:fixture_id,sport,league:optic_league,season_type,home_team,away_team,scheduled_start' +
-        `&source=eq.optic&scheduled_start=gte.${horizon}&order=fixture_id.asc`,
+      'fixtures?select=fixture_id,optic_fixture_id:fixture_id,sport,league:optic_league,season_type,home_team,away_team,scheduled_start' +
+        '&source=eq.optic',
+      // Seek on the REAL column. The select aliases it to optic_fixture_id for
+      // the matcher's benefit, but `order=` and `gt.` are resolved against the
+      // table, so the alias 400s with "column does not exist".
+      'fixture_id',
     )
-  ).filter((r) => r.optic_fixture_id)
+  ).filter((r) => {
+    if (!r.optic_fixture_id) return false
+    // Undated fixtures are kept: a missing start is not evidence of age, and
+    // dropping them would silently stop mapping anything the feed has not
+    // scheduled yet.
+    const t = r.scheduled_start ? Date.parse(r.scheduled_start) : NaN
+    return !Number.isFinite(t) || t >= horizonMs
+  })
   console.log(`  ${opticRows.length} fixtures.`)
 
   console.log('• Loading gutsy.events from Mongo…')
@@ -593,7 +613,7 @@ async function main(opts = { writeSnapshot: true }) {
   // B", verified on Brazil, won't fuzzy-attach to Ecuador - Serie B).
   const stickyCompIds = new Set()
   for (const r of await getAllSupabase(
-    'competition_mapping?provider=eq.swift&select=optic_sport,optic_league,optic_tournament,gutsy_competition_id,source,verified',
+    'competition_mapping?provider=eq.swift&select=id,optic_sport,optic_league,optic_tournament,gutsy_competition_id,source,verified',
   )) {
     const k = `${r.optic_sport}|${r.optic_league}|${r.optic_tournament}`
     const cur = compStatus.get(k) ?? { hasSticky: false, hasAuto: false, hasManual: false }
@@ -604,7 +624,7 @@ async function main(opts = { writeSnapshot: true }) {
     compStatus.set(k, cur)
   }
   const existingEvent = new Map(
-    (await getAllSupabase('event_mapping?provider=eq.swift&select=optic_fixture_id,source')).map((r) => [r.optic_fixture_id, r.source]),
+    (await getAllSupabase('event_mapping?provider=eq.swift&select=id,optic_fixture_id,source')).map((r) => [r.optic_fixture_id, r.source]),
   )
 
   // -- Stage 1: competitions
@@ -782,7 +802,7 @@ async function main(opts = { writeSnapshot: true }) {
     }
   }
   for (const r of await getAllSupabase(
-    'competition_mapping?provider=eq.swift&select=optic_sport,optic_league,optic_tournament,gutsy_competition_id',
+    'competition_mapping?provider=eq.swift&select=id,optic_sport,optic_league,optic_tournament,gutsy_competition_id',
   )) {
     if (!r.gutsy_competition_id) continue
     const k = `${r.optic_sport}|${r.optic_league}|${r.optic_tournament}`
@@ -977,17 +997,43 @@ async function main(opts = { writeSnapshot: true }) {
 
 // --- supabase helpers ----------------------------------------------------
 
-async function getAllSupabase(pathAndQuery) {
+/**
+ * Page a table, seeking on a unique key rather than OFFSET.
+ *
+ * OFFSET pagination collapses on this database. Measured over 20 samples per
+ * offset against `fixtures` (~97k rows):
+ *
+ *     offset      0    20/20 ok   0.10s
+ *     offset 20,000     8/20 ok   2.06s
+ *     offset 50,000     0/20 ok   3.21s   ← statement timeout, 57014
+ *
+ * Postgres has to walk every skipped row to honour an OFFSET, so the deeper
+ * the page the longer the scan, until it exceeds the statement timeout. The
+ * matcher pages the whole table, so it died partway through every run — which
+ * is what had mapping-tick alerting.
+ *
+ * Seeking instead (`key > last-seen`) reads an index range whatever the depth,
+ * so page 90 costs the same as page 1. `keyCol` must be UNIQUE and match the
+ * sort, or rows are skipped or repeated.
+ */
+async function getAllSupabase(pathAndQuery, keyCol = 'id') {
   const rows = []
   const size = 1000
-  for (let from = 0; ; from += size) {
-    const r = await fetchRetry(`${REST}/${pathAndQuery}`, {
-      headers: { ...HDR, Range: `${from}-${from + size - 1}`, 'Range-Unit': 'items' },
-    })
+  let after = null
+  for (;;) {
+    const sep = pathAndQuery.includes('?') ? '&' : '?'
+    const seek = after == null ? '' : `&${keyCol}=gt.${encodeURIComponent(after)}`
+    const url = `${REST}/${pathAndQuery}${sep}order=${keyCol}.asc&limit=${size}${seek}`
+    const r = await fetchRetry(url, { headers: HDR })
     if (!r.ok) bail(`GET ${pathAndQuery} → ${r.status}: ${await r.text()}`)
     const batch = await r.json()
     rows.push(...batch)
     if (batch.length < size) break
+    const last = batch[batch.length - 1]
+    // The key must be in the projection, or this loops on the same page.
+    const next = last?.[keyCol]
+    if (next == null) bail(`getAllSupabase: '${keyCol}' missing from ${pathAndQuery} — add it to the select`)
+    after = next
   }
   return rows
 }
