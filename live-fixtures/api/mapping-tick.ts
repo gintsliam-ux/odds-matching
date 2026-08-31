@@ -42,10 +42,25 @@ async function lastRunMs(): Promise<number | null> {
   return ts ? Date.parse(ts) : null
 }
 
+/** Hard ceiling per matcher, well inside the 300s function budget. Without it
+ *  a matcher that keeps retrying a timing-out page runs until Vercel kills the
+ *  whole invocation (FUNCTION_INVOCATION_TIMEOUT), which is a worse failure
+ *  than reporting the error: no response body, and the workflow alerts anyway. */
+const MATCHER_BUDGET_MS = 100_000
+
+function withDeadline<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, rej) =>
+      setTimeout(() => rej(new Error(`${label} exceeded ${ms / 1000}s budget`)), ms),
+    ),
+  ])
+}
+
 async function runMapping(): Promise<void> {
   // Lazy import so the mongodb driver only cold-starts when we actually rebuild.
   const mod = (await import('../scripts/build-mapping.mjs')) as { runMapping: () => Promise<void> }
-  await mod.runMapping()
+  await withDeadline(mod.runMapping(), MATCHER_BUDGET_MS, 'swift matcher')
 }
 
 // mybet rides the same tick as SwiftBet. It used to run ONLY in the daily
@@ -57,7 +72,7 @@ async function runMybetMapping(): Promise<void> {
   const mod = (await import('../scripts/build-mybet-mapping.mjs')) as {
     runMybetMapping: () => Promise<void>
   }
-  await mod.runMybetMapping()
+  await withDeadline(mod.runMybetMapping(), MATCHER_BUDGET_MS, 'mybet matcher')
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
