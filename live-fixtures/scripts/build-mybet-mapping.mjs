@@ -108,11 +108,16 @@ async function main(opts = { writeSnapshot: true }) {
   //
   // Column names differ, so both are aliased back to what the matcher already
   // calls them and nothing downstream changes.
+  // Filtered server-side: fixtures now has an index covering
+  // (source, scheduled_start), so this no longer statement-timeouts.
   const horizon = new Date(Date.now() - MATCH_HORIZON_D * 86_400_000).toISOString()
   const opticRows = (
     await getAllSupabase(
-      'fixtures?select=optic_fixture_id:fixture_id,sport,league:optic_league,season_type,home_team,away_team,scheduled_start' +
-        `&source=eq.optic&scheduled_start=gte.${horizon}&order=fixture_id.asc`,
+      'fixtures?select=fixture_id,optic_fixture_id:fixture_id,sport,league:optic_league,season_type,home_team,away_team,scheduled_start' +
+        `&source=eq.optic&scheduled_start=gte.${horizon}`,
+      // Seek on the REAL column — `order=`/`gt.` resolve against the table, so
+      // the aliased name 400s with "column does not exist".
+      'fixture_id',
     )
   ).filter((r) => r.optic_fixture_id)
   console.log(`  ${opticRows.length} fixtures.`)
@@ -152,7 +157,7 @@ async function main(opts = { writeSnapshot: true }) {
   // (1:1: a competition attaches to only one tournament).
   const stickyCompIds = new Set()
   for (const r of await getAllSupabase(
-    'competition_mapping?provider=eq.mybet&select=optic_sport,optic_league,optic_tournament,gutsy_competition_id,source,verified',
+    'competition_mapping?provider=eq.mybet&select=id,optic_sport,optic_league,optic_tournament,gutsy_competition_id,source,verified',
   )) {
     const k = `${r.optic_sport}|${r.optic_league}|${r.optic_tournament}`
     if (r.source === 'manual' || r.verified) {
@@ -161,7 +166,7 @@ async function main(opts = { writeSnapshot: true }) {
     }
   }
   const existingEvent = new Map(
-    (await getAllSupabase('event_mapping?provider=eq.mybet&select=optic_fixture_id,source')).map((r) => [
+    (await getAllSupabase('event_mapping?provider=eq.mybet&select=id,optic_fixture_id,source')).map((r) => [
       r.optic_fixture_id,
       r.source,
     ]),
@@ -503,17 +508,34 @@ function writeMybetSnapshots(events) {
   console.log(`  wrote public/mybet-competitions.json (${comps.length}) + mybet-events.json (${evs.length}).`)
 }
 
-async function getAllSupabase(pathAndQuery) {
+/**
+ * Page a table, seeking on a unique key rather than OFFSET.
+ *
+ * Mirrors build-mapping.mjs. OFFSET pagination times out on this database once
+ * the offset is deep — Postgres walks every skipped row — and `fixtures` is
+ * ~97k rows, so the walk exceeded the statement timeout partway through every
+ * run. Seeking reads an index range at any depth.
+ *
+ * `keyCol` must be UNIQUE and present in the select, or rows are skipped,
+ * repeated, or the loop spins on one page.
+ */
+async function getAllSupabase(pathAndQuery, keyCol = 'id') {
   const rows = []
   const size = 1000
-  for (let from = 0; ; from += size) {
-    const r = await fetchRetry(`${REST}/${pathAndQuery}`, {
-      headers: { ...HDR, Range: `${from}-${from + size - 1}`, 'Range-Unit': 'items' },
+  let after = null
+  for (;;) {
+    const sep = pathAndQuery.includes('?') ? '&' : '?'
+    const seek = after == null ? '' : `&${keyCol}=gt.${encodeURIComponent(after)}`
+    const r = await fetchRetry(`${REST}/${pathAndQuery}${sep}order=${keyCol}.asc&limit=${size}${seek}`, {
+      headers: HDR,
     })
     if (!r.ok) bail(`GET ${pathAndQuery} → ${r.status}: ${await r.text()}`)
     const batch = await r.json()
     rows.push(...batch)
     if (batch.length < size) break
+    const next = batch[batch.length - 1]?.[keyCol]
+    if (next == null) bail(`getAllSupabase: '${keyCol}' missing from ${pathAndQuery} — add it to the select`)
+    after = next
   }
   return rows
 }
