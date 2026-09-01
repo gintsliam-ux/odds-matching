@@ -26,17 +26,14 @@ export function LeagueBadge({ league, size = 36 }: { league: League; size?: numb
   const showImage = league.logoUrl && failedUrl !== league.logoUrl;
 
   if (showImage) {
-    // Every badge is the same square so the rail stays aligned. Wordmarks are
-    // dark and wide, so they get a light chip to sit on and letterbox inside it.
-    const boxStyle = league.wordmark
-      ? { width: size, height: size, padding: size * 0.1 }
-      : { width: size, height: size };
+    // Every badge is the same square tile with the same padding, so logos of any
+    // aspect ratio (square crests, wide wordmarks, sparse icons) all render at a
+    // consistent size and stay aligned in the rail. The light chip both unifies
+    // the look and keeps dark wordmarks (ATP/WTA) legible on the dark rail.
     return (
       <span
-        className={`inline-grid shrink-0 place-items-center rounded-lg ${
-          league.wordmark ? 'bg-slate-100' : ''
-        }`}
-        style={boxStyle}
+        className="inline-grid shrink-0 place-items-center overflow-hidden rounded-lg bg-slate-100"
+        style={{ width: size, height: size, padding: size * 0.14 }}
       >
         <img
           src={league.logoUrl}
