@@ -538,33 +538,20 @@ async function main(opts = { writeSnapshot: true }) {
   //
   // Column names differ, so both are aliased back to what the matcher already
   // calls them and nothing downstream changes.
-  // Filter on `source` ONLY, then window in memory.
-  //
-  // `scheduled_start` and `status` carry no index on `fixtures`, so any
-  // server-side filter on them scans ~97k rows and PostgREST cancels the
-  // statement (57014). That is what had been failing every mapping-tick:
-  //   source=eq.optic + scheduled_start=gte.<45d>  → 500 after 3.1s
-  //   source=eq.optic alone                        → 200 in 0.5s
-  // Add an index on (source, scheduled_start) and the date filter can move
-  // back to the server; until then this is the only shape the database serves.
-  const horizonMs = Date.now() - MATCH_HORIZON_D * 86_400_000
+  // Filtered server-side. `fixtures` now has an index covering
+  // (source, scheduled_start), so the date filter no longer statement-timeouts
+  // and this fetches ~5k rows instead of paging all ~18k — which is what kept
+  // the matcher over its budget on Vercel even after the index landed.
+  const horizon = new Date(Date.now() - MATCH_HORIZON_D * 86_400_000).toISOString()
   const opticRows = (
     await getAllSupabase(
       'fixtures?select=fixture_id,optic_fixture_id:fixture_id,sport,league:optic_league,season_type,home_team,away_team,scheduled_start' +
-        '&source=eq.optic',
-      // Seek on the REAL column. The select aliases it to optic_fixture_id for
-      // the matcher's benefit, but `order=` and `gt.` are resolved against the
-      // table, so the alias 400s with "column does not exist".
+        `&source=eq.optic&scheduled_start=gte.${horizon}`,
+      // Seek on the REAL column: `order=`/`gt.` resolve against the table, so
+      // the aliased name 400s with "column does not exist".
       'fixture_id',
     )
-  ).filter((r) => {
-    if (!r.optic_fixture_id) return false
-    // Undated fixtures are kept: a missing start is not evidence of age, and
-    // dropping them would silently stop mapping anything the feed has not
-    // scheduled yet.
-    const t = r.scheduled_start ? Date.parse(r.scheduled_start) : NaN
-    return !Number.isFinite(t) || t >= horizonMs
-  })
+  ).filter((r) => r.optic_fixture_id)
   console.log(`  ${opticRows.length} fixtures.`)
 
   console.log('• Loading gutsy.events from Mongo…')
