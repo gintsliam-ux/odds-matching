@@ -295,44 +295,62 @@ async function withRetry<T>(
 async function fetchFixtures(
   client: NonNullable<typeof supabase>,
   since: string,
+  until?: string,
 ): Promise<FixtureRow[]> {
   // Smaller pages keep each query light, so it's less likely to trip the
   // statement timeout under DB load (and each retry is cheaper).
   const PAGE = 500;
   const byId = new Map<string, FixtureRow>();
+  type Res = PromiseLike<{ data: FixtureRow[] | null; error: { message: string } | null }>;
 
-  // Main: fixtures that started within the window (indexed on scheduled_start).
+  // Main: fixtures with scheduled_start in [since, until) — indexed on
+  // scheduled_start. `until` bounds a specific day (past-date browsing); omit it
+  // for the open-ended live window.
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await withRetry<FixtureRow[]>(() =>
-      client
+    const { data, error } = await withRetry<FixtureRow[]>(() => {
+      let query = client
         .from('fixtures')
         .select(FIXTURE_COLUMNS)
         .eq('has_odds', true)
-        .gte('scheduled_start', since)
-        .order('scheduled_start', { ascending: true })
-        .range(from, from + PAGE - 1) as unknown as PromiseLike<{ data: FixtureRow[] | null; error: { message: string } | null }>,
-    );
+        .gte('scheduled_start', since);
+      if (until) query = query.lt('scheduled_start', until);
+      return query.order('scheduled_start', { ascending: true }).range(from, from + PAGE - 1) as unknown as Res;
+    });
     if (error) throw new Error(`fixtures: ${error.message}`);
     const rows = (data ?? []) as FixtureRow[];
     for (const r of rows) byId.set(r.fixture_id, r);
     if (rows.length < PAGE) break;
   }
 
-  // Multi-day events (golf tournaments) that began earlier but are still running,
-  // keyed off end_date. Scoped to sport=golf so it's a cheap partition scan —
-  // an un-indexed end_date filter across all 139k fixtures times out.
-  const { data: golf } = await withRetry<FixtureRow[]>(() =>
-    client
+  // Multi-day events (golf tournaments) still running over the window/day, keyed
+  // off end_date. Scoped to sport=golf so it's a cheap partition scan — an
+  // un-indexed end_date filter across all fixtures times out.
+  const { data: golf } = await withRetry<FixtureRow[]>(() => {
+    let query = client
       .from('fixtures')
       .select(FIXTURE_COLUMNS)
       .eq('has_odds', true)
       .eq('sport', 'golf')
-      .gte('end_date', since)
-      .order('scheduled_start', { ascending: true }) as unknown as PromiseLike<{ data: FixtureRow[] | null; error: { message: string } | null }>,
-  );
+      .gte('end_date', since);
+    if (until) query = query.lt('scheduled_start', until);
+    return query.order('scheduled_start', { ascending: true }) as unknown as Res;
+  });
   if (golf) for (const r of golf) byId.set(r.fixture_id, r);
 
   return [...byId.values()];
+}
+
+/** Enrich raw fixtures into board events (dedupe, logos, flags). */
+async function toEvents(
+  client: NonNullable<typeof supabase>,
+  fixtures: FixtureRow[],
+): Promise<SportEvent[]> {
+  const deduped = dedupeFixtures(fixtures).filter((f) => !SKIP_SPORTS.has(f.sport));
+  const [compLogos, entities] = await Promise.all([
+    fetchCompetitionLogos(client),
+    fetchFixtureEntities(client, deduped.map((f) => f.fixture_id)),
+  ]);
+  return deduped.map((f) => toSportEvent(f, compLogos, entities));
 }
 
 /**
@@ -426,17 +444,21 @@ export async function fetchAllEvents(): Promise<SportEvent[]> {
   if (!supabase) return [];
   const client = supabase;
   const since = new Date(Date.now() - WINDOW_MS).toISOString();
+  return toEvents(client, await fetchFixtures(client, since));
+}
 
-  const [fixtures, compLogos] = await Promise.all([
-    fetchFixtures(client, since),
-    fetchCompetitionLogos(client),
-  ]);
-  const deduped = dedupeFixtures(fixtures).filter((f) => !SKIP_SPORTS.has(f.sport));
-  const entities = await fetchFixtureEntities(
-    client,
-    deduped.map((f) => f.fixture_id),
-  );
-  return deduped.map((f) => toSportEvent(f, compLogos, entities));
+/**
+ * Fixtures for one local calendar day (YYYY-MM-DD), for browsing past dates that
+ * fall outside the live window. Loaded on demand and merged into the board.
+ */
+export async function fetchEventsForDay(dateStr: string): Promise<SportEvent[]> {
+  if (!supabase) return [];
+  const client = supabase;
+  const start = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(start.getTime())) return [];
+  const dayStart = start.toISOString();
+  const dayEnd = new Date(start.getTime() + 24 * 60 * 60 * 1000).toISOString();
+  return toEvents(client, await fetchFixtures(client, dayStart, dayEnd));
 }
 
 /** Best (highest) H2H decimal price for each side of a fixture. */

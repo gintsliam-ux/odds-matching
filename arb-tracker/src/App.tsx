@@ -5,7 +5,7 @@ import { Header } from './components/Header';
 import { FilterBar } from './components/FilterBar';
 import { EventRow } from './components/EventRow';
 import { ScoreboardBar } from './components/ScoreboardBar';
-import { fetchAllEvents, fetchH2HPrices, type H2HPrices } from './lib/db';
+import { fetchAllEvents, fetchEventsForDay, fetchH2HPrices, type H2HPrices } from './lib/db';
 import { effectiveStatus } from './lib/countdown';
 import { eventPath } from './lib/routing';
 import type { EventStatus, SportEvent } from './lib/types';
@@ -99,6 +99,12 @@ export default function App() {
   const [events, setEvents] = useState<SportEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(true);
   const [eventsError, setEventsError] = useState<string | null>(null);
+  // Past days (older than the live window) are fetched on demand when picked and
+  // merged in. Kept separate so the 60s live poll (which replaces `events`)
+  // doesn't wipe them.
+  const [pastEvents, setPastEvents] = useState<SportEvent[]>([]);
+  const [loadedDays, setLoadedDays] = useState<Set<string>>(new Set());
+  const [pastLoading, setPastLoading] = useState(false);
   // Bumped by the background poll so the open event's odds refresh in step.
   const [oddsNonce, setOddsNonce] = useState(0);
 
@@ -155,6 +161,38 @@ export default function App() {
     }
   }, [sportSel, leagueSel, date, dateTouched]);
 
+  // Browsing a past day: the live window only holds ~48h, so fetch older days on
+  // demand and merge them in (deduped, cached per day).
+  useEffect(() => {
+    const today = localDay(Date.now());
+    if (!date || date >= today || loadedDays.has(date)) return;
+    let cancelled = false;
+    setPastLoading(true);
+    fetchEventsForDay(date)
+      .then((evs) => {
+        if (cancelled) return;
+        setPastEvents((prev) => {
+          const seen = new Set(prev.map((e) => e.id));
+          return [...prev, ...evs.filter((e) => !seen.has(e.id))];
+        });
+        setLoadedDays((prev) => new Set(prev).add(date));
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setPastLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [date, loadedDays]);
+
+  // Live window + any on-demand past days, deduped by id.
+  const allEvents = useMemo(() => {
+    if (pastEvents.length === 0) return events;
+    const seen = new Set(events.map((e) => e.id));
+    return [...events, ...pastEvents.filter((e) => !seen.has(e.id))];
+  }, [events, pastEvents]);
+
   function handleDate(v: string) {
     setDate(v);
     setDateTouched(true);
@@ -165,23 +203,23 @@ export default function App() {
   const [railOpen, setRailOpen] = useState(false);
 
   const sportOptions = useMemo(
-    () => Array.from(new Set(events.map((e) => e.sport))).sort(),
-    [events],
+    () => Array.from(new Set(allEvents.map((e) => e.sport))).sort(),
+    [allEvents],
   );
 
   // Leagues shown in the filter are scoped to the selected sport(s) AND date —
   // so the dropdown only lists competitions that actually have events that day.
   const leagueOptions = useMemo(() => {
-    const inScope = events.filter(
+    const inScope = allEvents.filter(
       (e) => (sportSel.length === 0 || sportSel.includes(e.sport)) && onDate(e, date),
     );
     return Array.from(new Set(inScope.map(leagueLabel))).sort();
-  }, [events, sportSel, date]);
+  }, [allEvents, sportSel, date]);
 
   function handleSport(next: string[]) {
     setSportSel(next);
     const allowed = new Set(
-      events
+      allEvents
         .filter((e) => (next.length === 0 || next.includes(e.sport)) && onDate(e, date))
         .map(leagueLabel),
     );
@@ -192,13 +230,13 @@ export default function App() {
   // these separate means the H2H fetch keys off filters, not the 1s tick.
   const filtered = useMemo(
     () =>
-      events.filter((e) => {
+      allEvents.filter((e) => {
         if (sportSel.length && !sportSel.includes(e.sport)) return false;
         if (leagueSel.length && !leagueSel.includes(leagueLabel(e))) return false;
         if (!onDate(e, date)) return false;
         return true;
       }),
-    [events, sportSel, leagueSel, date],
+    [allEvents, sportSel, leagueSel, date],
   );
 
   // Next to jump: live first, then soonest upcoming, finals last.
@@ -289,7 +327,7 @@ export default function App() {
       })
     : 'All dates';
 
-  const outletContext: LayoutContext = { events, now, eventsLoading, oddsNonce };
+  const outletContext: LayoutContext = { events: allEvents, now, eventsLoading, oddsNonce };
 
   // Opening an event from the rail also closes the mobile drawer.
   const openEvent = (event: SportEvent) => {
@@ -364,7 +402,7 @@ export default function App() {
               <div className="px-2 py-8 text-center text-sm text-red-400">
                 {eventsError}
               </div>
-            ) : eventsLoading && events.length === 0 ? (
+            ) : (eventsLoading && events.length === 0) || (pastLoading && visible.length === 0) ? (
               <div className="px-2 py-8 text-center text-sm text-slate-600">
                 Loading events…
               </div>
