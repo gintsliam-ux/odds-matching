@@ -26,7 +26,12 @@ export function TeamLogo({
   /** Resolved crest/photo URL from the entities view, if any. */
   logo?: string | null;
 }) {
-  const flag = country ? `https://flagcdn.com/w80/${country}.png` : null;
+  // flagcdn is case-sensitive: /w80/JO.png is a 404 while /w80/jo.png is the
+  // flag. Wikidata hands back uppercase ISO codes, so 2,039 players — two
+  // thirds of everyone we had a country for — silently fell through to
+  // initials. Lowercase here as well as at the source, so one bad write can
+  // never take the flags out again.
+  const flag = country ? `https://flagcdn.com/w80/${country.toLowerCase()}.png` : null;
   const candidates = [flag, logo || null, name ? teamLogoUrl(name) : null].filter(
     (c): c is string => Boolean(c),
   );
