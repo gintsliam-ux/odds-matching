@@ -157,7 +157,7 @@ export async function runResolver(opts = {}) {
   // `fixtures`; live_fixtures was retired 2026-08-24. Ordered by the primary
   // key because a paged PostgREST read without ORDER BY is not a stable slice.
   const rows = await getAll(
-    'fixtures?select=sport,league:optic_league,home_team,away_team&source=eq.optic&order=fixture_id.asc',
+    'fixtures?select=sport,league:optic_league,home_team,away_team,scheduled_start&source=eq.optic&order=fixture_id.asc',
   )
   log(`${rows.length} fixture rows.`)
 
@@ -174,9 +174,21 @@ export async function runResolver(opts = {}) {
     }
   }
   log(`${wanted.size} distinct non-major names.`)
-  // Snapshot before the skip pass empties `wanted` — the backlog drain below
-  // needs to know which names the feed actually carries.
-  const boardKeys = new Set(wanted.keys())
+
+  // Names on fixtures anyone can currently see. The backlog drain below is
+  // ordered by this: the archive holds 100k fixtures and ~4.4k unmarked names,
+  // so an undifferentiated drain spends every run on competitors who played
+  // months ago while today's darts field still shows initials.
+  const from = Date.now() - 7 * 864e5
+  const to = Date.now() + 14 * 864e5
+  const boardKeys = new Set()
+  for (const r of rows) {
+    const t = new Date(r.scheduled_start).getTime()
+    if (!(t >= from && t <= to)) continue
+    for (const name of [r.home_team, r.away_team]) {
+      if (name) boardKeys.add(`${(r.sport || '').toLowerCase()}|${name}`)
+    }
+  }
 
   let backlog = []
 
@@ -186,7 +198,7 @@ export async function runResolver(opts = {}) {
     // `entities`, not `entity_logos`. The latter does not exist — PostgREST
     // answers 404 (PGRST205) — so this resolver has been reading nothing and
     // upserting into nowhere, which is why logo coverage stopped moving.
-    const existing = await getAll('entities?select=sport,name,logo_url&order=id.asc').catch((e) => {
+    const existing = await getAll('entities?select=sport,name,logo_url,resolved_at&order=id.asc').catch((e) => {
       log('Could not read entities')
       throw e
     })
@@ -197,13 +209,12 @@ export async function runResolver(opts = {}) {
     await inheritFromParents(existing, log)
     const skip = existing.filter((e) => !retryNull || e.logo_url)
     for (const e of skip) wanted.delete(`${e.sport.toLowerCase()}|${e.name}`)
-    // Only the names actually on the board — draining 8k archive rows would
-    // spend every run's budget on fixtures nobody is looking at.
     if (!retryNull) {
-      const onBoard = new Set([...wanted.keys(), ...boardKeys])
-      backlog = existing.filter(
-        (e) => !e.logo_url && onBoard.has(`${e.sport.toLowerCase()}|${e.name}`),
-      )
+      backlog = existing
+        .filter((e) => !e.logo_url && boardKeys.has(`${e.sport.toLowerCase()}|${e.name}`))
+        // Longest-untried first, so each run picks up where the last left off
+        // instead of grinding through the same unresolvable head every day.
+        .sort((a, b) => (a.resolved_at ?? '').localeCompare(b.resolved_at ?? ''))
     }
     log(
       `${wanted.size} need resolving (${skip.length} already cached${retryNull ? `, ${existing.length - skip.length} nulls being retried` : ''}).`,
@@ -255,6 +266,11 @@ export async function runResolver(opts = {}) {
           source: res?.source ?? null,
           country: res?.country ?? null,
           country_src: res?.country_src ?? null,
+          // Stamped on every attempt, hit or miss. The backlog is drained
+          // oldest-attempt-first, so this is what rotates it: without it a miss
+          // left the row untouched, the next run re-walked the same head of the
+          // list, and the tail was never reached at all.
+          resolved_at: new Date().toISOString(),
         })
         if (batch.length >= 50) await flush(batch)
       }
