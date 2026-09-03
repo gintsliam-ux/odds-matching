@@ -461,6 +461,31 @@ export async function fetchEventsForDay(dateStr: string): Promise<SportEvent[]> 
   return toEvents(client, await fetchFixtures(client, dayStart, dayEnd));
 }
 
+/**
+ * One fixture by id, for a link that names an event the board isn't holding —
+ * anything older than the rolling window, or filtered out of it. A URL is a
+ * promise that it opens what it says; the filters are a way to browse, not a
+ * gate on what exists, so this deliberately ignores them (and `has_odds`).
+ */
+export async function fetchEventById(fixtureId: string): Promise<SportEvent | null> {
+  if (!supabase || !fixtureId) return null;
+  const client = supabase;
+  const { data, error } = await withRetry<FixtureRow[]>(
+    () =>
+      client
+        .from('fixtures')
+        .select(FIXTURE_COLUMNS)
+        .eq('fixture_id', fixtureId)
+        .limit(1) as unknown as PromiseLike<{
+        data: FixtureRow[] | null;
+        error: { message: string } | null;
+      }>,
+  );
+  if (error || !data?.length) return null;
+  const events = await toEvents(client, data);
+  return events[0] ?? null;
+}
+
 const SEARCH_LIMIT = 60;
 /** Shortest term the search will run — the rail keys its search mode off this. */
 export const SEARCH_MIN_CHARS = 2;

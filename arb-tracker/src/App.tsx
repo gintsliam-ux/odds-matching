@@ -10,6 +10,7 @@ import {
   fetchAllEvents,
   fetchEventsForDay,
   fetchH2HPrices,
+  fetchEventById,
   fetchPulse,
   searchEvents,
   SEARCH_MIN_CHARS,
@@ -256,6 +257,26 @@ export default function App() {
     };
   }, [query]);
 
+  // A link can name an event the board isn't holding — one older than the
+  // rolling window, or simply not matching the current filters. The URL wins:
+  // fetch it by id and keep it, so the page opens what it says it opens.
+  const [linked, setLinked] = useState<SportEvent[]>([]);
+  useEffect(() => {
+    if (!activeId) return;
+    if (events.some((e) => e.id === activeId)) return;
+    if (pastEvents.some((e) => e.id === activeId)) return;
+    if (linked.some((e) => e.id === activeId)) return;
+    let cancelled = false;
+    fetchEventById(activeId)
+      .then((e) => {
+        if (!cancelled && e) setLinked((prev) => (prev.some((p) => p.id === e.id) ? prev : [...prev, e]));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [activeId, events, pastEvents, linked]);
+
   // Live window + any on-demand past days, deduped by id.
   const allEvents = useMemo(() => {
     if (pastEvents.length === 0) return events;
@@ -267,10 +288,17 @@ export default function App() {
   // The detail route resolves the open fixture from this, so an event found by
   // search can be opened even though the board never loaded it.
   const knownEvents = useMemo(() => {
-    if (searchResults.length === 0) return allEvents;
+    const extra = [...searchResults, ...linked];
+    if (extra.length === 0) return allEvents;
     const seen = new Set(allEvents.map((e) => e.id));
-    return [...allEvents, ...searchResults.filter((e) => !seen.has(e.id))];
-  }, [allEvents, searchResults]);
+    const merged = [...allEvents];
+    for (const e of extra) {
+      if (seen.has(e.id)) continue;
+      seen.add(e.id);
+      merged.push(e);
+    }
+    return merged;
+  }, [allEvents, searchResults, linked]);
 
   function handleDate(v: string) {
     setDate(v);
@@ -335,7 +363,7 @@ export default function App() {
   // team up, last week's result matters more than one from a year ago.
   const visible = useMemo(() => {
     const rows = searchActive ? searchHits : filtered;
-    return [...rows].sort((a, b) => {
+    const sorted = [...rows].sort((a, b) => {
       const sa = STATUS_ORDER[effectiveStatus(a, now)];
       const sb = STATUS_ORDER[effectiveStatus(b, now)];
       if (sa !== sb) return sa - sb;
@@ -343,7 +371,13 @@ export default function App() {
       const tb = new Date(b.startsAt).getTime();
       return searchActive && sa >= STATUS_ORDER.final ? tb - ta : ta - tb;
     });
-  }, [searchActive, searchHits, filtered, now]);
+    // Whatever is open stays in the rail even when the filters exclude it —
+    // otherwise the page shows an event the list says isn't there, and the
+    // highlighted row has nowhere to be.
+    if (!activeId || sorted.some((e) => e.id === activeId)) return sorted;
+    const open = knownEvents.find((e) => e.id === activeId);
+    return open ? [open, ...sorted] : sorted;
+  }, [searchActive, searchHits, filtered, now, activeId, knownEvents]);
 
   // The top ticker ignores the rail's filters — live now plus everything within
   // the next 24h, finals dropped, live first then soonest to jump.
