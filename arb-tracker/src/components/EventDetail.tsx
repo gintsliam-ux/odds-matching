@@ -15,6 +15,7 @@ import { BookmakerLogo } from './BookmakerLogo';
 import { TeamLogo } from './TeamLogo';
 import { PriceCard, type HoverTarget } from './PriceCard';
 import { MarketsSkeleton } from './Skeleton';
+import { DrawIcon } from './DrawIcon';
 
 // Selection + Best (+ Betfair back/lay for two-sided events), then one column
 // per fixed-odds book. Golf outrights have no exchange, so those two drop out.
@@ -328,6 +329,7 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
                 onHover={setHover}
                 countryFor={countryFor}
                 logoFor={logoFor}
+                sport={event.sport}
               />
             ))}
           </table>
@@ -348,6 +350,9 @@ function BetfairHead({ label }: { label: string }) {
   );
 }
 
+/** Rows that name no competitor because neither side wins it. */
+const DRAW_LABEL = /^(draw|tie|tied)$/i;
+
 function MarketRows({
   group,
   totalCols,
@@ -355,6 +360,7 @@ function MarketRows({
   onHover,
   countryFor,
   logoFor,
+  sport,
 }: {
   group: MarketGroup;
   totalCols: number;
@@ -362,6 +368,8 @@ function MarketRows({
   onHover: HoverFn;
   countryFor: (team: string) => string | null | undefined;
   logoFor: (team: string) => string | null | undefined;
+  /** Display sport, for the draw row's stand-in icon. */
+  sport: string;
 }) {
   // Each market is its own <tbody> so its sticky name is bounded by the market
   // — the next market's name pushes it out and replaces it.
@@ -398,17 +406,9 @@ function MarketRows({
               <span className="flex items-center gap-2">
                 {row.team ? (
                   <TeamLogo name={row.team} size={18} country={countryFor(row.team)} logo={logoFor(row.team)} />
-                ) : row.label === 'Draw' ? (
-                  // The draw outcome has no team — a soccer ball stands in, sized
-                  // to match the team crests either side of it.
-                  <img
-                    src="/logos/leagues/soccer.png"
-                    alt="Draw"
-                    width={18}
-                    height={18}
-                    className="inline-block shrink-0 object-contain"
-                    style={{ width: 18, height: 18 }}
-                  />
+                ) : DRAW_LABEL.test(row.label) ? (
+                  // No competitor to crest — the sport's own object stands in.
+                  <DrawIcon sport={sport} size={18} />
                 ) : null}
                 {row.label}
               </span>
