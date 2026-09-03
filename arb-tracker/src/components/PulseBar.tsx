@@ -1,3 +1,4 @@
+import { Bone } from './Skeleton';
 import type { Pulse } from '../lib/db';
 
 /**
@@ -53,18 +54,44 @@ const GLOW: Partial<Record<Level, string>> = {
   stale: 'shadow-[0_0_6px_0_rgba(239,68,68,0.5)]',
 };
 
+/** Shared by the live bar and its loading state, so neither can drift. */
+const BAR =
+  'flex shrink-0 items-stretch overflow-x-auto border-b border-surface-border bg-surface text-[11px] leading-none whitespace-nowrap';
+/** One slot. 132px is the ticker cell's width — the two strips line up. */
+const SLOT = 'flex min-w-[132px] flex-1 items-center justify-center gap-1.5 px-3 py-1.5';
+const DIVIDER = 'border-l border-surface-border';
+
+/** The five feeds, in the order fetchPulse returns them. */
+const SLOT_LABELS = ['Optic', 'TAB', 'Pinnacle', 'Live', 'Scores'];
+
 export function PulseBar({ pulses, now }: { pulses: Pulse[]; now: number }) {
-  if (pulses.length === 0) return null;
+  // Hold the bar's height and its five slots while the first read is in
+  // flight. Returning null instead made the whole page jump down a row the
+  // moment it landed — and the labels are known before the data is, so there
+  // is no reason to withhold them.
+  if (pulses.length === 0) {
+    return (
+      <div className={BAR} role="status" aria-label="Checking feeds">
+        {SLOT_LABELS.map((label, i) => (
+          <span key={label} className={`${SLOT} ${i ? DIVIDER : ''}`}>
+            <span className="h-2 w-2 shrink-0 rounded-full bg-slate-700" />
+            <span className="text-slate-600">{label}</span>
+            <Bone className="h-2.5 w-6" />
+          </span>
+        ))}
+      </div>
+    );
+  }
 
   return (
-    <div className="flex shrink-0 items-center gap-3 overflow-x-auto border-b border-surface-border bg-surface px-3 py-1 text-[11px] leading-none whitespace-nowrap sm:gap-4">
+    <div className={BAR}>
       {pulses.map((p, i) => {
         const lv = level(p, now);
         const age = p.at ? ago(p.at, now) : '—';
         return (
           <span
             key={p.key}
-            className="flex shrink-0 items-center gap-1.5"
+            className={`${SLOT} ${i ? DIVIDER : ''}`}
             title={
               p.at
                 ? `${p.label}: last write ${new Date(p.at).toLocaleString()}`
