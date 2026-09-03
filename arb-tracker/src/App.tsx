@@ -5,7 +5,14 @@ import { Header } from './components/Header';
 import { FilterBar } from './components/FilterBar';
 import { EventRow } from './components/EventRow';
 import { ScoreboardBar } from './components/ScoreboardBar';
-import { fetchAllEvents, fetchEventsForDay, fetchH2HPrices, type H2HPrices } from './lib/db';
+import {
+  fetchAllEvents,
+  fetchEventsForDay,
+  fetchH2HPrices,
+  searchEvents,
+  SEARCH_MIN_CHARS,
+  type H2HPrices,
+} from './lib/db';
 import { effectiveStatus } from './lib/countdown';
 import { eventPath } from './lib/routing';
 import type { EventStatus, SportEvent } from './lib/types';
@@ -47,6 +54,16 @@ function onDate(e: SportEvent, date: string): boolean {
   const start = localDay(e.startsAt);
   const end = e.endsAt ? localDay(e.endsAt) : start;
   return date >= start && date <= end;
+}
+
+/** Does this event name a team/player matching the (lowercased) search term? */
+function matchesQuery(e: SportEvent, q: string): boolean {
+  return (
+    e.home.toLowerCase().includes(q) ||
+    e.away.toLowerCase().includes(q) ||
+    e.name.toLowerCase().includes(q) ||
+    (e.subtitle ?? '').toLowerCase().includes(q)
+  );
 }
 
 // Filters survive a page refresh via localStorage. `dateTouched` distinguishes
@@ -186,12 +203,52 @@ export default function App() {
     };
   }, [date, loadedDays]);
 
+  // --- team/player search ---
+  // Search is not a filter: it runs against the whole archive and ignores the
+  // sport/league/date pills entirely, so a competitor can be found from
+  // wherever the rail happens to be pointing.
+  const [query, setQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SportEvent[]>([]);
+  const [searching, setSearching] = useState(false);
+  const searchActive = query.trim().length >= SEARCH_MIN_CHARS;
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < SEARCH_MIN_CHARS) {
+      setSearchResults([]);
+      setSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    // Debounced so a fast typist fires one query, not one per keystroke.
+    const timer = setTimeout(() => {
+      searchEvents(q)
+        .then((r) => !cancelled && setSearchResults(r))
+        .catch(() => {})
+        .finally(() => !cancelled && setSearching(false));
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query]);
+
   // Live window + any on-demand past days, deduped by id.
   const allEvents = useMemo(() => {
     if (pastEvents.length === 0) return events;
     const seen = new Set(events.map((e) => e.id));
     return [...events, ...pastEvents.filter((e) => !seen.has(e.id))];
   }, [events, pastEvents]);
+
+  // Everything we hold — the board plus search hits from outside its window.
+  // The detail route resolves the open fixture from this, so an event found by
+  // search can be opened even though the board never loaded it.
+  const knownEvents = useMemo(() => {
+    if (searchResults.length === 0) return allEvents;
+    const seen = new Set(allEvents.map((e) => e.id));
+    return [...allEvents, ...searchResults.filter((e) => !seen.has(e.id))];
+  }, [allEvents, searchResults]);
 
   function handleDate(v: string) {
     setDate(v);
@@ -239,17 +296,32 @@ export default function App() {
     [allEvents, sportSel, leagueSel, date],
   );
 
-  // Next to jump: live first, then soonest upcoming, finals last.
-  const visible = useMemo(
-    () =>
-      [...filtered].sort((a, b) => {
-        const sa = STATUS_ORDER[effectiveStatus(a, now)];
-        const sb = STATUS_ORDER[effectiveStatus(b, now)];
-        if (sa !== sb) return sa - sb;
-        return new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime();
-      }),
-    [filtered, now],
-  );
+  // Search hits: everything on the board that names the competitor (instant,
+  // always current) plus the archive rows the query returned (which can reach
+  // outside the board window, and cover golf fields whose player names live in
+  // the odds rather than the fixture).
+  const searchHits = useMemo(() => {
+    if (!searchActive) return [];
+    const q = query.trim().toLowerCase();
+    const local = allEvents.filter((e) => matchesQuery(e, q));
+    const seen = new Set(local.map((e) => e.id));
+    return [...local, ...searchResults.filter((e) => !seen.has(e.id))];
+  }, [searchActive, query, allEvents, searchResults]);
+
+  // Next to jump: live first, then soonest upcoming, finals last. Search results
+  // sort the same way, except finished events run most-recent-first — looking a
+  // team up, last week's result matters more than one from a year ago.
+  const visible = useMemo(() => {
+    const rows = searchActive ? searchHits : filtered;
+    return [...rows].sort((a, b) => {
+      const sa = STATUS_ORDER[effectiveStatus(a, now)];
+      const sb = STATUS_ORDER[effectiveStatus(b, now)];
+      if (sa !== sb) return sa - sb;
+      const ta = new Date(a.startsAt).getTime();
+      const tb = new Date(b.startsAt).getTime();
+      return searchActive && sa >= STATUS_ORDER.final ? tb - ta : ta - tb;
+    });
+  }, [searchActive, searchHits, filtered, now]);
 
   // The top ticker ignores the rail's filters — live now plus everything within
   // the next 24h, finals dropped, live first then soonest to jump.
@@ -317,7 +389,8 @@ export default function App() {
     if (visible.length > 0) navigate(eventPath(visible[0]), { replace: true });
   }, [activeId, visible, navigate]);
 
-  // Heading tracks the filtered day, so it can never disagree with the list.
+  // Heading tracks whatever the list is showing — the search term while a
+  // search is running, otherwise the filtered day.
   const dateHeading = date
     ? new Date(`${date}T00:00:00`).toLocaleDateString(undefined, {
         weekday: 'short',
@@ -326,8 +399,11 @@ export default function App() {
         year: 'numeric',
       })
     : 'All dates';
+  const listHeading = searchActive
+    ? `${visible.length} match${visible.length === 1 ? '' : 'es'} for “${query.trim()}”`
+    : dateHeading;
 
-  const outletContext: LayoutContext = { events: allEvents, now, eventsLoading, oddsNonce };
+  const outletContext: LayoutContext = { events: knownEvents, now, eventsLoading, oddsNonce };
 
   // Opening an event from the rail also closes the mobile drawer.
   const openEvent = (event: SportEvent) => {
@@ -390,11 +466,14 @@ export default function App() {
               leagueSel={leagueSel}
               leagueOptions={leagueOptions}
               onLeague={setLeagueSel}
+              query={query}
+              onQuery={setQuery}
+              searching={searching}
             />
           </div>
 
           <div className="shrink-0 px-3 py-2 text-xs font-medium uppercase tracking-wide text-slate-500">
-            {dateHeading}
+            {listHeading}
           </div>
 
           <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-4">
@@ -402,13 +481,17 @@ export default function App() {
               <div className="px-2 py-8 text-center text-sm text-red-400">
                 {eventsError}
               </div>
-            ) : (eventsLoading && events.length === 0) || (pastLoading && visible.length === 0) ? (
+            ) : (eventsLoading && events.length === 0) ||
+              (pastLoading && visible.length === 0) ||
+              (searching && visible.length === 0) ? (
               <div className="px-2 py-8 text-center text-sm text-slate-600">
-                Loading events…
+                {searching ? 'Searching…' : 'Loading events…'}
               </div>
             ) : visible.length === 0 ? (
               <div className="px-2 py-8 text-center text-sm text-slate-600">
-                No events match these filters.
+                {searchActive
+                  ? `No teams or players match “${query.trim()}”.`
+                  : 'No events match these filters.'}
               </div>
             ) : (
               visible.map((event) => (

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Calendar, Check, ChevronDown, X } from 'lucide-react';
+import { Calendar, Check, ChevronDown, Search, X } from 'lucide-react';
 
 interface Props {
   date: string;
@@ -10,6 +10,10 @@ interface Props {
   leagueSel: string[];
   leagueOptions: string[];
   onLeague: (v: string[]) => void;
+  query: string;
+  onQuery: (v: string) => void;
+  /** True while the search query is being fetched, for the inline spinner. */
+  searching?: boolean;
 }
 
 const PILL =
@@ -184,6 +188,50 @@ function MultiPill({
   );
 }
 
+/**
+ * Team/player search. Deliberately sits below the pills and ignores them — a
+ * search is "find this competitor anywhere", not "narrow what's already shown",
+ * so it answers with events from any sport, league or date.
+ */
+function SearchBox({
+  value,
+  onChange,
+  searching,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  searching?: boolean;
+}) {
+  return (
+    <div className="relative">
+      <Search
+        size={14}
+        className={`pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 ${
+          searching ? 'animate-pulse text-emerald-400' : 'text-slate-500'
+        }`}
+      />
+      <input
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Search teams or players"
+        aria-label="Search teams or players"
+        className="w-full rounded-lg border border-surface-border bg-surface-raised py-1.5 pl-8 pr-8 text-sm text-slate-200 placeholder:text-slate-500 hover:border-slate-600 focus:border-emerald-500/60 focus:outline-none [&::-webkit-search-cancel-button]:appearance-none"
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => onChange('')}
+          aria-label="Clear search"
+          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-200"
+        >
+          <X size={14} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function FilterBar({
   date,
   onDate,
@@ -193,6 +241,9 @@ export function FilterBar({
   leagueSel,
   leagueOptions,
   onLeague,
+  query,
+  onQuery,
+  searching,
 }: Props) {
   // The date gets its own row — squeezed into a third of a 320px rail there is
   // no date format that survives the icon + clear button.
@@ -214,6 +265,12 @@ export function FilterBar({
           alignRight
         />
       </div>
+      <SearchBox value={query} onChange={onQuery} searching={searching} />
+      {query.trim().length > 0 && (
+        <p className="px-0.5 text-[11px] leading-tight text-slate-500">
+          Searching every sport, league and date — the filters above don't apply.
+        </p>
+      )}
     </div>
   );
 }

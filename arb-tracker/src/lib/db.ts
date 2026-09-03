@@ -461,6 +461,93 @@ export async function fetchEventsForDay(dateStr: string): Promise<SportEvent[]> 
   return toEvents(client, await fetchFixtures(client, dayStart, dayEnd));
 }
 
+const SEARCH_LIMIT = 60;
+/** Shortest term the search will run — the rail keys its search mode off this. */
+export const SEARCH_MIN_CHARS = 2;
+/** Fixtures older than this are the "past" half of the split. */
+const SEARCH_PAST_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * PostgREST parses `or=(...)` as a comma-separated list, so a term containing a
+ * comma, parenthesis or quote would break the filter (and `*`/`%` are wildcards
+ * the user shouldn't get to inject). Strip them rather than escaping.
+ */
+function searchTerm(query: string): string {
+  return query.replace(/[,()*%"\\]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** Golf outright fields: the player is in the odds selections, not the fixture. */
+async function searchOutrightFixtures(
+  client: NonNullable<typeof supabase>,
+  pattern: string,
+): Promise<FixtureRow[]> {
+  const { data } = await client
+    .from('odds')
+    .select('fixture_id')
+    .eq('market_id', 'outright')
+    .ilike('selection', pattern)
+    .limit(500);
+  const ids = [...new Set(((data ?? []) as { fixture_id: string }[]).map((r) => r.fixture_id))];
+  if (ids.length === 0) return [];
+  const { data: rows } = await client
+    .from('fixtures')
+    .select(FIXTURE_COLUMNS)
+    .in('fixture_id', ids.slice(0, 40));
+  return (rows ?? []) as unknown as FixtureRow[];
+}
+
+/**
+ * Team/player search over the whole fixtures archive — deliberately NOT scoped
+ * to the board's sport/league/date filters, so "arsenal" finds Arsenal whatever
+ * the rail is currently showing.
+ *
+ * Three passes, merged: upcoming matches (soonest first), past matches (most
+ * recent first) and — for outright fields, where the fixture row carries no
+ * competitor names at all — the golf tournaments whose `outright` selections
+ * name the player. Each pass is capped, so a two-letter term can't drag the
+ * whole archive down the wire.
+ */
+export async function searchEvents(query: string): Promise<SportEvent[]> {
+  if (!supabase) return [];
+  const term = searchTerm(query);
+  if (term.length < SEARCH_MIN_CHARS) return [];
+  const client = supabase;
+  const pattern = `*${term}*`;
+  const or = `home_team.ilike.${pattern},away_team.ilike.${pattern},event_name.ilike.${pattern}`;
+  const cutoff = new Date(Date.now() - SEARCH_PAST_MS).toISOString();
+  type Res = PromiseLike<{ data: FixtureRow[] | null; error: { message: string } | null }>;
+
+  const [upcoming, past, outrights] = await Promise.all([
+    withRetry<FixtureRow[]>(() =>
+      client
+        .from('fixtures')
+        .select(FIXTURE_COLUMNS)
+        .eq('has_odds', true)
+        .or(or)
+        .gte('scheduled_start', cutoff)
+        .order('scheduled_start', { ascending: true })
+        .limit(SEARCH_LIMIT) as unknown as Res,
+    ),
+    withRetry<FixtureRow[]>(() =>
+      client
+        .from('fixtures')
+        .select(FIXTURE_COLUMNS)
+        .eq('has_odds', true)
+        .or(or)
+        .lt('scheduled_start', cutoff)
+        .order('scheduled_start', { ascending: false })
+        .limit(SEARCH_LIMIT) as unknown as Res,
+    ),
+    searchOutrightFixtures(client, pattern).catch(() => [] as FixtureRow[]),
+  ]);
+
+  const byId = new Map<string, FixtureRow>();
+  for (const r of [...(upcoming.data ?? []), ...(past.data ?? []), ...outrights]) {
+    byId.set(r.fixture_id, r);
+  }
+  return toEvents(client, [...byId.values()]);
+}
+
 /** Best (highest) H2H decimal price for each side of a fixture. */
 export interface H2HPrices {
   home: number | null;
