@@ -37,6 +37,10 @@ function credentials() {
 
 let REST = ''
 let H = {}
+// flush()/upsertRows() report rejected batches, but `log` lives inside
+// runResolver — so the report path threw ReferenceError the first time a batch
+// was ever rejected. runResolver points this at its own logger.
+let logLine = () => {}
 
 // Leagues handled in-app via ESPN — no need to resolve here.
 const MAJOR_LEAGUES = new Set(['mlb', 'nfl', 'nhl', 'nba', 'wnba'])
@@ -90,6 +94,19 @@ const REJECT =
 const REJECT_PLACE =
   /Town_Hall|City_Hall|Skyline|_CBD|Street|Railway_station|Post_Office|Courthouse|Library|Bridge|Beach|Aerial|Panorama|Church|Cathedral|Museum/i
 
+// The same shapes in the languages the clubs are actually written in. An
+// English-only list let "Vista de Puerto Madryn" through as the crest for
+// Puerto Montt Basquetbol, and stadium photos through for half of Scandinavia.
+const REJECT_PLACE_INTL =
+  /Vista_|_plage|_playa|Stadion|Estadio|Est[aá]dio|Stadium|Arena|_banen|Ayuntamiento|Rathaus|Ciudad_de|Panor[aá]mica|Hall%2C|Universit/i
+
+// A crest is a logo file. A .jpg is a photograph — of a stadium, a town, or the
+// wrong person entirely (Real Madrid CF once carried a picture of José Mourinho
+// at Fenerbahçe) — unless its filename says otherwise. Nothing beats a wrong
+// mark: initials don't assert something false.
+const LOGO_WORD = /logo|crest|badge|escudo|emblem|shield|scudetto|logotipo|wappen/i
+const isPhoto = (url) => /\.(jpe?g)(\?|$)/i.test(url || '') && !LOGO_WORD.test(url || '')
+
 // CLI entry — only when invoked directly, never on import.
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   runResolver({
@@ -105,6 +122,11 @@ if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
     // the resolver itself has been improved (e.g. added the REST summary
     // fallback) without paying the cost of redoing every working row.
     retryNull: process.argv.includes('--retry-null'),
+    // --deadline=120 : stop cleanly after N seconds, the way the cron does, so
+    // a manual drain can be run in bounded chunks. Unset means run to the end.
+    deadlineMs:
+      Number((process.argv.find((a) => a.startsWith('--deadline=')) ?? '').split('=')[1]) * 1000 ||
+      Infinity,
     log: console.log,
   }).catch((e) => {
     console.error(e)
@@ -128,6 +150,7 @@ export async function runResolver(opts = {}) {
   const only = new Set(sports)
   const started = Date.now()
   const expired = () => Date.now() - started >= deadlineMs
+  logLine = log
   ;({ REST, H } = credentials())
 
   log('Loading fixtures…')
@@ -151,6 +174,11 @@ export async function runResolver(opts = {}) {
     }
   }
   log(`${wanted.size} distinct non-major names.`)
+  // Snapshot before the skip pass empties `wanted` — the backlog drain below
+  // needs to know which names the feed actually carries.
+  const boardKeys = new Set(wanted.keys())
+
+  let backlog = []
 
   // A --sport run is a repair: whatever is cached for those sports was resolved
   // under the old hint and is exactly what needs replacing.
@@ -169,9 +197,30 @@ export async function runResolver(opts = {}) {
     await inheritFromParents(existing, log)
     const skip = existing.filter((e) => !retryNull || e.logo_url)
     for (const e of skip) wanted.delete(`${e.sport.toLowerCase()}|${e.name}`)
+    // Only the names actually on the board — draining 8k archive rows would
+    // spend every run's budget on fixtures nobody is looking at.
+    if (!retryNull) {
+      const onBoard = new Set([...wanted.keys(), ...boardKeys])
+      backlog = existing.filter(
+        (e) => !e.logo_url && onBoard.has(`${e.sport.toLowerCase()}|${e.name}`),
+      )
+    }
     log(
       `${wanted.size} need resolving (${skip.length} already cached${retryNull ? `, ${existing.length - skip.length} nulls being retried` : ''}).`,
     )
+  }
+
+  // New names first, then spend whatever budget is left draining the backlog of
+  // rows that have no mark: players still missing a country, and the crests
+  // cleared as photographs. Without this the backlog is immortal — the default
+  // pass skips any name that already has a row, so nothing that once failed is
+  // ever looked at again, and 5.5k players simply never got a flag.
+  if (backlog.length) {
+    log(`${backlog.length} rows carry no mark — appended, to drain with the leftover budget.`)
+    for (const e of backlog) {
+      const k = `${e.sport.toLowerCase()}|${e.name}`
+      if (!wanted.has(k)) wanted.set(k, { sport: e.sport.toLowerCase(), name: e.name })
+    }
   }
 
   const items = [...wanted.values()]
@@ -191,7 +240,22 @@ export async function runResolver(opts = {}) {
         failed++ // request failed — don't cache, retry on a later run
       } else {
         if (res) hits++
-        batch.push({ sport, name, logo_url: res, source: res ? 'wikipedia' : null })
+        // `res` is the resolved mark's fields (flag + country for people, crest
+        // for clubs) or null — a looked-for-and-missing, cached so the next run
+        // doesn't crawl it again.
+        //
+        // Every row must carry the SAME keys: PostgREST rejects a bulk insert
+        // whose objects differ ("All object keys must match"), so a player row
+        // with a country alongside a team row without one fails the whole batch.
+        batch.push({
+          sport,
+          name,
+          normalized: joinKey(name),
+          logo_url: res?.logo_url ?? null,
+          source: res?.source ?? null,
+          country: res?.country ?? null,
+          country_src: res?.country_src ?? null,
+        })
         if (batch.length >= 50) await flush(batch)
       }
       if (done % 50 === 0) log(`  ${done}/${items.length} (${hits} logos, ${failed} failed)`)
@@ -220,9 +284,100 @@ export async function runResolver(opts = {}) {
 }
 
 /** string = logo URL, null = resolved but no image, undefined = request failed. */
+/**
+ * Sports contested by individuals. Their mark is the flag of the country they
+ * compete for — never a headshot, which dates, is missing for most of a field,
+ * and reads as noise at row height. Resolving a photo for these was the reason
+ * darts and boxing showed nothing at all: the app suppresses player photos, so
+ * every headshot the resolver found was work thrown away.
+ */
+const PLAYER_SPORTS = new Set(['tennis', 'golf', 'mma', 'boxing', 'darts', 'snooker', 'table_tennis', 'badminton'])
+
+const flagUrl = (iso) => `https://flagcdn.com/w160/${iso.toLowerCase()}.png`
+
+/**
+ * A competitor's mark: a flag for people, a crest for clubs.
+ * Returns the URL, null (looked, found nothing), or undefined (request failed —
+ * the caller must not cache that as a miss).
+ */
 async function resolve(sport, name) {
   const hint = SPORT_HINT[sport] || ''
-  return wikipedia(name, hint)
+  if (PLAYER_SPORTS.has(sport)) {
+    const c = await playerCountry(name, hint)
+    if (c === undefined) return undefined
+    return c ? { logo_url: flagUrl(c.iso), country: c.iso.toLowerCase(), source: 'flagcdn', country_src: 'wikidata' } : null
+  }
+  const url = await wikipedia(name, hint)
+  return url === undefined || url === null ? url : { logo_url: url, source: 'wikipedia' }
+}
+
+/* ------------------------------------------------------------------ wikidata */
+
+const isoCache = new Map()
+
+/** ISO-3166 alpha-2 for a Wikidata country QID. */
+async function isoOf(qid) {
+  if (isoCache.has(qid)) return isoCache.get(qid)
+  const d = await wikidata(`&entity=${qid}&property=P297`)
+  if (d === undefined) return undefined
+  const iso = d?.claims?.P297?.[0]?.mainsnak?.datavalue?.value || null
+  isoCache.set(qid, iso)
+  return iso
+}
+
+async function wikidata(query) {
+  const u = `https://www.wikidata.org/w/api.php?action=wbgetclaims&format=json&origin=*${query}`
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const r = await fetch(u, { headers: { 'User-Agent': WIKI_UA, 'Api-User-Agent': WIKI_UA } })
+      if (r.status === 429 || r.status >= 500) {
+        await sleep(800 * (attempt + 1))
+        continue
+      }
+      if (!r.ok) return null
+      return await r.json()
+    } catch {
+      await sleep(500 * (attempt + 1))
+    }
+  }
+  return undefined
+}
+
+/**
+ * The country a player competes for. Wikidata's P1532 ("country for sport") is
+ * an explicit claim and the right one — it is what they compete under, which is
+ * not always citizenship; P27 is the fallback.
+ */
+export async function playerCountry(name, hint) {
+  const q = encodeURIComponent(`${name} ${hint}`.trim())
+  const u =
+    `https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*` +
+    `&generator=search&gsrsearch=${q}&gsrlimit=3&redirects=1&prop=pageprops&ppprop=wikibase_item`
+  let search
+  try {
+    const r = await fetch(u, { headers: { 'User-Agent': WIKI_UA, 'Api-User-Agent': WIKI_UA } })
+    if (r.status === 429 || r.status >= 500) return undefined
+    if (!r.ok) return null
+    search = await r.json()
+  } catch {
+    return undefined
+  }
+  const pages = Object.values(search?.query?.pages || {})
+    .filter((p) => relevant(name, p.title || ''))
+    .sort((a, b) => (a.index ?? 99) - (b.index ?? 99))
+  for (const p of pages) {
+    const qid = p?.pageprops?.wikibase_item
+    if (!qid) continue
+    const d = await wikidata(`&entity=${qid}`)
+    if (d === undefined) return undefined
+    const claim = d?.claims?.P1532?.[0] || d?.claims?.P27?.[0]
+    const cq = claim?.mainsnak?.datavalue?.value?.id
+    if (!cq) continue
+    const iso = await isoOf(cq)
+    if (iso === undefined) return undefined
+    if (iso) return { iso, title: p.title }
+  }
+  return null
 }
 
 // Wikipedia search → top page's thumbnail. The sport hint disambiguates
@@ -269,7 +424,7 @@ async function wikipedia(name, hint) {
       for (const c of ranked) {
         const t = c.page?.thumbnail?.source
         if (t) {
-          if (REJECT.test(t) || REJECT_PLACE.test(t)) continue
+          if (rejectImage(t)) continue
           return t
         }
         // The search found the right page but it has no pageimage (common for
@@ -277,7 +432,7 @@ async function wikipedia(name, hint) {
         // reliably.
         const summary = await wikipediaSummary(c.title)
         if (summary === undefined) return undefined // request failure
-        if (summary && !REJECT.test(summary) && !REJECT_PLACE.test(summary)) return summary
+        if (summary && !rejectImage(summary)) return summary
       }
       return null
     } catch {
@@ -331,23 +486,79 @@ function tokens(s) {
 const GENERIC_TITLE_WORDS = new Set([
   'football', 'club', 'fc', 'afc', 'sc', 'association', 'team', 'sports', 'sporting',
   'the', 'of', 'and',
+  // Sport and administrative nouns a title adds without changing who it is
+  // about: "Somerset" -> "Somerset County Cricket Club" is the same county side.
+  'cricket', 'basketball', 'baseball', 'hockey', 'rugby', 'netball', 'handball',
+  'volleyball', 'futsal', 'county', 'national', 'professional', 'city_council',
 ])
+
+/**
+ * Gender markers are NOT generic — "Somerset" resolved to the Somerset Women
+ * crest, the wrong team wearing the right name.
+ *
+ * The guard is one-directional on purpose. A gendered TITLE for a plain name is
+ * drift and gets rejected; a gendered NAME landing on the plain club article is
+ * correct, because a women's side wears its club's crest (Arsenal WFC should
+ * get Arsenal's). Note the marker only survives unpunctuated — "W.F.C." tokenises
+ * to nothing — which is another reason not to reject on the name side.
+ */
+const GENDERED = new Set([
+  'women', 'womens', 'ladies', 'female', 'feminino', 'femenino', 'feminine', 'wfc',
+])
+const gendered = (toks) => [...toks].some((t) => GENDERED.has(t))
 
 const DIRECTIONAL = new Set([
   'north', 'south', 'east', 'west', 'central', 'northern', 'southern', 'eastern',
   'western', 'upper', 'lower',
 ])
 
-/** true if the page title shares a meaningful token with the searched name. */
-function relevant(name, title) {
+/**
+ * The key `fixture_entities` joins on: (sport, normalized). Write it on every
+ * upsert — a row without it is invisible to the view no matter how good its
+ * logo is, which is how 4.7k resolved marks sat dark until backfilled
+ * (scripts/backfill-entity-normalized.mjs).
+ */
+const joinKey = (s) =>
+  (s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_|_$/g, '')
+
+/** Every way an image disqualifies itself as a crest. */
+export function rejectImage(url) {
+  return REJECT.test(url) || REJECT_PLACE.test(url) || REJECT_PLACE_INTL.test(url) || isPhoto(url)
+}
+
+/**
+ * true if the page title is plausibly ABOUT the searched name.
+ *
+ * One shared token used to be enough, which is how "Puerto Montt Basquetbol"
+ * landed on "Puerto Madryn" (shares `puerto`) and "Colo Colo" on "Nando de
+ * Colo" (shares `colo`). Common place-name and surname fragments make single
+ * overlaps worthless, so:
+ *
+ *   two or more shared tokens — accept. This keeps sponsor and legal-form
+ *     prefixes working ("PGE FKS Stal Mielec" -> "Stal Mielec").
+ *   exactly one shared token — accept only if the title adds nothing beyond
+ *     generic club words. "Nando de Colo" adds `nando` and "Puerto Madryn"
+ *     adds `madryn`, so both are out; "Colo-Colo" adds nothing and is in.
+ */
+export function relevant(name, title) {
   const n = tokens(name)
   if (n.size === 0) return true // nothing distinctive to check — trust the search
   const t = tokens(title)
   // A directional word in the title that the name does not have means the
   // search drifted to the neighbouring club, not this one.
   for (const tok of t) if (DIRECTIONAL.has(tok) && !n.has(tok)) return false
-  for (const tok of n) if (t.has(tok)) return true
-  return false
+  if (gendered(t) && !gendered(n)) return false
+  let shared = 0
+  for (const tok of n) if (t.has(tok)) shared++
+  if (shared === 0) return false
+  if (shared >= 2) return true
+  for (const tok of t) if (!n.has(tok) && !GENERIC_TITLE_WORDS.has(tok)) return false
+  return true
 }
 
 let skipped = 0
@@ -429,7 +640,7 @@ async function inheritFromParents(existing, log = () => {}) {
     if (!parent) continue
     const p = byNorm.get(`${(e.sport || '').toLowerCase()}|${norm(parent)}`)
     if (!p?.logo_url) continue
-    batch.push({ sport: e.sport, name: e.name, logo_url: p.logo_url, source: 'parent' })
+    batch.push({ sport: e.sport, name: e.name, normalized: joinKey(e.name), logo_url: p.logo_url, source: 'parent' })
     found++
     if (batch.length >= 50) await flush(batch)
   }
@@ -443,12 +654,12 @@ async function flush(batch) {
   const rows = batch.splice(0, batch.length)
   const err = await upsertRows(rows)
   if (!err) return
-  log(`  batch of ${rows.length} rejected (${err}) — retrying row by row`)
+  logLine(`  batch of ${rows.length} rejected (${err}) — retrying row by row`)
   for (const row of rows) {
     const rowErr = await upsertRows([row])
     if (rowErr) {
       skipped++
-      log(`  skipped ${row.sport}/${row.name}: ${rowErr}`)
+      logLine(`  skipped ${row.sport}/${row.name}: ${rowErr}`)
     }
   }
 }
