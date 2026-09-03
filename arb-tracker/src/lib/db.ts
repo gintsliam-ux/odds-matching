@@ -629,3 +629,105 @@ export async function fetchOdds(event: SportEvent): Promise<OddsRow[]> {
   }
   return all;
 }
+
+/* ------------------------------------------------------------------- pulse */
+
+/**
+ * One heartbeat in the status bar: how long ago this source last moved.
+ * `at` is null when we could not read it at all (which is its own signal).
+ */
+export interface Pulse {
+  key: string;
+  label: string;
+  /** ISO timestamp of the most recent write we can see, or null. */
+  at: string | null;
+  /** Short qualifier shown beside the age, e.g. "44 live", "41/44". */
+  detail?: string;
+  /** Nothing to report rather than something wrong — renders grey, not red. */
+  idle?: boolean;
+  /** Minutes past which the dot turns amber, then red. */
+  warn: number;
+  stale: number;
+}
+
+/** Newest `updated_at` among a book's odds rows, or null. */
+async function newestBookWrite(
+  client: NonNullable<typeof supabase>,
+  book: string,
+): Promise<string | null> {
+  const { data, error } = await client
+    .from('odds')
+    .select('updated_at')
+    .eq('sportsbook', book)
+    .order('updated_at', { ascending: false })
+    .limit(1);
+  if (error || !data?.length) return null;
+  return (data[0] as { updated_at: string | null }).updated_at ?? null;
+}
+
+interface LiveRow {
+  updated_at: string | null;
+  scores: { home?: { total?: number | null } | null; away?: { total?: number | null } | null } | null;
+}
+
+/**
+ * Freshness of the feeds the board is built from — the Optic fixture feed, the
+ * two books whose prices anchor everything, and whether live scores are still
+ * ticking. Four small indexed reads, so this can sit on the 60s poll.
+ */
+export async function fetchPulse(): Promise<Pulse[]> {
+  if (!supabase) return [];
+  const client = supabase;
+
+  const [optic, tab, pinnacle, live] = await Promise.all([
+    client
+      .from('fixtures')
+      .select('updated_at')
+      .eq('source', 'optic')
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .then(({ data, error }) =>
+        error || !data?.length ? null : ((data[0] as { updated_at: string | null }).updated_at ?? null),
+      ),
+    newestBookWrite(client, 'tab'),
+    newestBookWrite(client, 'pinnacle'),
+    client
+      .from('fixtures')
+      .select('updated_at,scores')
+      .eq('is_live', true)
+      .order('updated_at', { ascending: false })
+      .limit(300)
+      .then(({ data, error }) => (error ? [] : ((data ?? []) as LiveRow[]))),
+  ]);
+
+  // A score only counts once it carries a number — an empty `scores` object is
+  // the shape the feed writes before anything has been played.
+  const scored = live.filter(
+    (r) => typeof r.scores?.home?.total === 'number' || typeof r.scores?.away?.total === 'number',
+  );
+
+  return [
+    { key: 'optic', label: 'Optic', at: optic, warn: 10, stale: 30 },
+    { key: 'tab', label: 'TAB', at: tab, warn: 15, stale: 45 },
+    { key: 'pinnacle', label: 'Pinnacle', at: pinnacle, warn: 10, stale: 30 },
+    {
+      key: 'live',
+      label: 'Live',
+      at: live[0]?.updated_at ?? null,
+      detail: live.length ? `${live.length}` : undefined,
+      // No live fixtures at 4am is not a fault — say so rather than alarm.
+      idle: live.length === 0,
+      warn: 5,
+      stale: 15,
+    },
+    {
+      key: 'scores',
+      label: 'Scores',
+      at: scored[0]?.updated_at ?? null,
+      detail: live.length ? `${scored.length}/${live.length}` : undefined,
+      idle: live.length === 0,
+      warn: 10,
+      stale: 30,
+    },
+  ];
+}

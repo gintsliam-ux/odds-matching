@@ -5,13 +5,16 @@ import { Header } from './components/Header';
 import { FilterBar } from './components/FilterBar';
 import { EventRow } from './components/EventRow';
 import { ScoreboardBar } from './components/ScoreboardBar';
+import { PulseBar } from './components/PulseBar';
 import {
   fetchAllEvents,
   fetchEventsForDay,
   fetchH2HPrices,
+  fetchPulse,
   searchEvents,
   SEARCH_MIN_CHARS,
   type H2HPrices,
+  type Pulse,
 } from './lib/db';
 import { effectiveStatus } from './lib/countdown';
 import { eventPath } from './lib/routing';
@@ -156,6 +159,25 @@ export default function App() {
         .catch(() => {});
     }, 60_000);
     return () => clearInterval(id);
+  }, []);
+
+  // --- feed pulse ---
+  // Freshness of the sources behind the board, refreshed on the same 60s beat
+  // as the events themselves. Failures leave the last reading in place rather
+  // than blanking the bar — a blip shouldn't read as an outage.
+  const [pulses, setPulses] = useState<Pulse[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const read = () =>
+      fetchPulse()
+        .then((p) => !cancelled && setPulses(p))
+        .catch(() => {});
+    read();
+    const id = setInterval(read, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, []);
 
   // --- filters (restored from localStorage so they survive a refresh) ---
@@ -413,6 +435,9 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
+      {/* Pulse check on the feeds — above everything, including the ticker. */}
+      <PulseBar pulses={pulses} now={now} />
+
       {/* Mobile-only top bar: the logo opens the rail drawer. */}
       <div className="flex items-center gap-2.5 border-b border-surface-border px-3 py-2 md:hidden">
         <button
