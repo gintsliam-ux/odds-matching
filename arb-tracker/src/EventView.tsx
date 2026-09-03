@@ -4,6 +4,7 @@ import { EventDetail } from './components/EventDetail';
 import { fetchOdds } from './lib/db';
 import { buildMarkets, type Bookmaker, type MarketGroup } from './lib/markets';
 import { eventPath, eventSlug } from './lib/routing';
+import { EventPageSkeleton } from './components/Skeleton';
 import type { SportEvent } from './lib/types';
 
 export interface LayoutContext {
@@ -11,6 +12,8 @@ export interface LayoutContext {
   now: number;
   eventsLoading: boolean;
   oddsNonce: number;
+  /** True while the URL's fixture is still being looked up by id. */
+  linkResolving: boolean;
 }
 
 function Placeholder({ text }: { text: string }) {
@@ -25,7 +28,7 @@ function Placeholder({ text }: { text: string }) {
 
 export default function EventView() {
   const { fixtureId, slug } = useParams();
-  const { events, now, eventsLoading } = useOutletContext<LayoutContext>();
+  const { events, now, eventsLoading, linkResolving } = useOutletContext<LayoutContext>();
   const navigate = useNavigate();
 
   const selected = events.find((e) => e.id === fixtureId) ?? null;
@@ -106,7 +109,10 @@ export default function EventView() {
       />
     );
   }
-  if (!fixtureId) return <Placeholder text={eventsLoading ? 'Loading…' : 'Select an event'} />;
-  if (eventsLoading) return <Placeholder text="Loading…" />;
+  if (!fixtureId) return eventsLoading ? <EventPageSkeleton /> : <Placeholder text="Select an event" />;
+  // A URL naming a fixture the board isn't holding is fetched by id, so "not
+  // found" is only true once that has had its turn — until then this is still
+  // loading, and a skeleton says so without claiming the event doesn't exist.
+  if (eventsLoading || linkResolving) return <EventPageSkeleton />;
   return <Placeholder text="Event not found." />;
 }

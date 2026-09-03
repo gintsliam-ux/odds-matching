@@ -6,6 +6,7 @@ import { FilterBar } from './components/FilterBar';
 import { EventRow } from './components/EventRow';
 import { ScoreboardBar } from './components/ScoreboardBar';
 import { PulseBar } from './components/PulseBar';
+import { RailSkeleton, TickerSkeleton } from './components/Skeleton';
 import {
   fetchAllEvents,
   fetchEventsForDay,
@@ -261,21 +262,28 @@ export default function App() {
   // rolling window, or simply not matching the current filters. The URL wins:
   // fetch it by id and keep it, so the page opens what it says it opens.
   const [linked, setLinked] = useState<SportEvent[]>([]);
+  // Ids we've already been to the database for. "Event not found" is only
+  // honest once the lookup has had its turn — until then the page is loading.
+  const [linkTried, setLinkTried] = useState<Set<string>>(new Set());
   useEffect(() => {
     if (!activeId) return;
     if (events.some((e) => e.id === activeId)) return;
     if (pastEvents.some((e) => e.id === activeId)) return;
     if (linked.some((e) => e.id === activeId)) return;
+    if (linkTried.has(activeId)) return;
     let cancelled = false;
     fetchEventById(activeId)
       .then((e) => {
         if (!cancelled && e) setLinked((prev) => (prev.some((p) => p.id === e.id) ? prev : [...prev, e]));
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLinkTried((prev) => new Set(prev).add(activeId));
+      });
     return () => {
       cancelled = true;
     };
-  }, [activeId, events, pastEvents, linked]);
+  }, [activeId, events, pastEvents, linked, linkTried]);
 
   // Live window + any on-demand past days, deduped by id.
   const allEvents = useMemo(() => {
@@ -459,7 +467,13 @@ export default function App() {
     ? `${visible.length} match${visible.length === 1 ? '' : 'es'} for “${query.trim()}”`
     : dateHeading;
 
-  const outletContext: LayoutContext = { events: knownEvents, now, eventsLoading, oddsNonce };
+  const outletContext: LayoutContext = {
+    events: knownEvents,
+    now,
+    eventsLoading,
+    oddsNonce,
+    linkResolving: !!activeId && !knownEvents.some((e) => e.id === activeId) && !linkTried.has(activeId),
+  };
 
   // Opening an event from the rail also closes the mobile drawer.
   const openEvent = (event: SportEvent) => {
@@ -488,6 +502,9 @@ export default function App() {
       </div>
 
       {/* Top ticker: live + upcoming across everything, ignoring the filters. */}
+      {eventsLoading && events.length === 0 ? (
+        <TickerSkeleton />
+      ) : (
       <ScoreboardBar
         events={tickerEvents}
         now={now}
@@ -495,6 +512,7 @@ export default function App() {
         activeId={activeId}
         onSelect={(event) => navigate(eventPath(event))}
       />
+      )}
 
       <div className="relative flex min-h-0 flex-1">
         {/* Backdrop behind the open drawer (mobile only). */}
@@ -543,9 +561,9 @@ export default function App() {
             ) : (eventsLoading && events.length === 0) ||
               (pastLoading && visible.length === 0) ||
               (searching && visible.length === 0) ? (
-              <div className="px-2 py-8 text-center text-sm text-slate-600">
-                {searching ? 'Searching…' : 'Loading events…'}
-              </div>
+              // Fewer bones while searching: a query usually returns a handful,
+              // and eight would promise more than is coming.
+              <RailSkeleton rows={searching ? 4 : 8} />
             ) : visible.length === 0 ? (
               <div className="px-2 py-8 text-center text-sm text-slate-600">
                 {searchActive

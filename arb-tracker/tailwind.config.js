@@ -13,6 +13,16 @@ export default {
       fontFamily: {
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
       },
+      // Skeletons sweep rather than blink: a block fading in and out reads as
+      // something broken, a sweep reads as something arriving.
+      keyframes: {
+        shimmer: {
+          '100%': { transform: 'translateX(100%)' },
+        },
+      },
+      animation: {
+        shimmer: 'shimmer 1.6s infinite',
+      },
     },
   },
   plugins: [],

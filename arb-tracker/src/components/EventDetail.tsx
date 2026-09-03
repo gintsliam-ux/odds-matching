@@ -14,6 +14,7 @@ import { LeagueBadge } from './LeagueBadge';
 import { BookmakerLogo } from './BookmakerLogo';
 import { TeamLogo } from './TeamLogo';
 import { PriceCard, type HoverTarget } from './PriceCard';
+import { MarketsSkeleton } from './Skeleton';
 
 // Selection + Best (+ Betfair back/lay for two-sided events), then one column
 // per fixed-odds book. Golf outrights have no exchange, so those two drop out.
@@ -279,9 +280,7 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
           This fixture was cancelled.
         </div>
       ) : loading ? (
-        <div className="flex flex-1 items-center justify-center text-sm text-slate-500">
-          Loading odds…
-        </div>
+        <MarketsSkeleton />
       ) : markets.length === 0 ? (
         <div className="flex flex-1 items-center justify-center text-sm text-slate-500">
           No odds available for this event.
