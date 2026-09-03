@@ -39,11 +39,18 @@ const DOT: Record<Level, string> = {
 };
 
 const TEXT: Record<Level, string> = {
-  ok: 'text-slate-400',
+  ok: 'text-emerald-300',
   warn: 'text-amber-300',
   stale: 'text-red-300',
   idle: 'text-slate-600',
   unknown: 'text-slate-600',
+};
+
+/** A halo behind the dot — only healthy feeds get one, so green carries. */
+const GLOW: Partial<Record<Level, string>> = {
+  ok: 'shadow-[0_0_8px_1px_rgba(52,211,153,0.75)]',
+  warn: 'shadow-[0_0_6px_0_rgba(251,191,36,0.5)]',
+  stale: 'shadow-[0_0_6px_0_rgba(239,68,68,0.5)]',
 };
 
 export function PulseBar({ pulses, now }: { pulses: Pulse[]; now: number }) {
@@ -51,7 +58,7 @@ export function PulseBar({ pulses, now }: { pulses: Pulse[]; now: number }) {
 
   return (
     <div className="flex shrink-0 items-center gap-3 overflow-x-auto border-b border-surface-border bg-surface px-3 py-1 text-[11px] leading-none whitespace-nowrap sm:gap-4">
-      {pulses.map((p) => {
+      {pulses.map((p, i) => {
         const lv = level(p, now);
         const age = p.at ? ago(p.at, now) : '—';
         return (
@@ -64,13 +71,25 @@ export function PulseBar({ pulses, now }: { pulses: Pulse[]; now: number }) {
                 : `${p.label}: nothing to read`
             }
           >
-            <span
-              className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT[lv]} ${
-                lv === 'ok' ? 'animate-pulse' : ''
-              }`}
-            />
-            <span className="text-slate-500">{p.label}</span>
-            <span className={`font-medium tabular-nums ${TEXT[lv]}`}>
+            {/* A dot that dims on and off is easy to read as "off". A steady
+                core with a ring expanding out of it reads as a heartbeat — so
+                the healthy state is the one that moves, and green carries the
+                bar rather than sitting quietly under the text. */}
+            <span className="relative flex h-2 w-2 shrink-0 items-center justify-center">
+              {lv === 'ok' && (
+                <span
+                  className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-70 ${DOT[lv]}`}
+                  // Offset each ring so the five read as separate heartbeats
+                  // rather than one strobe across the top of the page.
+                  style={{ animationDelay: `${i * 180}ms` }}
+                />
+              )}
+              <span
+                className={`relative inline-flex h-2 w-2 rounded-full ${DOT[lv]} ${GLOW[lv] ?? ''}`}
+              />
+            </span>
+            <span className={lv === 'ok' ? 'text-slate-400' : 'text-slate-500'}>{p.label}</span>
+            <span className={`font-semibold tabular-nums ${TEXT[lv]}`}>
               {p.idle ? 'idle' : age}
             </span>
             {p.detail && !p.idle && <span className="text-slate-600">{p.detail}</span>}
