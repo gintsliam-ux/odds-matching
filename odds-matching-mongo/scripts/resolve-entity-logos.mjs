@@ -1,0 +1,263 @@
+// Competitor logos for the Odds Library.
+//
+// Two jobs, split by how a sport is contested:
+//
+//   • Team sports get a crest, resolved from Wikipedia the same way
+//     resolve-tournament-logos.mjs resolves competition badges.
+//   • Individual sports — tennis, golf, MMA, boxing — get their COUNTRY, and
+//     the flag is the logo. A headshot dates, is often missing, and tells you
+//     nothing at a glance; a flag is the thing a person actually reads off a
+//     player row. The country comes from Wikidata rather than the article text
+//     because "country for sport" (P1532) is an explicit claim there, and it is
+//     the right one: it is what a player competes under, which is not always
+//     citizenship.
+//
+// Both write `entities` in Mongo `gutsys_sport`, keyed (sport, name) — the
+// same collection and the same unique index the competition resolver uses.
+// live-fixtures has its own resolver on its own Supabase table; this one feeds
+// the Odds Library alone. See scripts/lib/entities.mjs.
+//
+// Usage:  node scripts/resolve-entity-logos.mjs                  everything missing
+//         node scripts/resolve-entity-logos.mjs tennis golf       only these sports
+//         node scripts/resolve-entity-logos.mjs --limit 50        stop after 50 lookups
+//         node scripts/resolve-entity-logos.mjs --retry-null      re-try recorded misses
+//         node scripts/resolve-entity-logos.mjs --dry-run          report, write nothing
+
+import {
+  allEntities, assertWritable, close, competitorNames, golferNames, isDryRun,
+  setDryRun, upsertEntities,
+} from './lib/entities.mjs';
+
+const UA = 'odds-library-entity-logos/1.0 (team crests and player flags; contact: gintsliam@gmail.com)';
+
+const argv = process.argv.slice(2);
+const flag = (n) => argv.includes(n);
+const optNum = (n, d) => { const i = argv.indexOf(n); return i === -1 ? d : Number(argv[i + 1]); };
+const LIMIT = optNum('--limit', Infinity);
+const RETRY_NULL = flag('--retry-null');
+setDryRun(flag('--dry-run'));
+
+/* A team sport's competitors are clubs; an individual sport's are people, and
+   the two want completely different things resolved. */
+const TEAM_SPORTS = {
+  soccer: 'football club', basketball: 'basketball team', baseball: 'baseball team',
+  icehockey: 'ice hockey team', amfootball: 'american football team', cricket: 'cricket team',
+  aussierules: 'australian rules football club', rugbyleague: 'rugby league club',
+  rugbyunion: 'rugby union club', volleyball: 'volleyball team', esports: 'esports team',
+};
+const PLAYER_SPORTS = {
+  tennis: 'tennis player', golf: 'golfer',
+  mma: 'mixed martial artist', boxing: 'boxer',
+};
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const only = argv.filter((a) => !a.startsWith('--') && (TEAM_SPORTS[a] || PLAYER_SPORTS[a]));
+
+/* ------------------------------------------------------------------ wikipedia */
+async function wiki(url) {
+  for (let a = 0; a < 4; a++) {
+    try {
+      const r = await fetch(url, { headers: { 'User-Agent': UA, 'Api-User-Agent': UA } });
+      if (r.status === 429 || r.status >= 500) { await sleep(700 * (a + 1)); continue; }
+      if (!r.ok) return null;
+      return await r.json();
+    } catch { await sleep(500 * (a + 1)); }
+  }
+  return undefined;                       // request failed — do not cache as a miss
+}
+
+const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+const tokens = (s) => new Set(norm(s).split(/[^a-z0-9]+/).filter((t) => t.length > 2));
+
+/* A search result is only usable when it is actually about the thing asked for.
+   Without this, "Sydney FC" happily returns the article on Sydney. */
+function relevant(name, title) {
+  const a = tokens(name), b = tokens(title);
+  if (!a.size) return false;
+  let hit = 0;
+  for (const t of a) if (b.has(t)) hit++;
+  return hit / a.size >= 0.5;
+}
+
+/* Match on the FILE NAME, never the whole URL: every Wikimedia thumb is served
+   from upload.wikimedia.org, so testing the URL rejects literally every image. */
+const REJECT = /(flag|map|location|stadium|estadio|stadion|stadio|stade|arena|ground|panorama|aerial|skyline|commons-logo|question|edit-)/i;
+const fileNameOf = (url) => {
+  try { return decodeURIComponent(String(url).split('?')[0].split('/').pop() || ''); }
+  catch { return String(url); }
+};
+const rejected = (url) => REJECT.test(fileNameOf(url));
+function normaliseThumb(url) {
+  if (!url) return url;
+  return url.replace(/\?utm_[^]*$/, '').replace(/\/(\d{1,3})px-/, (m, w) => (Number(w) < 160 ? '/160px-' : m));
+}
+
+/** url | null (looked, nothing) | undefined (request failed) */
+async function teamLogo(name, hint) {
+  const q = encodeURIComponent(`${name} ${hint}`);
+  /* `pilicense=any` is load-bearing. A club crest is a non-free file and
+     pageimages omits those by default, so without it every single team comes
+     back with no image — 3,300 lookups found nothing before this was added. */
+  const d = await wiki(`https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*` +
+    `&generator=search&gsrsearch=${q}&gsrlimit=4&redirects=1&pilicense=any` +
+    `&prop=pageimages&piprop=thumbnail&pithumbsize=320`);
+  if (d === undefined) return undefined;
+  const pages = d?.query?.pages;
+  if (!pages) return null;
+  const ranked = Object.values(pages)
+    .filter((p) => relevant(name, p.title || ''))
+    .sort((a, b) => (a.index ?? 99) - (b.index ?? 99));
+  for (const p of ranked) {
+    const thumb = p?.thumbnail?.source;
+    if (thumb && !rejected(thumb)) return normaliseThumb(thumb);
+  }
+  return null;
+}
+
+/* ------------------------------------------------------------------- wikidata */
+const isoCache = new Map();
+async function isoOf(countryQid) {
+  if (isoCache.has(countryQid)) return isoCache.get(countryQid);
+  const d = await wiki(`https://www.wikidata.org/w/api.php?action=wbgetclaims&format=json&origin=*` +
+    `&entity=${countryQid}&property=P297`);
+  if (d === undefined) return undefined;
+  const iso = d?.claims?.P297?.[0]?.mainsnak?.datavalue?.value || null;
+  isoCache.set(countryQid, iso);
+  return iso;
+}
+
+/** { iso, name } | null | undefined */
+async function playerCountry(name, hint) {
+  const q = encodeURIComponent(`${name} ${hint}`);
+  const s = await wiki(`https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*` +
+    `&generator=search&gsrsearch=${q}&gsrlimit=3&redirects=1&prop=pageprops&ppprop=wikibase_item`);
+  if (s === undefined) return undefined;
+  const pages = Object.values(s?.query?.pages || {})
+    .filter((p) => relevant(name, p.title || ''))
+    .sort((a, b) => (a.index ?? 99) - (b.index ?? 99));
+  for (const p of pages) {
+    const qid = p?.pageprops?.wikibase_item;
+    if (!qid) continue;
+    const d = await wiki(`https://www.wikidata.org/w/api.php?action=wbgetclaims&format=json&origin=*` +
+      `&entity=${qid}`);
+    if (d === undefined) return undefined;
+    // P1532 is "country for sport" — what they compete under. Fall back to
+    // citizenship, which is usually but not always the same.
+    const claim = d?.claims?.P1532?.[0] || d?.claims?.P27?.[0];
+    const cq = claim?.mainsnak?.datavalue?.value?.id;
+    if (!cq) continue;
+    const iso = await isoOf(cq);
+    if (iso === undefined) return undefined;
+    if (iso) return { iso, title: p.title };
+  }
+  return null;
+}
+
+const flagUrl = (iso) => `https://flagcdn.com/w160/${iso.toLowerCase()}.png`;
+
+/* ----------------------------------------------------------------------- run */
+async function pool(items, n, fn) {
+  let i = 0;
+  await Promise.all(Array.from({ length: n }, async () => {
+    while (i < items.length) await fn(items[i++]);
+  }));
+}
+
+async function competitorsOf(sport) {
+  // Golf fixtures carry no competitors — the field lives in the outright market.
+  return sport === 'golf' ? golferNames() : competitorNames(sport);
+}
+
+async function main() {
+  await assertWritable();
+  if (isDryRun()) console.log('DRY RUN — reads only, nothing is written\n');
+
+  const sports = only.length ? only : [...Object.keys(TEAM_SPORTS), ...Object.keys(PLAYER_SPORTS)];
+  const cached = new Map();                       // `${sport} ${name}` -> row
+  for (const e of await allEntities()) {
+    cached.set(`${e.sport} ${e.name}`, e);
+  }
+  console.log(`entities on file: ${cached.size}`);
+
+  /* Players already on file often carry a Wikipedia headshot. Those go: a photo
+     dates, is missing for most of the field, and reads as noise at row height,
+     where a flag is legible. Anything with a country becomes a flag; a photo
+     with no country becomes nothing rather than staying a stale headshot. */
+  const swept = [];
+  for (const e of cached.values()) {
+    /* Read the sport off the row, never off the map key — the key joins sport
+       and name with a separator, and player names contain spaces, so parsing it
+       yields "tennis<sep>Lars" and every player silently fails the lookup. */
+    const sport = e.sport;
+    if (!PLAYER_SPORTS[sport] || (only.length && !only.includes(sport))) continue;
+    const want = e.country ? flagUrl(e.country) : null;
+    if (e.logo_url === want) continue;
+    swept.push({ sport, name: e.name, entity_type: 'player', country: e.country,
+                 logo_url: want, country_src: e.country ? 'wikidata' : null,
+                 source: want ? 'flagcdn' : null });
+  }
+  if (swept.length) {
+    console.log(`\nreplacing ${swept.length} player photos with flags…`);
+    let swum = { inserted: 0, updated: 0, merged: 0 };
+    for (let i = 0; i < swept.length; i += 40) {
+      const r = await upsertEntities(swept.slice(i, i + 40));
+      swum = { inserted: swum.inserted + r.inserted, updated: swum.updated + r.updated,
+               merged: swum.merged + r.merged };
+    }
+    console.log(`  done — ${swum.updated} updated, ${swum.inserted} new, ${swum.merged} merged into an existing key`);
+  }
+
+  const todo = [];
+  for (const sport of sports) {
+    const isPlayer = !!PLAYER_SPORTS[sport];
+    const hint = PLAYER_SPORTS[sport] || TEAM_SPORTS[sport];
+    const names = await competitorsOf(sport);
+    const want = names.filter((name) => {
+      const e = cached.get(`${sport} ${name}`);
+      if (!e) return true;
+      const done = isPlayer ? !!e.country : !!e.logo_url;
+      if (done) return false;
+      return RETRY_NULL;                          // recorded miss: only on demand
+    });
+    console.log(`  ${sport.padEnd(12)} ${String(names.length).padStart(5)} competitors, ${String(want.length).padStart(5)} to resolve`);
+    for (const name of want) todo.push({ sport, name, hint, isPlayer });
+  }
+  if (!todo.length) { console.log('nothing to do'); return; }
+
+  const work = todo.slice(0, LIMIT);
+  console.log(`\nresolving ${work.length}${work.length < todo.length ? ` of ${todo.length}` : ''}…`);
+
+  let done = 0, hit = 0, miss = 0, failed = 0;
+  const batch = [];
+  await pool(work, 3, async (item) => {
+    const got = item.isPlayer
+      ? await playerCountry(item.name, item.hint)
+      : await teamLogo(item.name, item.hint);
+    done++;
+    if (got === undefined) { failed++; return; }   // never cache a request failure
+    if (got) hit++; else miss++;
+
+    /* Every row carries the same keys whether it is a player or a team. Mongo
+       would not mind a ragged batch, but a team row that simply omitted
+       `country` would leave a stale value behind when a name is re-resolved,
+       so absent is written as null rather than left out. */
+    batch.push(item.isPlayer
+      ? { sport: item.sport, name: item.name, entity_type: 'player',
+          country: got ? got.iso : null, logo_url: got ? flagUrl(got.iso) : null,
+          country_src: got ? 'wikidata' : null, source: got ? 'flagcdn' : null }
+      : { sport: item.sport, name: item.name, entity_type: 'team',
+          country: null, logo_url: got || null,
+          country_src: null, source: got ? 'wikipedia' : null });
+
+    if (batch.length >= 40) await upsertEntities(batch.splice(0, batch.length));
+    if (done % 100 === 0) {
+      console.log(`  ${done}/${work.length}  found ${hit}, none ${miss}, failed ${failed}`);
+    }
+  });
+  await upsertEntities(batch);
+  console.log(`\ndone: ${done} — ${hit} resolved, ${miss} nothing found, ${failed} request failures`);
+}
+
+main()
+  .catch((e) => { console.error(e.message || e); process.exitCode = 1; })
+  .finally(close);

@@ -1,0 +1,42 @@
+# Run next to MongoDB, on whichever host already runs the odds API's tunnel.
+#
+#   docker compose up -d --build
+#
+# Secrets come from .env.api beside this file (never committed):
+#   MONGO_URI=mongodb://user:pass@127.0.0.1:27017/?authSource=admin
+#   MONGO_DB=gutsys_sport
+#   TUNNEL_TOKEN=<from the Cloudflare dashboard, for a named tunnel>
+#
+# 8788 is arbitrary but deliberate — it just has to miss racing-flucs' 8787.
+services:
+  api:
+    build: .
+    container_name: odds-library-api
+    restart: unless-stopped
+    # Published so a quick tunnel (or curl) on the host can reach it. Drop this
+    # when only the tunnel container talks to it — they share a network.
+    ports:
+      - "8788:8788"
+    env_file:
+      - .env.api
+    environment:
+      PORT: "8788"
+
+  # A NAMED tunnel, because the page's rewrite destination is a hostname baked
+  # into the repo. A quick tunnel gets a new random *.trycloudflare.com name on
+  # every restart, which would mean editing vercel.json and redeploying each
+  # time the container bounces.
+  #
+  # Zero-setup alternative, if a stable hostname is not worth a Cloudflare
+  # account: drop this service and run, on the host,
+  #   cloudflared tunnel --url http://localhost:8788
+  # then paste the printed hostname into ../vercel.json.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: odds-library-tunnel
+    restart: unless-stopped
+    depends_on:
+      - api
+    command: tunnel --no-autoupdate run
+    env_file:
+      - .env.api

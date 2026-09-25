@@ -1014,24 +1014,41 @@
 /* ===========================================================================
    Odds Library
    ---------------------------------------------------------------------------
-   Three tables, not twenty-odd:
+   Three collections, not twenty-odd tables:
 
-     fixtures   one row per event, keyed by fixture_id. Carries sport, league
-                (canonical id), tournament (display name), competitors, start,
-                status and scores. 143k rows.
-     odds_sp    the permanent closing record: one row per (fixture, market,
-                selection, line), with book prices and vig-stripped fairs as
-                jsonb rather than columns. 6.2M rows.
-     odds       the live/pregame board, same tall shape plus movement.
+     fixtures   one document per event, keyed by fixture_id. Carries sport,
+                league (canonical id), tournament (display name), competitors,
+                start, status and scores. 160k documents.
+     odds_sp    the permanent closing record: one document per (fixture,
+                market, selection, line), with book prices and vig-stripped
+                fairs as sub-documents rather than columns. 8.2M.
+     odds       the live/pregame board, same tall shape plus movement. 6.8M.
 
-   Two things this buys the page. A month of soccer is 2,477 fixtures instead of
-   35,845 odds rows, so the event list is one cheap query. And `league` is a
-   canonical id with exactly one tournament name per league, which retires every
-   spelling-merge heuristic the old schema needed.
+   Two things this buys the page. A month of soccer is a few thousand fixtures
+   instead of tens of thousands of odds rows, so the event list is one cheap
+   query. And `league` is a canonical id with exactly one tournament name per
+   league, which retires every spelling-merge heuristic the old schema needed.
    =========================================================================== */
 
-const SB_URL = 'https://aucplqygawlpijzbfvjb.supabase.co';
-const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF1Y3BscXlnYXdscGlqemJmdmpiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxNDMxNTIsImV4cCI6MjA5MTcxOTE1Mn0.gnvr0biTrgDC1KSjxlPpktdQX1hj0kMECmDZz1WmSf0';
+/* The database is Mongo now — `gutsys_sport` on the NAS — and Mongo has no
+   browser client, so the page talks to a small API instead of holding a
+   database client of its own.
+
+   That API cannot run on Vercel. The NAS is `100.96.58.9`, inside Tailscale's
+   100.64.0.0/10 CGNAT range, so a serverless function has no route to it; the
+   symptom is a Mongo server-selection timeout. So the API runs next to the
+   database and a Cloudflare tunnel publishes it, alongside the odds API that
+   already works that way.
+
+   Empty means same origin, which covers both wirings:
+     · deployed — `vercel.json` rewrites /api/* to the tunnel hostname, so the
+       page never makes a cross-origin request and needs no CORS at all;
+     · local — `npm start` in odds-matching-mongo serves this file and /api
+       from one process on :5180.
+   Set it to an absolute URL (or define window.ODDS_API_BASE before this
+   script) to call the tunnel directly instead of through the rewrite. */
+const ODDS_API_DEFAULT = '';
+const API_BASE = String(window.ODDS_API_BASE || ODDS_API_DEFAULT || '').replace(/\/$/, '');
 
 /* ---- Sports ----------------------------------------------------------------
    Keys are the `sport` values in fixtures. No tables to name any more. */
@@ -1140,84 +1157,47 @@ const msg = (t) => { const e = document.getElementById('load-msg'); if (e) e.tex
 const RETRY_ATTEMPTS = 3;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-async function sb(table, params = '', range = null, extraHeaders = null) {
-  const headers = { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` };
-  if (range) headers.Range = range;
-  Object.assign(headers, extraHeaders || {});
+/* One GET helper for the whole page. Array values repeat the key rather than
+   joining on a comma — a merged competition spans several optic_league ids and
+   an id is free to contain anything a slug can. */
+async function api(path, params = {}) {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === '') continue;
+    if (Array.isArray(v)) v.forEach(x => qs.append(k, String(x)));
+    else qs.append(k, String(v));
+  }
+  const url = `${API_BASE}/api/${path}${qs.toString() ? `?${qs}` : ''}`;
 
   let lastErr = null;
   for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
     if (attempt) await sleep(400 * 2 ** (attempt - 1));
     try {
-      const r = await fetch(`${SB_URL}/rest/v1/${table}?${params}`, { headers });
-      if (r.ok || r.status === 206) {
-        const text = await r.text();
-        return text ? JSON.parse(text) : [];
+      const r = await fetch(url);
+      if (r.ok) {
+        const body = await r.json();
+        /* The API answers a query it could not run with 500 and a message; a
+           200 carrying `error` would be a route returning one, so treat the
+           shape as the signal rather than the status. */
+        if (body && !Array.isArray(body) && body.error) throw new Error(body.error);
+        return body;
       }
-      lastErr = new Error(`API ${r.status}: ${table}`);
+      lastErr = new Error(`API ${r.status}: ${path}`);
+      // 4xx is this page asking wrongly — retrying cannot fix it. 429 can.
       if (r.status < 500 && r.status !== 429) throw lastErr;
     } catch (err) {
       lastErr = err;
-      if (/^API [45]\d\d/.test(err.message) && !/API (5\d\d|429)/.test(err.message)) throw err;
+      if (/^API 4\d\d/.test(err.message) && !/^API 429/.test(err.message)) throw err;
     }
   }
   throw lastErr;
 }
 
-async function sbCount(table, params) {
-  const r = await fetch(`${SB_URL}/rest/v1/${table}?${params}`, {
-    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, Range: '0-0', Prefer: 'count=exact' },
-  });
-  if (!r.ok && r.status !== 206) throw new Error(`API ${r.status}: ${table}`);
-  const n = parseInt((r.headers.get('content-range') || '').split('/')[1], 10);
-  return isNaN(n) ? 0 : n;
-}
-
-/* PostgREST caps a response at 1000 rows. Knowing the count up front lets the
-   pages fan out; the sort has to be stable or offset paging repeats and drops
-   rows, and it has to lead with an indexed column or a big table re-sorts on
-   every page and trips the statement timeout. */
-const PAGE = 1000;
-const PAGE_CONCURRENCY = 5;
-
-async function sbAll(table, params, order, total = null, onProgress = null) {
-  const p = `${params}&order=${order}`;
-  if (total == null) total = await sbCount(table, `${params}&select=fixture_id`);
-  if (total === 0) return [];
-  const pages = Math.ceil(total / PAGE);
-  const out = new Array(pages);
-  let next = 0, done = 0;
-  async function worker() {
-    while (true) {
-      const i = next++;
-      if (i >= pages) return;
-      out[i] = await sb(table, p, `${i * PAGE}-${i * PAGE + PAGE - 1}`);
-      done++;
-      if (onProgress) onProgress(done, pages);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(PAGE_CONCURRENCY, pages) }, worker));
-  return out.flat();
-}
-
-function monthBounds(year, month) {
-  const start = `${year}-${String(month).padStart(2, '0')}-01`;
-  const ny = month === 12 ? year + 1 : year, nm = month === 12 ? 1 : month + 1;
-  return [start, `${ny}-${String(nm).padStart(2, '0')}-01`];
-}
-function monthFilter(year, month) {
-  const [a, b] = monthBounds(year, month);
-  return `scheduled_start=gte.${a}&scheduled_start=lt.${b}`;
-}
-
 // The span of dates a sport has, so the period picker knows its options.
 async function loadDateRange(key) {
-  const [minRows, maxRows] = await Promise.all([
-    sb('fixtures', `select=scheduled_start&sport=eq.${key}&order=scheduled_start.asc&limit=1`),
-    sb('fixtures', `select=scheduled_start&sport=eq.${key}&order=scheduled_start.desc&limit=1`),
-  ]);
-  const min = minRows.length ? minRows[0].scheduled_start.slice(0, 10) : null;
-  const max = maxRows.length ? maxRows[0].scheduled_start.slice(0, 10) : null;
+  const span = await api('date-range', { sport: key });
+  const min = span.min ? String(span.min).slice(0, 10) : null;
+  const max = span.max ? String(span.max).slice(0, 10) : null;
 
   sportData[key] = sportData[key] || {};
   const range = { min, max, combos: [] };
@@ -1253,7 +1233,7 @@ async function loadLeagueDirectory() {
   if (directoryLoaded) return leagueDirectory;
   directoryLoaded = true;
   try {
-    for (const r of await sb('leagues', 'select=optic_league,sport,category,tournament&limit=2000')) {
+    for (const r of await api('leagues')) {
       leagueDirectory.set(r.optic_league, { category: r.category || null, tournament: r.tournament || null });
     }
   } catch (err) {
@@ -1361,8 +1341,7 @@ async function loadLeagues(key) {
   d.leagueScan = 'running';
   refreshNavTournaments(key);
   try {
-    const total = await sbCount('fixtures', `select=fixture_id&sport=eq.${key}`);
-    const rows = await sbAll('fixtures', `select=optic_league,tournament&sport=eq.${key}`, 'fixture_id.asc', total);
+    const { rows } = await api('competitions', { sport: key });
     d.leagues = groupCompetitions(rows).sort((a, b) => a.label.localeCompare(b.label));
     d.leagueScan = 'done';
     writeLeagueCache(key, d.leagues);
@@ -1384,19 +1363,14 @@ async function loadFixtures(key, year, month, league) {
   const scope = `${year}-${month}|${league || '*'}`;
   if (d.loadedScope === scope) return d;
 
-  let filter = `sport=eq.${key}&${monthFilter(year, month)}`;
+  const params = { sport: key, year, month };
   const entry = league ? findLeagueEntry(key, league) : null;
-  if (entry) filter += `&${entryFilterFor(entry)}`;
-  else if (league) filter += `&optic_league=eq.${encodeURIComponent(league)}`;
+  if (entry) Object.assign(params, entryParamsFor(entry));
+  else if (league) params.league = league;
 
   const what = league ? (leagueLabel(key, league) || league) : SPORTS[key].label;
   msg(`Loading ${what}…`);
-  const total = await sbCount('fixtures', `select=fixture_id&${filter}`);
-  const rows = await sbAll('fixtures',
-    `select=fixture_id,sport,optic_league,category,country,tournament,event_name,competitors,home_team,away_team,` +
-    `scheduled_start,actual_start,status,is_live,scores,venue,location,has_odds,tier&${filter}`,
-    'scheduled_start.asc,fixture_id.asc', total,
-    (done, pages) => msg(`Loading ${what} — ${Math.round(done / pages * 100)}%`));
+  const rows = await api('fixtures', params);
 
   d.events = rows.map(toEvent).sort((a, b) => a.start.localeCompare(b.start));
   d.loadedScope = scope;
@@ -1410,11 +1384,8 @@ async function loadMonthLeagues(key, year, month) {
   const stamp = `${year}-${month}`;
   if (d.monthLeaguesFor === stamp) return d.monthLeagues;
 
-  const filter = `sport=eq.${key}&${monthFilter(year, month)}`;
-  const total = await sbCount('fixtures', `select=fixture_id&${filter}`);
-  msg(`Indexing ${SPORTS[key].label} — ${total.toLocaleString()} fixtures…`);
-  const rows = total === 0 ? []
-    : await sbAll('fixtures', `select=optic_league,tournament,country&${filter}`, 'scheduled_start.asc,fixture_id.asc', total);
+  msg(`Indexing ${SPORTS[key].label}…`);
+  const { total, rows } = await api('competitions', { sport: key, year, month });
 
   d.monthLeagues = groupCompetitions(rows).sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));
   d.monthLeaguesFor = stamp;
@@ -1427,7 +1398,11 @@ function toEvent(r) {
   const home = r.home_team || names[0] || '';
   const away = r.away_team || names[1] || '';
   const title = r.event_name || (home && away ? `${home} v ${away}` : (home || away || r.fixture_id));
-  const hs = r.scores?.home?.total, as = r.scores?.away?.total;
+  /* Two score shapes are in the archive: a plain `{home, away}` pair and a
+     `{home:{total}}` object from the sports that carry a period breakdown.
+     Reading only the second showed no score at all for every soccer fixture. */
+  const hs = r.scores?.home?.total ?? r.scores?.home;
+  const as = r.scores?.away?.total ?? r.scores?.away;
   return {
     id: r.fixture_id,
     title: title.replace(/\s+v\s+/i, ' vs '),
@@ -1441,7 +1416,7 @@ function toEvent(r) {
     live: r.status === 'live' || r.is_live,
     ended: r.status === 'completed',
     cancelled: r.status === 'cancelled',
-    score: (hs != null && as != null) ? `${hs}-${as}` : null,
+    score: (typeof hs === 'number' && typeof as === 'number') ? `${hs}-${as}` : null,
     venue: r.venue || r.location || null,
     hasOdds: r.has_odds,
     competitors: names,
@@ -1452,36 +1427,16 @@ function toEvent(r) {
    prices, vig-stripped fairs, the blend and its tier — but it is written when a
    market closes, so anything still open reads from the live board instead and
    shows prices without the fair columns. */
-/* Name only the columns this page reads. `optic_clv` and `close_delta` were in
-   here, unused, and were dropped upstream — which 400s the whole request, so
-   every event page went blank over two columns nothing rendered. Asking for
-   less is the fix; falling back to `*` is the seatbelt, because the next column
-   to go should cost a wasted round trip, not the page. */
-const SP_COLUMNS =
-  'market_id,market_name,selection,line,line_group,pair_key,outcome_no,n_outcomes,' +
-  'book_prices,book_fairs,book_overround,fair_blend,fair_prob,n_books,blend_books,blend_tier,og_blend,og_prob';
-
 async function loadFixtureOdds(fixtureId) {
-  const id = encodeURIComponent(fixtureId);
-  let closing;
-  try {
-    closing = await sb('odds_sp', `select=${SP_COLUMNS}&fixture_id=eq.${id}&limit=2000`);
-  } catch (err) {
-    console.warn('odds_sp column list rejected, falling back to *', err);
-    closing = await sb('odds_sp', `select=*&fixture_id=eq.${id}&limit=2000`);
-  }
-  if (closing.length) return { source: 'closing', rows: closing.map(normaliseClosing) };
+  const { source, rows } = await api('odds', { fixture_id: fixtureId });
+  if (source === 'closing') return { source: 'closing', rows: rows.map(normaliseClosing) };
+  if (!rows.length) return { source: 'none', rows: [] };
 
-  /* `odds` now carries both pregame and in-play rows for the same selection,
-     and they must not be averaged into one cell — a live price is not a pregame
+  /* `odds` carries both pregame and in-play rows for the same selection, and
+     they must not be averaged into one cell — a live price is not a pregame
      price. Take in-play when the fixture has any, pregame otherwise. */
-  const live = await sb('odds',
-    `select=market_id,market_name,selection,line,line_group,pair_key,outcome_no,is_main,sportsbook,is_lay,is_live,` +
-    `open_price,current_price,close_price,status&fixture_id=eq.${id}` +
-    `&is_lay=eq.false&limit=3000`);
-  if (!live.length) return { source: 'none', rows: [] };
-  const inPlay = live.filter(r => r.is_live);
-  const chosen = inPlay.length ? inPlay : live.filter(r => !r.is_live);
+  const inPlay = rows.filter(r => r.is_live);
+  const chosen = inPlay.length ? inPlay : rows.filter(r => !r.is_live);
   return { source: inPlay.length ? 'inplay' : 'pregame', rows: collapseLive(chosen) };
 }
 
@@ -1688,8 +1643,13 @@ function groupCompetitions(rows) {
     }
     if (leagueId) hit.leagues.add(leagueId);
     if (r.country) hit.countries.add(r.country);
-    hit.names.set(r.tournament, (hit.names.get(r.tournament) || 0) + 1);
-    hit.n++;
+    /* Rows arrive counted now — the API groups on (league, tournament,
+       country) where the data is rather than shipping a row per fixture — so
+       every tally adds the group's own count. A row without one is a single
+       fixture, which is what the ungrouped shape always was. */
+    const n = r.n || 1;
+    hit.names.set(r.tournament, (hit.names.get(r.tournament) || 0) + n);
+    hit.n += n;
   }
   const out = [];
   for (const g of groups.values()) {
@@ -1717,12 +1677,11 @@ function groupCompetitions(rows) {
 function entryIdFor(league, tournament) {
   return league ? league : 't-' + slugify(tournament || 'other');
 }
-function entryFilterFor(entry) {
+function entryParamsFor(entry) {
   const ids = entry.leagues && entry.leagues.length ? entry.leagues : (entry.league ? [entry.league] : []);
-  if (!ids.length) return `tournament=eq.${encodeURIComponent(entry.tournament)}`;
-  if (ids.length === 1) return `optic_league=eq.${encodeURIComponent(ids[0])}`;
-  // A merged competition spans more than one id — ask for all of them.
-  return `optic_league=in.(${ids.map(encodeURIComponent).join(',')})`;
+  // A merged competition spans more than one id — ask for all of them. A
+  // competition with no league at all is selected on its tournament instead.
+  return ids.length ? { league: ids } : { tournament: entry.tournament };
 }
 // A name that is just the id title-cased is the ingest's fallback, not a name.
 function isDerivedName(name, leagueId) {
@@ -1820,7 +1779,7 @@ function sportIconHtml(key, cls) {
   </span>`;
 }
 
-/* Competition badges, resolved offline by scripts/resolve-tournament-logos.mjs
+/* Competition badges, resolved offline by odds-matching-mongo/scripts/resolve-tournament-logos.mjs
    into `entities`. One query for the lot, keyed by the tournament's display
    name — which is exactly what fixtures.tournament carries. */
 const competitionLogos = new Map();
@@ -1830,7 +1789,7 @@ async function loadCompetitionLogos() {
   if (logosLoaded) return;
   logosLoaded = true;
   try {
-    const rows = await sb('entities', 'select=name,logo_url&sport=eq.competition&logo_url=not.is.null&limit=2000');
+    const rows = await api('competition-logos');
     for (const r of rows) competitionLogos.set(r.name, r.logo_url);
   } catch (err) {
     console.warn('competition logos unavailable', err);
@@ -2747,9 +2706,7 @@ async function runTeamSearch(q) {
   const container = document.getElementById('search-results');
   container.innerHTML = skeletonSearch();
   try {
-    const rows = await sb('fixtures',
-      `select=fixture_id,sport,optic_league,category,tournament,event_name,scheduled_start,status,scores` +
-      `&event_name=ilike.*${encodeURIComponent(q)}*&order=scheduled_start.desc&limit=40`);
+    const rows = await api('search', { q });
     if (!rows.length) { container.innerHTML = '<div class="search-no-results">No matches found</div>'; return; }
     container.innerHTML = rows.map(r => {
       const ev = toEvent(r);
@@ -2889,11 +2846,11 @@ async function handleRoute() {
       /* A deep link can name a fixture from another month. The id carries no
          date, so ask fixtures where it is and reload that period. */
       if (slug && !(sportData[sport].events || []).some(e => e.id === slug)) {
-        const found = await sb('fixtures', `select=scheduled_start,optic_league&fixture_id=eq.${encodeURIComponent(slug)}&limit=1`);
-        if (found.length) {
-          const d = new Date(found[0].scheduled_start);
+        const found = await api('fixture', { id: slug });
+        if (found && found.scheduled_start) {
+          const d = new Date(found.scheduled_start);
           selectedYear = d.getUTCFullYear(); selectedMonth = d.getUTCMonth() + 1;
-          if (!selectedTournament && found[0].optic_league) selectedTournament = entryIdFor(found[0].optic_league, null);
+          if (!selectedTournament && found.optic_league) selectedTournament = entryIdFor(found.optic_league, null);
           await loadMonthLeagues(sport, selectedYear, selectedMonth);
           await loadScoped(sport);
         }

@@ -21,34 +21,10 @@
 //              first thing to fall over when the database is busy) and cover
 //              just what the sidebar is showing for the current month
 
-const SB_URL = 'https://aucplqygawlpijzbfvjb.supabase.co';
-const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF1Y3BscXlnYXdscGlqemJmdmpiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxNDMxNTIsImV4cCI6MjA5MTcxOTE1Mn0.gnvr0biTrgDC1KSjxlPpktdQX1hj0kMECmDZz1WmSf0';
-const REST = `${SB_URL}/rest/v1`;
-const H = { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` };
-
-/* Reads go through the anon key, which is all the sidebar ever needs. Writes do
-   not: `entities` grants anon neither INSERT nor UPDATE, so every write comes
-   back 42501 no matter how it is shaped. Supply a service key to cache badges:
-   SUPABASE_SERVICE_KEY=… node scripts/resolve-tournament-logos.mjs */
-const WRITE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SB_SERVICE_KEY || SB_KEY;
-const WH = { apikey: WRITE_KEY, Authorization: `Bearer ${WRITE_KEY}` };
-
-/* Probe before spending a single Wikipedia lookup — an empty insert writes
-   nothing but still needs the grant, so it answers the question for free. */
-async function assertWritable() {
-  const r = await fetch(`${REST}/entities`, {
-    method: 'POST',
-    headers: { ...WH, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-    body: '[]',
-  });
-  if (r.ok) return;
-  const body = (await r.text()).slice(0, 160);
-  const which = WRITE_KEY === SB_KEY ? 'the anon key' : 'SUPABASE_SERVICE_KEY';
-  throw new Error(
-    `cannot write to entities with ${which} — ${body}\n` +
-    `  Badges are resolved but nothing can be cached. Either run with\n` +
-    `  SUPABASE_SERVICE_KEY set, or grant anon INSERT/UPDATE on entities.`);
-}
+import {
+  allEntities, assertWritable, close, isDryRun, setDryRun, tournamentPairs,
+  upsertEntities,
+} from './lib/entities.mjs';
 
 // Wikimedia throttles anonymous User-Agents under load.
 const WIKI_UA = 'odds-library-competition-logos/1.0 (league badge cache; contact: gintsliam@gmail.com)';
@@ -58,7 +34,6 @@ const LOGO_SPORT = 'competition';   // namespace inside `entities`
 /* Competitions come from `fixtures` now, not the fifteen per-sport odds tables.
    The keys ARE `fixtures.sport`, so a sport is a filter rather than a table —
    and golf, which never had a wide table, gets badges for the first time. */
-const FIXTURES = 'fixtures';
 
 const SPORTS = {
   soccer:      { hint: 'association football league' },
@@ -183,83 +158,6 @@ const REJECT_PLACE = /Town_Hall|City_Hall|Skyline|_CBD|Street|Railway_station|Po
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const slugify = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
-/* ------------------------------------------------------------------ Supabase */
-async function getJSON(pathAndQuery, tries = 3) {
-  for (let i = 0; i < tries; i++) {
-    if (i) await sleep(600 * i);
-    try {
-      const r = await fetch(`${REST}/${pathAndQuery}`, { headers: H });
-      if (r.ok) return r.json();
-      if (r.status < 500 && r.status !== 429) throw new Error(`API ${r.status}: ${pathAndQuery}`);
-    } catch (e) {
-      if (i === tries - 1) throw e;
-    }
-  }
-  throw new Error(`API failed: ${pathAndQuery}`);
-}
-
-/* `entities` holds (sport, name) uniquely — 12,408 rows, no repeats — but the
-   constraint is not declared, so ON CONFLICT has nothing to match and PostgREST
-   rejects a real upsert with 42P10. Until that constraint exists, write the two
-   cases apart: PATCH the names already on file, POST the rest. `known` is the
-   set loaded at startup, so this costs no extra reads. */
-let upsertNative = true;
-
-/* Two competitions can nominate the same alias — "Bundesliga" is reached from
-   both "Germany Bundesliga" and "Bundesliga - Germany" — so a batch can carry
-   the same (sport, name) twice. Postgres refuses to let one statement touch a
-   row twice (21000), so collapse them first, preferring a row that actually
-   found a badge over one that recorded a miss. */
-function dedupe(rows) {
-  const by = new Map();
-  for (const row of rows) {
-    const k = `${row.sport} ${row.name}`;
-    const prev = by.get(k);
-    if (!prev || (prev.logo_url == null && row.logo_url != null)) by.set(k, row);
-  }
-  return [...by.values()];
-}
-
-async function upsert(batch, known) {
-  const rows = dedupe(batch);
-  if (!rows.length) return;
-
-  if (upsertNative) {
-    const r = await fetch(`${REST}/entities?on_conflict=sport,name`, {
-      method: 'POST',
-      headers: { ...WH, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify(rows),
-    });
-    if (r.ok) return;
-    const body = (await r.text()).slice(0, 200);
-    if (!body.includes('42P10')) throw new Error(`upsert ${r.status}: ${body}`);
-    upsertNative = false;
-    console.log('  (no unique index on entities(sport, name) — writing with PATCH/POST instead)');
-  }
-
-  const fresh = [];
-  for (const row of rows) {
-    if (!known || !known.has(row.name)) { fresh.push(row); continue; }
-    const q = `${REST}/entities?sport=eq.${encodeURIComponent(row.sport)}` +
-              `&name=eq.${encodeURIComponent(row.name)}`;
-    const r = await fetch(q, {
-      method: 'PATCH',
-      headers: { ...WH, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-      body: JSON.stringify({ logo_url: row.logo_url, source: row.source }),
-    });
-    if (!r.ok) throw new Error(`patch ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  }
-  if (!fresh.length) return;
-
-  const r = await fetch(`${REST}/entities`, {
-    method: 'POST',
-    headers: { ...WH, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-    body: JSON.stringify(fresh),
-  });
-  if (!r.ok) throw new Error(`insert ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  for (const row of fresh) known?.set(row.name, row.logo_url);
-}
-
 /* -------------------------------------------------- tournaments, as the page sees them */
 
 /* The league id plays the part `sport_key` used to. It is the same shape —
@@ -267,21 +165,13 @@ async function upsert(batch, known) {
    separator, which would leave labelFromSportKey building "- Premier League". */
 const leagueId = (row) => String(row.optic_league || '').replace(/_-_/g, '_');
 
-// Distinct (tournament, league) pairs. One request per distinct label —
-// PostgREST has aggregates disabled, so there is no GROUP BY to lean on.
+/* Distinct (tournament, league) pairs. This walked the labels one request at a
+   time — 800 of them, and the first thing to fall over when the database was
+   busy — because PostgREST had aggregates disabled. Mongo groups, so it is one
+   read and the --month-only escape hatch matters much less. */
 async function distinctPairs(sport) {
-  const out = [];
-  let last = null;
-  for (let i = 0; i < 800; i++) {
-    let q = `${FIXTURES}?select=tournament,optic_league&sport=eq.${sport}` +
-            `&tournament=not.is.null&order=tournament.asc&limit=1`;
-    if (last != null) q += `&tournament=gt.${encodeURIComponent(last)}`;
-    const rows = await getJSON(q);
-    if (!rows.length || rows[0].tournament == null) break;
-    last = rows[0].tournament;
-    out.push({ label: last, sportKey: leagueId(rows[0]) });
-  }
-  return out;
+  const rows = await tournamentPairs(sport);
+  return rows.map((r) => ({ label: r.tournament, sportKey: leagueId(r) }));
 }
 
 const isDerived = (label, sportKey) => slugify(label) === slugify(sportKey);
@@ -316,28 +206,9 @@ function pickLabel(labels, sportKey) {
    current month too and let the union decide. */
 async function monthPairs(sport) {
   const now = new Date();
-  const y = now.getFullYear(), m = now.getMonth() + 1;
-  const start = `${y}-${String(m).padStart(2, '0')}-01`;
-  const ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1;
-  const end = `${ny}-${String(nm).padStart(2, '0')}-01`;
-  const filter = `scheduled_start=gte.${start}&scheduled_start=lt.${end}`;
-
-  /* Leading the sort with the date keeps Postgres on the index. Ordering by the
-     id alone made it re-sort the whole table per page, and a deep offset then
-     timed out (57014) on the bigger sports. */
-  const seen = new Map();
-  for (let page = 0; page < 60; page++) {
-    const rows = await getJSON(
-      `${FIXTURES}?select=tournament,optic_league&sport=eq.${sport}&${filter}` +
-      `&order=scheduled_start.asc,fixture_id.asc&limit=1000&offset=${page * 1000}`);
-    for (const r of rows) {
-      if (!r.tournament) continue;
-      const sportKey = leagueId(r);
-      seen.set(`${sportKey}\u0000${r.tournament}`, { label: r.tournament, sportKey });
-    }
-    if (rows.length < 1000) break;
-  }
-  return [...seen.values()];
+  const month = { year: now.getFullYear(), month: now.getMonth() + 1 };
+  const rows = await tournamentPairs(sport, { month });
+  return rows.map((r) => ({ label: r.tournament, sportKey: leagueId(r) }));
 }
 
 function entriesFor(pairs) {
@@ -574,10 +445,12 @@ async function main() {
   const only = (argv.find((a) => a.startsWith('--sport=')) ?? '')
     .replace('--sport=', '').split(',').map((s) => s.trim()).filter(Boolean);
 
+  setDryRun(argv.includes('--dry-run'));
   await assertWritable();
+  if (isDryRun()) console.log('DRY RUN — reads only, nothing is written\n');
 
   const cached = new Map();
-  for (const row of await getJSON(`entities?select=name,logo_url&sport=eq.${LOGO_SPORT}&limit=5000`)) {
+  for (const row of await allEntities(LOGO_SPORT)) {
     cached.set(row.name, row.logo_url);
   }
   console.log(`cache: ${cached.size} competitions already resolved`);
@@ -629,12 +502,14 @@ async function main() {
     for (const alias of new Set([item.name, ...item.aliases])) {
       batch.push({ sport: LOGO_SPORT, name: alias, logo_url: url, source: url ? 'wikipedia' : null });
     }
-    if (batch.length >= 40) { await upsert(batch.splice(0, batch.length), cached); }
+    if (batch.length >= 40) { await upsertEntities(batch.splice(0, batch.length)); }
     if (done % 25 === 0) console.log(`  ${done}/${todo.length}  found ${hit}, none ${miss}, failed ${failed}`);
   });
-  await upsert(batch, cached);
+  await upsertEntities(batch);
 
   console.log(`\ndone: ${done} resolved — ${hit} with a badge, ${miss} without, ${failed} request failures`);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main()
+  .catch((e) => { console.error(e); process.exitCode = 1; })
+  .finally(close);
