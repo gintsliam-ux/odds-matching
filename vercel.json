@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://sitemap-preparing-guns-suggesting.trycloudflare.com/api/:path*"
+      "destination": "https://med-flush-findarticles-encouraging.trycloudflare.com/api/:path*"
     }
   ]
 }
