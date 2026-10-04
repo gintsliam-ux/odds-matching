@@ -386,6 +386,10 @@ export async function saveTournamentMapping({ opticLeague, provider, competition
     { $set: doc },
     { upsert: true },
   );
+  // Same intent shape as the bulk path, so the drain has one case to handle.
+  await queueForNas('upsert', {
+    items: [{ opticLeague, provider, competitionId: competitionId ?? null, competitionName, sport, confidence }],
+  });
   return { ok: true, upserted: !!res.upsertedCount, modified: res.modifiedCount };
 }
 
@@ -397,6 +401,22 @@ export async function saveTournamentMapping({ opticLeague, provider, competition
  * `bulkWrite` of upserts also means the batch either lands or doesn't, rather
  * than leaving the table half-applied if the connection drops midway.
  */
+/**
+ * Record a mapping write so the tailnet can replay it onto `gutsys_sport`.
+ *
+ * A deployed instance has no route to the NAS, so its writes land on the Atlas
+ * mirror — which the page reads, so the change is visible at once — and would
+ * otherwise be erased by the next sync, which rebuilds the mirror FROM the NAS.
+ * The intent queued here is what closes the loop: the hourly agent drains it
+ * onto the NAS *before* pushing the NAS back out, so the row exists upstream by
+ * the time the rebuild runs. On the tailnet this is a no-op — the write already
+ * went to the source.
+ */
+async function queueForNas(op, payload) {
+  if (mongoConfigured) return;
+  await (await coll('mappingPending')).insertOne({ op, payload, at: new Date() });
+}
+
 export async function saveTournamentMappings(items) {
   if (!Array.isArray(items) || items.length === 0) return { ok: true, applied: 0 };
   if (items.length > 500) throw new Error('too many mappings in one batch');
@@ -441,6 +461,7 @@ export async function saveTournamentMappings(items) {
   if (ops.length === 0) return { ok: true, applied: 0 };
 
   const res = await (await coll('competitionMapping')).bulkWrite(ops, { ordered: false });
+  await queueForNas('upsert', { items });
   return {
     ok: true,
     applied: (res.upsertedCount ?? 0) + (res.modifiedCount ?? 0),
@@ -460,5 +481,8 @@ export async function clearTournamentMapping({ opticLeague, provider, competitio
     filter.gutsy_competition_id = competitionId;
   }
   const res = await (await coll('competitionMapping')).deleteMany(filter);
+  // A delete has to travel too, or the next sync would restore the row from the
+  // NAS copy that still has it.
+  await queueForNas('delete', { opticLeague, provider, competitionId: competitionId ?? null });
   return { ok: true, deleted: res.deletedCount };
 }

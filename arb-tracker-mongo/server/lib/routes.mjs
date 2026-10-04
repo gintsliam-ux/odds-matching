@@ -181,10 +181,21 @@ function unavailable(feature) {
  * It deliberately does NOT carry `odds` (10.7 GB), so event details, which
  * aggregates it for the coverage block, stays NAS-only.
  *
- * Reads only. A mapping WRITE against the mirror would be silently reverted by
- * the next sync and never reach the NAS, so those stay blocked.
+ * Mapping writes are included: they land on the mirror (so the page updates at
+ * once) and queue an intent that the hourly tailnet agent replays onto the NAS
+ * before rebuilding the mirror from it.
  */
-const MIRROR_SERVES = new Set(['GET /api/bets', 'GET /api/mapping/tournaments']);
+const MIRROR_SERVES = new Set([
+  'GET /api/bets',
+  'GET /api/mapping/tournaments',
+  // Writes land on the mirror and queue an intent the tailnet agent replays
+  // onto gutsys_sport — see queueForNas in mapping.mjs. Without that queue a
+  // save here would be erased by the next sync, which is why these were
+  // refused until the loop was closed.
+  'POST /api/mapping/tournament',
+  'POST /api/mapping/tournaments/apply',
+  'POST /api/mapping/tournament/clear',
+]);
 
 /** Routes whose data only exists on the Mongo source, and why. */
 const MONGO_ONLY = {

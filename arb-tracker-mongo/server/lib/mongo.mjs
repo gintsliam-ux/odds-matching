@@ -35,7 +35,9 @@ export const mirrorConfigured = Boolean(MIRROR_URI);
  * mapping page reads out of `fixtures`, precomputed on the tailnet. 493 KB
  * instead of the 148 MB collection it is derived from.
  */
-const MIRRORED = new Set(['entities', 'eventMapping', 'competitionMapping', 'leagues', 'leagueSquads']);
+const MIRRORED = new Set([
+  'entities', 'eventMapping', 'competitionMapping', 'leagues', 'leagueSquads', 'mappingPending',
+]);
 
 const client = URI
   ? new MongoClient(URI, { serverSelectionTimeoutMS: 10_000, maxPoolSize: 12 })
@@ -84,6 +86,13 @@ export const COLLECTIONS = {
   marketRules: 'market_rules',
   /** Mirror-only: the per-league squad summary the mapping page scores against. */
   leagueSquads: 'league_squads',
+  /**
+   * Mirror-only: mapping writes made from a deployed instance, waiting to be
+   * replayed onto the NAS. Vercel cannot reach `gutsys_sport`, so a save there
+   * lands on the mirror and leaves an intent here; the hourly tailnet agent
+   * drains it. See scripts/sync-to-atlas.mjs.
+   */
+  mappingPending: 'mapping_pending',
   // Not yet surfaced by the UI, but present in the schema:
   oddsSp: 'odds_sp',
   eventMapping: 'event_mapping',

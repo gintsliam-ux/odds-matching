@@ -74,6 +74,12 @@ try {
   const D = dst.db(DST_DB);
   console.log(`mirror ${SRC_DB} (NAS) -> ${DST_DB} (atlas)${DRY ? '  [DRY RUN]' : ''}${FULL ? '  [FULL]' : ''}`);
 
+  // BEFORE the push, not after. competition_mapping is mirrored in `replace`
+  // mode, which prunes mirror rows the NAS does not have — so a mapping saved
+  // on the deployed site would be deleted on the way past unless it has already
+  // been replayed upstream by the time the rebuild runs.
+  await drainPendingWrites(S, D);
+
   for (const spec of PLAN) {
     const t0 = Date.now();
     const from = S.collection(spec.name);
@@ -144,6 +150,74 @@ try {
 } finally {
   await src.close().catch(() => {});
   await dst.close().catch(() => {});
+}
+
+/**
+ * Replay mapping writes made on a deployed instance onto the NAS.
+ *
+ * Vercel cannot reach `gutsys_sport`, so a save there lands on the mirror and
+ * leaves an intent in `mapping_pending` (see queueForNas in
+ * server/lib/mapping.mjs). This is the other half: apply each intent to the
+ * source, then drop it. Anything that fails is LEFT in the queue — a write the
+ * user made is worth retrying next hour, and dropping it silently is how a
+ * mapping quietly un-applies itself.
+ */
+async function drainPendingWrites(S, D) {
+  const queue = D.collection('mapping_pending');
+  const pending = await queue.find({}).sort({ at: 1 }).limit(1000).toArray();
+  if (!pending.length) return;
+
+  const cm = S.collection('competition_mapping');
+  const leagues = S.collection('leagues');
+  let applied = 0, deleted = 0, failed = 0;
+
+  for (const p of pending) {
+    try {
+      if (p.op === 'upsert') {
+        const items = p.payload?.items ?? [];
+        const now = new Date();
+        for (const i of items) {
+          if (!i?.opticLeague || !i?.provider) continue;
+          const league = await leagues.findOne({ optic_league: i.opticLeague });
+          await cm.updateOne(
+            { provider: i.provider, optic_league: i.opticLeague, gutsy_competition_id: i.competitionId ?? null },
+            {
+              $set: {
+                optic_sport: league?.sport ?? null,
+                optic_league: i.opticLeague,
+                optic_tournament: league?.tournament ?? '',
+                gutsy_sport: i.sport ?? null,
+                gutsy_competition: i.competitionName ?? null,
+                gutsy_competition_id: i.competitionId ?? null,
+                confidence: i.confidence ?? 1,
+                source: 'manual',
+                provider: i.provider,
+                resolved_at: now,
+                verified: true,
+                verified_at: now,
+              },
+            },
+            { upsert: true },
+          );
+          applied++;
+        }
+      } else if (p.op === 'delete') {
+        const { opticLeague, provider, competitionId } = p.payload ?? {};
+        if (!opticLeague || !provider) throw new Error('bad delete intent');
+        const filter = { provider, optic_league: opticLeague };
+        if (competitionId != null) filter.gutsy_competition_id = competitionId;
+        const r = await cm.deleteMany(filter);
+        deleted += r.deletedCount ?? 0;
+      } else {
+        throw new Error(`unknown op ${p.op}`);
+      }
+      await queue.deleteOne({ _id: p._id });
+    } catch (e) {
+      failed++;
+      console.log(`  (pending ${p._id} failed, left queued: ${String(e.message).slice(0, 70)})`);
+    }
+  }
+  console.log(`  ${'mapping_pending'.padEnd(21)} replayed ${applied} upserts, ${deleted} deletes onto the NAS${failed ? `, ${failed} left queued` : ''}`);
 }
 
 /**

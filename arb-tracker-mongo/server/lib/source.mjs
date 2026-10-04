@@ -80,8 +80,12 @@ export const CAPABILITIES = {
    * reverted by the next sync and never reach the NAS, so the routes refuse it.
    * The client needs to know that up front — offering an Apply button that the
    * server will quietly decline is worse than not offering one.
+   *
+   * A mirror-backed instance CAN now write: the save lands on the mirror, so
+   * the page reflects it at once, and an intent is queued for the hourly
+   * tailnet agent to replay onto gutsys_sport. See scripts/sync-to-atlas.mjs.
    */
-  mappingWrite: isMongo,
+  mappingWrite: isMongo || mirrorConfigured,
   /** Browsing arbitrary past dates; the API surface only carries a short window. */
   history: isMongo,
   /** Feed-freshness heartbeats, which read Mongo write timestamps. */
