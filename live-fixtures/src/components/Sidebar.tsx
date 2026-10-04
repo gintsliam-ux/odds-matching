@@ -1,27 +1,39 @@
 import { useMemo, useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { Activity, Bell, ChevronDown, ChevronRight, Clock, GitMerge, LayoutGrid, ListChecks, LogOut, Pencil, Plus, Radio, Star, Users as UsersIcon } from 'lucide-react'
+import { Activity, Bell, ClipboardCheck, Menu, Timer, ChevronDown, ChevronRight, GitMerge, LayoutGrid, LogOut, Pencil, Plus, Star, Users as UsersIcon } from 'lucide-react'
 import type { Fixture } from '../lib/types'
 import { useMappedLeagues } from '../hooks/useMappedLeagues'
 import { displaySport, sportGroupKey, sportToSlug } from '../lib/sports'
 import { LeagueBadge } from './LeagueBadge'
 import { favouriteMatches, useFavourites, type Favourite } from '../lib/favourites'
 import { FavouriteEditor } from './FavouriteEditor'
-import type { DayView } from './Layout'
 import { useSportUniverse } from '../hooks/useSportUniverse'
 import { useGolfTournaments } from '../hooks/useGolfTournaments'
 import { useAuth } from '../lib/authContext'
 
 interface Props {
   fixtures: Fixture[]
-  day: DayView
   /** OPTIC-live ∧ SWIFT-prematch mismatches; rendered as a badge in Tools. */
   notificationCount: number
+  /** Bets accepted after the event went live. */
+  lateBetCount: number
+  /** Finished events a book still hasn't resulted. */
+  settlementCount: number
   /** Collapsed to an icon-only rail when true. */
   collapsed: boolean
+  /** Expand/collapse the rail. The toggle lives at the top of the nav itself,
+   *  beside the brand, rather than in the status bar across the top. */
+  onToggleNav: () => void
 }
 
-export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) {
+export function Sidebar({
+  fixtures,
+  notificationCount,
+  lateBetCount,
+  settlementCount,
+  collapsed,
+  onToggleNav,
+}: Props) {
   const { user, signOut } = useAuth()
   const favourites = useFavourites()
   // Single open sport (accordion) — expanding one collapses any other.
@@ -32,23 +44,6 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
   const { active: golfActive, loading: golfLoading } = useGolfTournaments()
   const [editing, setEditing] = useState<Favourite | 'new' | null>(null)
 
-  const counts = useMemo(() => {
-    let live = 0
-    let upcoming = 0
-    let completed = 0
-    for (const f of fixtures) {
-      if (f.status === 'live') live++
-      else if (f.status === 'upcoming') upcoming++
-      else completed++
-    }
-    // While browsing a specific day, the UPCOMING/COMPLETED count reflects that
-    // day's total (matching the board), not the live window.
-    if (day.mode && !day.loading) {
-      if (day.status === 'upcoming') upcoming = day.fixtures.length
-      else completed = day.fixtures.length
-    }
-    return { all: fixtures.length, live, upcoming, completed }
-  }, [fixtures, day])
 
   // Sports grouped by their PARENT (OpticOdds' league-as-sport buckets — AFL,
   // MLB, NBA … — roll up under Australian Rules / Baseball / Basketball). The
@@ -173,30 +168,41 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
 
   // Collapsed icon rail — just the navigable icons, tooltips on hover.
   if (collapsed) {
-    return <CollapsedRail sports={sports} notificationCount={notificationCount} />
+    return (
+      <CollapsedRail
+        sports={sports}
+        notificationCount={notificationCount}
+        lateBetCount={lateBetCount}
+        settlementCount={settlementCount}
+        onToggleNav={onToggleNav}
+      />
+    )
   }
 
   return (
     <>
       <nav className="hidden w-56 shrink-0 flex-col border-r border-[color:var(--line-soft)] bg-[color:var(--bg)] md:flex">
-        {/* brand — moved here from the top header */}
-        <div className="flex h-14 shrink-0 items-center gap-2.5 border-b border-[color:var(--line-soft)] px-4">
+        {/* Brand + collapse toggle — the head of the nav, not of the page. */}
+        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-[color:var(--line-soft)] px-3">
+          <button
+            onClick={onToggleNav}
+            className="rounded-md p-1.5 text-[color:var(--muted)] transition-colors hover:bg-white/5 hover:text-gray-200"
+            title="Collapse sidebar"
+            aria-label="Collapse sidebar"
+          >
+            <Menu className="h-4 w-4" />
+          </button>
           <Activity className="h-4 w-4 shrink-0 text-[color:var(--total)]" strokeWidth={2.5} />
-          <span className="text-[14px] font-semibold tracking-tight text-white">Live Events Terminal</span>
+          <span className="truncate text-[13.5px] font-semibold tracking-tight text-white">
+            Sport Events
+          </span>
         </div>
 
         {/* Events, Favourites, Sports. flex-1 pushes Tools to the bottom; a
             contained scroll here (min-h-0) keeps Tools pinned and reachable when
             many sports are expanded — the nav as a whole never moves with the
             page body. */}
-        <div className="min-h-0 flex-1 overflow-y-auto py-3 [scrollbar-width:thin]">
-          <Group title="Events">
-            <Item to="/" end label="All" count={counts.all} icon={<LayoutGrid className="h-3.5 w-3.5" />} />
-            <Item to="/live" label="Live" count={counts.live} accent="live" icon={<Radio className="h-3.5 w-3.5" />} />
-            <Item to="/upcoming" label="Upcoming" count={counts.upcoming} accent="up" icon={<Clock className="h-3.5 w-3.5" />} />
-            <Item to="/completed" label="Completed" count={counts.completed} icon={<ListChecks className="h-3.5 w-3.5" />} />
-          </Group>
-
+        <div className="min-h-0 flex-1 overflow-y-auto py-3">
           <Group
             title="Favourites"
             action={
@@ -256,6 +262,20 @@ export function Sidebar({ fixtures, day, notificationCount, collapsed }: Props) 
               icon={<Bell className="h-3.5 w-3.5" />}
               count={notificationCount || undefined}
               accent={notificationCount ? 'live' : undefined}
+            />
+            <Item
+              to="/late-bets"
+              label="Late bets"
+              icon={<Timer className="h-3.5 w-3.5" />}
+              count={lateBetCount || undefined}
+              accent={lateBetCount ? 'live' : undefined}
+            />
+            <Item
+              to="/settlement"
+              label="Settlement"
+              icon={<ClipboardCheck className="h-3.5 w-3.5" />}
+              count={settlementCount || undefined}
+              accent={settlementCount ? 'up' : undefined}
             />
             <Item to="/users" label="Users" icon={<UsersIcon className="h-3.5 w-3.5" />} />
           </Group>
@@ -461,9 +481,15 @@ function SportRow({
 function CollapsedRail({
   sports,
   notificationCount,
+  lateBetCount,
+  settlementCount,
+  onToggleNav,
 }: {
   sports: Array<{ key: string; label: string; badgeRaw: string; total: number; live: number }>
   notificationCount: number
+  lateBetCount: number
+  settlementCount: number
+  onToggleNav: () => void
 }) {
   const railLink = ({ isActive }: { isActive: boolean }) =>
     [
@@ -472,14 +498,21 @@ function CollapsedRail({
     ].join(' ')
   return (
     <nav className="hidden w-14 shrink-0 flex-col items-center border-r border-[color:var(--line-soft)] bg-[color:var(--bg)] md:flex">
-      <div className="flex h-14 shrink-0 items-center justify-center border-b border-[color:var(--line-soft)]">
-        <Activity className="h-4 w-4 text-[color:var(--total)]" strokeWidth={2.5} />
-      </div>
+      {/* The rail's only way back — without a toggle here a collapsed sidebar
+          could never be reopened. */}
+      <button
+        onClick={onToggleNav}
+        title="Expand sidebar"
+        aria-label="Expand sidebar"
+        className="group flex h-12 w-full shrink-0 items-center justify-center border-b border-[color:var(--line-soft)] text-[color:var(--total)] transition-colors hover:bg-white/5"
+      >
+        <Activity className="h-4 w-4 group-hover:hidden" strokeWidth={2.5} />
+        <Menu className="hidden h-4 w-4 text-gray-200 group-hover:block" />
+      </button>
       <div className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto py-3">
-        <NavLink to="/" end className={railLink} title="All"><LayoutGrid className="h-4 w-4" /></NavLink>
-        <NavLink to="/live" className={railLink} title="Live"><Radio className="h-4 w-4" /></NavLink>
-        <NavLink to="/upcoming" className={railLink} title="Upcoming"><Clock className="h-4 w-4" /></NavLink>
-        <NavLink to="/completed" className={railLink} title="Completed"><ListChecks className="h-4 w-4" /></NavLink>
+        {/* Status lives in the board's own filter bar now, beside the date —
+            the rail is sports, favourites and tools. */}
+        <NavLink to="/" end className={railLink} title="Board"><LayoutGrid className="h-4 w-4" /></NavLink>
         <div className="my-1 h-px w-6 bg-[color:var(--line-soft)]" />
         {sports.map((s) => (
           <NavLink
@@ -501,6 +534,22 @@ function CollapsedRail({
             <Bell className="h-4 w-4" />
             {notificationCount > 0 && (
               <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-[color:var(--live)]" />
+            )}
+          </span>
+        </NavLink>
+        <NavLink to="/late-bets" className={railLink} title="Late bets">
+          <span className="relative">
+            <Timer className="h-4 w-4" />
+            {lateBetCount > 0 && (
+              <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-[color:var(--live)]" />
+            )}
+          </span>
+        </NavLink>
+        <NavLink to="/settlement" className={railLink} title="Settlement">
+          <span className="relative">
+            <ClipboardCheck className="h-4 w-4" />
+            {settlementCount > 0 && (
+              <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-[color:var(--up)]" />
             )}
           </span>
         </NavLink>

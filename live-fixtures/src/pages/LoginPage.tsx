@@ -18,10 +18,19 @@ export default function LoginPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     if (busy) return
+    // Validate here rather than by disabling the button. A disabled submit
+    // button also kills the form's implicit submission, so Enter did nothing —
+    // and a browser autofill that doesn't fire onChange leaves the fields
+    // looking empty to React, disabling the button on a filled-in form.
+    const name = username.trim()
+    if (!name || !password) {
+      setError('Enter a username and password')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
-      await signIn(username.trim(), password)
+      await signIn(name, password)
       // No navigate() — the app re-renders past the gate once `user` is set.
     } catch (err) {
       setError((err as Error).message || 'Could not sign in')
@@ -34,7 +43,7 @@ export default function LoginPage() {
       <form onSubmit={submit} className="w-full max-w-[340px]">
         <div className="mb-7 flex items-center gap-2">
           <Activity className="h-5 w-5 text-[color:var(--total)]" />
-          <span className="text-[15px] font-semibold text-gray-100">Live Events Terminal</span>
+          <span className="text-[15px] font-semibold text-gray-100">Sport Events</span>
         </div>
 
         <label className="mb-1.5 block text-[11px] font-medium text-[color:var(--muted-2)]">
@@ -44,6 +53,7 @@ export default function LoginPage() {
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           autoFocus
+          name="username"
           autoComplete="username"
           className="mb-4 w-full rounded border border-[var(--line)] bg-black/[0.25] px-3 py-2 text-[13px] text-gray-100 outline-none focus:border-[color:var(--total)]/50"
         />
@@ -55,6 +65,7 @@ export default function LoginPage() {
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          name="password"
           autoComplete="current-password"
           className="mb-5 w-full rounded border border-[var(--line)] bg-black/[0.25] px-3 py-2 text-[13px] text-gray-100 outline-none focus:border-[color:var(--total)]/50"
         />
@@ -67,7 +78,7 @@ export default function LoginPage() {
 
         <button
           type="submit"
-          disabled={busy || !username || !password}
+          disabled={busy}
           className="inline-flex w-full items-center justify-center gap-2 rounded bg-[color:var(--total)]/15 px-3 py-2 text-[13px] font-semibold text-[color:var(--total)] hover:bg-[color:var(--total)]/25 disabled:opacity-40"
         >
           {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}

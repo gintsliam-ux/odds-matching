@@ -17,8 +17,28 @@ export function bookKey(name: string): string {
 }
 
 function bookSlug(name: string): string {
-  return bookKey(name).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  return (
+    bookKey(name)
+      // The exchange arrives as two sportsbooks, `betfair` and `betfair_lay`.
+      // Both sides are the same brand and wear the same mark.
+      .replace(/[_-]lay$/, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+  )
 }
+
+/**
+ * Marks copied from Arb Tracker (public/logos/brands/), preferred over the
+ * generic set below.
+ *
+ * These are the books this board actually prices against, and they are the
+ * marks the grid is modelled on — including `tab`, which the fetched set has
+ * no file for at all, so the TAB column had been falling back to text.
+ */
+const ARB_BRANDS = new Set([
+  'bet365', 'betfair', 'betmgm', 'draftkings', 'fanatics', 'fanduel',
+  'ladbrokes', 'pinnacle', 'sportsbet', 'tab', 'tabtouch',
+])
 
 /** Slugs present in public/books/. Keep in step with the fetch script's output. */
 const HAVE = new Set([
@@ -37,5 +57,6 @@ const HAVE = new Set([
 export function bookLogo(name: string | null | undefined): string | null {
   if (!name) return null
   const slug = bookSlug(name)
+  if (ARB_BRANDS.has(slug)) return `/logos/brands/${slug}.png`
   return HAVE.has(slug) ? `/books/${slug}.png` : null
 }

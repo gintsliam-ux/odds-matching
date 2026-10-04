@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Outlet, useLocation, useOutletContext, useSearchParams } from 'react-router-dom'
 import { Header } from './Header'
 import { Sidebar } from './Sidebar'
+import { Ticker } from './Ticker'
 import { useFixtures, type FeedState } from '../hooks/useFixtures'
 import { useMongoPulse } from '../hooks/useMongoPulse'
 import { useMappingTick } from '../hooks/useMappingTick'
@@ -81,8 +82,17 @@ export default function Layout() {
   const dayStatus: 'upcoming' | 'completed' = status === 'completed' ? 'completed' : 'upcoming'
   const date = params.get('date') || melbToday()
   const dayData = useDayFixtures(dayMode ? date : null, dayStatus)
+  // RAW slugs, exactly as the board filter above does. This joined on
+  // `f.league` — the prettified display name, "Slovenia - Cup" — against a set
+  // of raw slugs like "soccer_slovenia_cup", which can never match, so the day
+  // boards (/upcoming and /completed) filtered every fixture away and rendered
+  // empty. Measured on 2026-09-10: of 126 upcoming fixtures, 87 match on
+  // rawLeague and 0 on league.
   const dayFixtures = useMemo(
-    () => (mappedLeagues.size === 0 ? dayData.fixtures : dayData.fixtures.filter((f) => mappedLeagues.has(f.league))),
+    () =>
+      mappedLeagues.size === 0
+        ? dayData.fixtures
+        : dayData.fixtures.filter((f) => mappedLeagues.has(f.rawLeague)),
     [dayData.fixtures, mappedLeagues],
   )
   const day: DayView = { mode: dayMode, status: dayStatus, date, ...dayData, fixtures: dayFixtures }
@@ -101,6 +111,17 @@ export default function Layout() {
   // /notifications page share one source (the Sidebar lives outside <Outlet>
   // so it can't read useTerminal — pass via prop instead).
   const { notifications, loading: notificationsLoading } = useNotifications(fixtures)
+
+  // Nav badge counts. Derived from the SAME sweep the pages render, so a badge
+  // can never disagree with the list it links to.
+  const lateBetCount = useMemo(
+    () => notifications.filter((n) => n.kind === 'swift_late_bet' || n.kind === 'mybet_late_bet').length,
+    [notifications],
+  )
+  const settlementCount = useMemo(
+    () => notifications.filter((n) => n.kind === 'swift_unsettled' || n.kind === 'mybet_unsettled').length,
+    [notifications],
+  )
 
   // Capture SWIFT actual-start timestamps for events about to kick off — runs
   // a 5s background poll while any fixture is in the ±15 min hot window.
@@ -136,11 +157,19 @@ export default function Layout() {
         lastUpdated={lastUpdated}
         mongoState={mongoState}
         mongoPulse={mongoPulse}
-        navOpen={navOpen}
-        onToggleNav={toggleNav}
       />
+      {/* Next-to-jump strip — sits under the header's pulses and clocks, above
+          the board, and prices off fixtures the page has already loaded. */}
+      <Ticker now={now} mappedLeagues={mappedLeagues} />
       <div className="flex min-h-0 flex-1">
-        <Sidebar fixtures={fixtures} day={day} notificationCount={notifications.length} collapsed={!navOpen} />
+        <Sidebar
+          fixtures={fixtures}
+          notificationCount={notifications.length}
+          lateBetCount={lateBetCount}
+          settlementCount={settlementCount}
+          collapsed={!navOpen}
+          onToggleNav={toggleNav}
+        />
         <main className="min-w-0 flex-1 overflow-y-auto">
           <Outlet context={ctx} />
         </main>

@@ -484,3 +484,28 @@ export function prettyLeague(raw: string): string {
   const [head, ...rest] = raw.split('_-_')
   return `${titleCasePhrase(head)} - ${titleCasePhrase(rest.join('_-_'))}`
 }
+
+/**
+ * Sports whose competitors are individuals rather than clubs. They abbreviate
+ * by surname ("Yannick Hanfmann" -> HAN), since the first name isn't the
+ * identity the scoreboard is naming.
+ */
+const PERSON_SPORTS = new Set([
+  'tennis',
+  'mma',
+  'ufc',
+  'boxing',
+  'golf',
+  'darts',
+  'snooker',
+  'pool',
+  'cycling',
+  'swimming',
+  'athletics',
+  'motorsport',
+  'formula',
+])
+
+export function isPersonSport(sport: string): boolean {
+  return PERSON_SPORTS.has(canon(sport))
+}

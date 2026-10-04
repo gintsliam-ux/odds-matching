@@ -3,21 +3,23 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { backOr } from '../lib/nav'
 import { ArrowLeft, ChevronDown, ChevronRight, ExternalLink } from 'lucide-react'
 import { useTerminal } from '../components/Layout'
-import { BetsSkeleton, DetailSkeleton, PanelSkeleton } from '../components/Skeleton'
+import { BetsSkeleton, DetailSkeleton, MarketsSkeleton, PanelSkeleton } from '../components/Skeleton'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { fetchFixtureById } from '../lib/dataSource'
 import { fetchSwiftEvent, swiftEventUrl } from '../lib/swiftStatus'
 import { betSettlement, fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
 import { fetchMybetBets, mybetSettlement, type MybetBetRow } from '../lib/mybetBets'
 import { CopyButton, Field, Grid, SourcePanel } from '../components/SourcePanel'
-import { BrandSubTab, StatCard } from '../components/BetsChrome'
+import { BrandSubTab } from '../components/BetsChrome'
 import { pollWithVisibility } from '../lib/poll'
 import { settleFromScore, type ScoreCtx } from '../lib/settleBet'
 import { leagueLabel, periodAbbrev, periodNoun, periodState } from '../lib/sports'
 import { Avatar } from '../components/Avatar'
 import { LeagueBadge } from '../components/LeagueBadge'
+import { DrawIcon } from '../components/DrawIcon'
+import { PriceHoverCard, type HoverTarget, type PriceSnap } from '../components/PriceHoverCard'
 import type { Fixture, FlucSnapshot } from '../lib/types'
-import { agoLabel, fmtDateTime, fmtLine, melbDateTime, melbDayTime, overdueMinutes, placementOffset, startsInLabel } from '../lib/format'
+import { agoLabel, fmtDateTime, fmtLine, melbDateTime, melbDayTime, melbLongDateTime, melbTime, overdueMinutes, placementOffset, startsInLabel } from '../lib/format'
 import { fetchEventMappingsFor, fetchCompetitionMappings, type EventMapping, type CompetitionMapping } from '../lib/mappingData'
 import { getSwiftCatalog, type SwiftCompetition, type SwiftEvent } from '../lib/swiftCatalog'
 import { getMybetCatalog, type MybetCompetition, type MybetEvent } from '../lib/mybetCatalog'
@@ -213,7 +215,7 @@ export default function FixtureDetailPage() {
   if (!f && loading) return <DetailSkeleton />
 
   return (
-    <div className="mx-auto max-w-[1700px] px-5 py-5">
+    <div className="mx-auto flex h-full max-w-[1700px] flex-col px-5 py-5">
       {/* History back, not a hard link to "/". Linking to the root threw away
           whichever sport/league/date/filter you were browsing and sent you to
           the top of the default board — going back restores the exact view,
@@ -222,7 +224,7 @@ export default function FixtureDetailPage() {
           tab), which react-router marks with history.state.idx === 0. */}
       <button
         onClick={() => backOr(navigate, '/')}
-        className="mb-5 inline-flex items-center gap-1.5 text-[12.5px] text-[color:var(--muted)] transition-colors hover:text-gray-200"
+        className="mb-4 inline-flex shrink-0 items-center gap-1.5 text-[12.5px] text-[color:var(--muted)] transition-colors hover:text-gray-200"
       >
         <ArrowLeft className="h-3.5 w-3.5" />
         Back to terminal
@@ -246,10 +248,11 @@ export default function FixtureDetailPage() {
 
 type DetailTab = 'details' | 'markets' | 'bets'
 
-/** URL segment → tab. Anything unrecognised falls back to Details rather than
- *  404ing, since the segment is cosmetic. */
+/** URL segment → tab. Anything unrecognised falls back to the default rather
+ *  than 404ing, since the segment is cosmetic. Markets is the default: it is
+ *  what the page is for, and Details is reference material you go looking for. */
 const TAB_FROM_PATH: Record<string, DetailTab> = {
-  '': 'details',
+  '': 'markets',
   details: 'details',
   markets: 'markets',
   bets: 'bets',
@@ -316,98 +319,66 @@ function Detail({
     home: f.homeName,
     away: f.awayName,
   })
-  const swiftBets = betsState.bets ?? []
-  const mybetBets = mybetBetsState.bets ?? []
 
   return (
     <div
-      className={`rounded-lg bg-[color:var(--panel)] ${isLive ? 'glow-live' : ''}`}
+      className={`flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg bg-[color:var(--panel)] ${
+        isLive ? 'glow-live' : ''
+      }`}
     >
-      {/* HERO — everything you need to read the event at a glance. */}
-      <div className="flex items-center justify-between border-b border-white/[0.05] px-5 py-3.5">
-        <div className="flex items-center gap-2.5">
-          <LeagueBadge sport={f.sport} league={f.league} size={20} />
-          <span className="text-[14px] font-semibold text-gray-100">
-            {leagueLabel(f.sport, f.league, f.seasonType)}
-          </span>
-        </div>
-        <StatusBadge fixture={f} now={now} />
+      {/* HERO — the scoreboard, read left-to-right as the fixture reads:
+          home, the score (or kickoff time) with its status underneath, away.
+          The stacked two-row layout this replaced put the teams above one
+          another and buried the state of the game in a corner badge. */}
+      <div className="shrink-0">
+        <EventHeader fixture={f} now={now} />
       </div>
-
-      <div className="px-5 py-5">
-        <Score name={f.homeName} logo={f.homeLogo} score={f.homeScore} leads={leads(f.homeScore, f.awayScore)} />
-        <Score name={f.awayName} logo={f.awayLogo} score={f.awayScore} leads={leads(f.awayScore, f.homeScore)} />
-      </div>
-
-      {/* compact times under the score so they're always visible above the tabs */}
-      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 border-t border-white/[0.05] bg-black/[0.15] px-5 py-3 text-[12px] text-[color:var(--muted)]">
-        <span>
-          UTC <span className="ml-1 text-gray-200 tabular-nums">{fmtDateTime(f.startTime)}</span>
-        </span>
-        <span>
-          MEL <span className="ml-1 text-gray-200 tabular-nums">{melbDateTime(f.startTime)}</span>
-        </span>
-        <span className="ml-auto flex items-center gap-2 font-medium text-gray-200">
-          {isLive
-            ? (periodState(f.sport, f.periods) ?? 'Live')
-            : f.status === 'upcoming'
-              ? startsInLabel(f.startTime, now)
-              : 'Full time'}
-          {f.status === 'upcoming' && overdueMinutes(f.startTime, now) >= 3 && (
-            <span
-              className="inline-flex items-center gap-1 rounded-full bg-[color:var(--live)]/10 px-2 py-0.5 text-[10px] font-semibold text-[color:var(--live)]"
-              title="Scheduled start has passed but it hasn't gone live — possibly delayed"
-            >
-              <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--live)] pulse-dot" />
-              possible delay
-            </span>
-          )}
-        </span>
-      </div>
-
-      {/* COMBINED EXPOSURE — SwiftBet + mybet, always visible across tabs. */}
-      {(swiftBets.length > 0 || mybetBets.length > 0) && (
-        <CombinedExposure fixture={f} swiftBets={swiftBets} mybetBets={mybetBets} />
-      )}
 
       {/* TAB STRIP */}
-      <div className="flex items-center gap-1 border-b border-white/[0.05] bg-black/[0.1] px-3 py-2">
-        <TabButton active={tab === 'details'} onClick={() => setTab('details')}>
-          Details
-        </TabButton>
+      <div className="flex shrink-0 items-center gap-1 border-b border-white/[0.05] bg-black/[0.1] px-3 py-2">
         <TabButton active={tab === 'markets'} onClick={() => setTab('markets')}>
           Markets
         </TabButton>
         <TabButton active={tab === 'bets'} onClick={() => setTab('bets')}>
           Bets
         </TabButton>
+        <TabButton active={tab === 'details'} onClick={() => setTab('details')}>
+          Details
+        </TabButton>
       </div>
 
-      {tab === 'details' && (
-        <DetailsTab
-          fixture={f}
-          now={now}
-          mappingInfo={mappingInfo}
-          swiftBets={betsState.bets}
-          mybetBets={mybetBetsState.bets}
-          swiftBetsLoading={betsState.loading}
-          mybetBetsLoading={mybetBetsState.loading}
-        />
-      )}
-      {tab === 'markets' && <MarketsTab fixture={f} now={now} />}
-      {tab === 'bets' && (
-        <BetsPanel
-          fixture={f}
-          swiftBets={betsState.bets}
-          swiftLoading={betsState.loading}
-          swiftError={betsState.error}
-          swiftActualStart={actualStart}
-          mybetEventId={mappingInfo.mybetEvent?.id ?? mappingInfo.mybetEvMap?.swift_event_id ?? null}
-          mybetBets={mybetBetsState.bets}
-          mybetLoading={mybetBetsState.loading}
-          mybetError={mybetBetsState.error}
-        />
-      )}
+      {/* ONE scroll container for the tab body, so the event header and the tab
+          strip stay pinned and the sticky heads inside the markets grid have a
+          real scrollport to stick against. A `sticky` element inside a
+          container that never scrolls does nothing at all — which is why the
+          grid's header used to slide away with the page. */}
+      <div className="min-h-0 flex-1 overflow-auto">
+        {tab === 'details' && (
+          <DetailsTab
+            fixture={f}
+            now={now}
+            mappingInfo={mappingInfo}
+            swiftBets={betsState.bets}
+            mybetBets={mybetBetsState.bets}
+            swiftBetsLoading={betsState.loading}
+            mybetBetsLoading={mybetBetsState.loading}
+          />
+        )}
+        {tab === 'markets' && <MarketsTab fixture={f} now={now} />}
+        {tab === 'bets' && (
+          <BetsPanel
+            fixture={f}
+            swiftBets={betsState.bets}
+            swiftLoading={betsState.loading}
+            swiftError={betsState.error}
+            swiftActualStart={actualStart}
+            mybetEventId={mappingInfo.mybetEvent?.id ?? mappingInfo.mybetEvMap?.swift_event_id ?? null}
+            mybetBets={mybetBetsState.bets}
+            mybetLoading={mybetBetsState.loading}
+            mybetError={mybetBetsState.error}
+          />
+        )}
+      </div>
     </div>
   )
 }
@@ -512,7 +483,12 @@ function DetailsTab({
     <>
       {f.periods.length > 0 && (
         <Section title={`Score by period · ${periodNoun(f.sport).toLowerCase()}`}>
-          <table className="w-full text-[12.5px] tabular-nums">
+          {/* Scrolls. The period columns are a fixed w-9 each, so a 9-inning
+              baseball line score (or cricket with extras) is wider than a
+              narrow panel and used to push out of it — the only one of this
+              page's six tables without a scroll wrapper. */}
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[320px] text-[12.5px] tabular-nums">
             <thead>
               <tr className="text-[11px] text-[color:var(--muted-2)]">
                 <th className="pb-1.5 text-left font-normal" />
@@ -539,6 +515,7 @@ function DetailsTab({
               />
             </tbody>
           </table>
+          </div>
         </Section>
       )}
 
@@ -843,7 +820,7 @@ function MarketsTab({ fixture: f, now }: { fixture: Fixture; now: Date }) {
     }
   }, [f.id, f.homeName, f.awayName, f.scheduledStart, f.startTime])
 
-  if (!failed && groups === null) return <PanelSkeleton fields={4} />
+  if (!failed && groups === null) return <MarketsSkeleton />
   // Nothing in the new tables (or they errored) — fall back to the jsonb the
   // page has always read, which still covers settled fixtures.
   if (failed || !groups?.length) return <LegacyMarketsTab fixture={f} now={now} />
@@ -928,9 +905,7 @@ function MarketsView({
                   <span className="h-px flex-1 bg-white/[0.06]" />
                 </div>
               )}
-              {inPeriod.map((g) => (
-                <MarketGroupCard key={g.marketId} group={g} />
-              ))}
+              <MarketsGrid groups={inPeriod} allGroups={groups} fixture={f} now={now} />
             </Fragment>
           )
         })}
@@ -939,33 +914,430 @@ function MarketsView({
   )
 }
 
-/** One market's card, adapting a MarketGroup onto the existing MarketCard. */
-function MarketGroupCard({ group: g }: { group: MarketGroup }) {
-  const byBook = new Map(g.pregame.map((b) => [b.book, b]))
-  const books = g.pregame.map((b) => b.book)
+/**
+ * Every market for the fixture as ONE price grid — selections down the side,
+ * books across the top — the way Arb Tracker shows an event.
+ *
+ * This replaced a stack of per-market cards, each carrying its own book
+ * columns. Cards meant a book sat in a different column in every market, so
+ * comparing one book across markets was a hunt; here a book is a column for
+ * the whole page and the eye can run straight down it. The Selection column
+ * and the header row both stick, so neither the name of what you are pricing
+ * nor whose price it is scrolls away.
+ */
+/** The exchange arrives as two `sportsbook` values, a back side and a lay side.
+ *  They are one market seen from both directions, so they are always rendered
+ *  as an adjacent pair — never split across the book columns. */
+const BACK_BOOK = 'betfair'
+const LAY_BOOK = 'betfair_lay'
+
+/** The exchange pair's column head: the Betfair mark over Back / Lay. */
+function ExchangeHead({ label }: { label: string }) {
+  const logo = bookLogo(BACK_BOOK)
+  return (
+    <span className="flex flex-col items-center gap-0.5" title={`Betfair ${label.toLowerCase()}`}>
+      {logo && <img src={logo} alt="" className="h-[18px] w-[18px] rounded-[2px] object-contain" />}
+      <span className="text-[10px] uppercase tracking-wide text-[color:var(--muted-2)]">{label}</span>
+    </span>
+  )
+}
+
+function MarketsGrid({
+  groups,
+  allGroups,
+  fixture: f,
+  now,
+}: {
+  /** The markets this section renders. */
+  groups: MarketGroup[]
+  /**
+   * Every market on the fixture, for deriving the COLUMN SET.
+   *
+   * The columns must be the same in every period section or they shift as you
+   * scroll: TAB prices a couple of markets and nothing else, so deriving
+   * columns per section made its column appear in one block and vanish from
+   * the next — which reads as TAB being missing. Arb Tracker has one table and
+   * one column set; this is that, split into sections only for the sticky
+   * period headings.
+   */
+  allGroups: MarketGroup[]
+  fixture: Fixture
+  // The page's ticking clock, not Date.now() — reading the wall clock during
+  // render is impure, and this keeps the card's "updated 4m ago" moving.
+  now: Date
+}) {
+  const [hover, setHover] = useState<HoverTarget | null>(null)
+
+  // Scrolling detaches the card from the cell it describes, so dismiss it.
+  // Listened for in the CAPTURE phase on window: scroll events don't bubble,
+  // and the scrollport is now an ancestor (the tab body) rather than this
+  // component's own div, so a local handler would never see it.
+  useEffect(() => {
+    if (!hover) return
+    const drop = () => setHover(null)
+    window.addEventListener('scroll', drop, { capture: true, passive: true })
+    return () => window.removeEventListener('scroll', drop, { capture: true })
+  }, [hover])
+
+  if (groups.length === 0) return null
+
+  // Column order: the books that price the most markets first, so the widest
+  // coverage is nearest the selection names and the sparse books fall off the
+  // right where they cost least to scroll past.
+  const coverage = new Map<string, number>()
+  for (const g of allGroups) for (const b of g.pregame) coverage.set(b.book, (coverage.get(b.book) ?? 0) + 1)
+  // Betfair is an EXCHANGE, not a bookmaker column: its back and lay sides get
+  // their own tinted pair right after Selection, as Arb Tracker shows them.
+  // They arrive as two `sportsbook` values, `betfair` and `betfair_lay`, and
+  // were being rendered as two ordinary book columns somewhere down the row.
+  const books = [...coverage.entries()]
+    .filter(([book]) => book !== BACK_BOOK && book !== LAY_BOOK)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([book]) => book)
+  const hasExchange = coverage.has(BACK_BOOK) || coverage.has(LAY_BOOK)
+
+  /**
+   * The stage ladder for one book's price on one outcome, oldest first.
+   * `stageRank` keeps open first and close/current last regardless of clock —
+   * a book re-listed after a suspension can stamp an `open` later than its own
+   * 6h snapshot, and sorting purely by time would put them out of order.
+   */
+  const snapsFor = (
+    g: MarketGroup,
+    book: string,
+    outcome: string,
+    line: number | null,
+  ): PriceSnap[] =>
+    Object.entries(g.flucs[book] ?? {})
+      // A snapshot carries the line it was taken at. Showing the main line's
+      // history against a -1.5 row would be a different market's movement.
+      .filter(([, snap]) => g.kind === 'moneyline' || (snap.line ?? null) === line)
+      .map(([stage, snap]) => ({
+        stage,
+        label: stageLabel(stage),
+        price: snap[outcome as keyof SidePrices] ?? null,
+        at: snap.at ?? null,
+      }))
+      .filter((x): x is PriceSnap => x.price != null)
+      .sort(
+        (a, b) =>
+          stageRank(a.stage) - stageRank(b.stage) ||
+          (a.at && b.at ? Date.parse(a.at) - Date.parse(b.at) : 0),
+      )
+
+  /** Raise the card off the cell itself, so the whole cell is the hit target. */
+  const hoverProps = (t: Omit<HoverTarget, 'rect'>) => ({
+    tabIndex: 0,
+    onMouseEnter: (e: React.MouseEvent<HTMLTableCellElement>) =>
+      setHover({ ...t, rect: e.currentTarget.getBoundingClientRect() }),
+    onMouseLeave: (e: React.MouseEvent<HTMLTableCellElement>) => {
+      // Don't yank the card out from under a cell the keyboard still holds.
+      if (document.activeElement !== e.currentTarget) setHover(null)
+    },
+    onFocus: (e: React.FocusEvent<HTMLTableCellElement>) =>
+      setHover({ ...t, rect: e.currentTarget.getBoundingClientRect() }),
+    onBlur: () => setHover(null),
+  })
+
+  /**
+   * Every row the grid shows for one market: one per (line, outcome).
+   *
+   * A handicap or total is a LADDER — books quote -0.5, +0.5, -1.5 and so on —
+   * and this used to collapse it to the single main line, annotating any book
+   * on a different line inside its own cell. That put prices for different
+   * markets side by side in one row and hid the rest of the ladder entirely.
+   * Each line now gets its own pair of rows, main line first and tinted.
+   */
+  const rowsFor = (g: MarketGroup) => {
+    if (g.kind === 'moneyline') {
+      return g.outcomes.map((outcome) => ({ line: null as number | null, outcome, isMain: true }))
+    }
+    const lines = allLines(g.pregame)
+    if (g.liveLine != null && !lines.includes(g.liveLine)) lines.push(g.liveLine)
+    // The main line is the one most books lead with; it heads the ladder.
+    const tally = new Map<number, number>()
+    for (const b of g.pregame) if (b.mainLine != null) tally.set(b.mainLine, (tally.get(b.mainLine) ?? 0) + 1)
+    const main = [...tally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+    const ordered = lines.sort(
+      (a, b) => Number(b === main) - Number(a === main) || Math.abs(a) - Math.abs(b) || a - b,
+    )
+    return ordered.flatMap((line) =>
+      g.outcomes.map((outcome) => ({ line: line as number | null, outcome, isMain: line === main })),
+    )
+  }
+
+  /** A book's price for one outcome at one specific line. */
+  const priceAt = (
+    b: BookOdds | undefined,
+    g: MarketGroup,
+    line: number | null,
+    key: string,
+  ): number | null => {
+    if (!b) return null
+    const prices = g.kind === 'moneyline' ? b.mainPrices : pricesAt(b, line)
+    return prices?.[key as keyof SidePrices] ?? null
+  }
+
+  // The main line's tint, as a gradient layer OVER the surface colour rather
+  // than a translucent background — the sticky Selection cell must stay opaque
+  // or the price columns show through it as they scroll underneath.
+  const MAIN_TINT =
+    'bg-[linear-gradient(rgba(74,222,128,0.05),rgba(74,222,128,0.05))]'
+  const MAIN_ROW = 'bg-[color:var(--total)]/[0.05]'
+
+  const hasFair = allGroups.some((g) => Object.keys(g.fair).length > 0)
+  const hasLive = allGroups.some((g) => Object.values(g.livePrices).some((v) => v != null))
+  const totalCols =
+    1 + (hasExchange ? 2 : 0) + (hasLive ? 1 : 0) + 1 + (hasFair ? 1 : 0) + books.length
+
+  // Fixed header height, because the market-name rows stick directly beneath
+  // it — `top-14` below has to match this h-14 or they overlap the logos.
+  const headCell =
+    'sticky top-0 z-30 h-14 border-b border-[color:var(--line)] bg-[color:var(--panel)] px-2 text-[11px] font-medium uppercase tracking-wide text-[color:var(--muted-2)]'
+
+  // A pulled market keeps its last price on screen, struck through in red: "you
+  // cannot take this" outranks "this is the top price", so it overrides the
+  // best-price highlight. The strike is deliberate — colour alone would be the
+  // only signal, and this table is already tinted in several places.
+  const SUSPENDED = 'text-[color:var(--live)] line-through decoration-[color:var(--live)]/60'
 
   return (
-    <MarketCard
-      title={g.title}
-      kind={g.kind}
-      books={books}
-      outcomes={g.outcomes}
-      getPrice={(book, k) => byBook.get(book)?.mainPrices[k as keyof SidePrices] ?? null}
-      getLive={(k) => g.livePrices[k] ?? null}
-      liveLine={g.liveLine}
-      getLine={(book) => byBook.get(book)?.mainLine ?? null}
-      lineSuffix={
-        g.kind === 'spread'
-          ? (k, line) => (line == null ? undefined : fmtLine(k === 'away' ? negate(line) : line))
-          : g.kind === 'total'
-            ? (k, line) => (line == null ? undefined : `${k === 'over' ? 'O' : 'U'} ${line}`)
-            : undefined
-      }
-      odds={g.pregame}
-      flucs={g.flucs}
-      fair={g.fair}
-      suspended={g.suspended}
-    />
+    <div className="border-b border-[color:var(--line)] bg-[color:var(--bg)]">
+      <table className="w-full border-separate border-spacing-0 text-[13.5px]">
+        <thead>
+          <tr>
+            <th className={`${headCell} sticky left-0 z-40 w-[320px] min-w-[320px] text-left`}>Selection</th>
+            {hasExchange && (
+              <>
+                <th className={`${headCell} w-[84px] border-l border-[color:var(--line)] text-center`}>
+                  <ExchangeHead label="Back" />
+                </th>
+                <th className={`${headCell} w-[84px] text-center`}>
+                  <ExchangeHead label="Lay" />
+                </th>
+              </>
+            )}
+            {hasLive && <th className={`${headCell} w-[84px] border-l border-[color:var(--line)] text-center`}>Live</th>}
+            <th className={`${headCell} w-[150px] border-l border-[color:var(--line)] text-center`}>Best</th>
+            {hasFair && <th className={`${headCell} w-[84px] text-center`}>Fair</th>}
+            {books.map((b) => (
+              <th key={b} className={`${headCell} w-[84px] border-l border-[color:var(--line)] text-center`}>
+                <BookHead book={b} />
+              </th>
+            ))}
+          </tr>
+        </thead>
+
+        {groups.map((g) => {
+          const byBook = new Map(g.pregame.map((b) => [b.book, b]))
+          const suspended = new Set(g.suspended)
+          return (
+            <tbody key={g.marketId}>
+              {/* Sticky market name — pinned under the column header until the
+                  next market's name pushes it out and replaces it. */}
+              <tr>
+                <td
+                  colSpan={totalCols}
+                  className="sticky top-14 z-20 border-b border-[color:var(--line)] bg-[color:var(--bg)] p-0"
+                >
+                  <span className="sticky left-0 inline-block px-3 py-1.5 text-[11.5px] font-semibold text-gray-200">
+                    {g.title}
+                  </span>
+                </td>
+              </tr>
+              {rowsFor(g).map(({ line, outcome: o, isMain }) => {
+                const prices = books.map((b) => priceAt(byBook.get(b), g, line, o.key))
+                const back = priceAt(byBook.get(BACK_BOOK), g, line, o.key)
+                const lay = priceAt(byBook.get(LAY_BOOK), g, line, o.key)
+                // Best is the highest price you can actually BACK, so the
+                // exchange's back side competes with the books — it often wins
+                // — while the lay side never does: laying is the other side of
+                // the bet, not a better version of it.
+                const candidates: Array<[string, number | null]> = [
+                  ...books.map((b, i) => [b, prices[i]] as [string, number | null]),
+                  [BACK_BOOK, back],
+                ]
+                let bestPrice: number | null = null
+                let bestBook: string | null = null
+                for (const [b, v] of candidates) {
+                  if (v != null && (bestPrice == null || v > bestPrice)) {
+                    bestPrice = v
+                    bestBook = b
+                  }
+                }
+                // Live prices are quoted at the live line only, so they belong
+                // to that row and nowhere else on the ladder.
+                const live = line === g.liveLine ? (g.livePrices[o.key] ?? null) : null
+                const suffix =
+                  g.kind === 'spread'
+                    ? line == null
+                      ? null
+                      : fmtLine(o.key === 'away' ? negate(line) : line)
+                    : g.kind === 'total'
+                      ? line == null
+                        ? null
+                        : `${o.key === 'over' ? 'O' : 'U'} ${line}`
+                      : null
+
+                return (
+                  <tr
+                    key={`${lineKey(line)}|${o.key}`}
+                    className="border-b border-[color:var(--line)]/50 hover:bg-white/[0.02]"
+                  >
+                    {/* The main line's rows are tinted, so the pair everyone is
+                        actually pricing stands out from the rest of the ladder.
+                        The tint is a gradient layer over the solid cell colour,
+                        not a translucent background — the sticky Selection cell
+                        has to stay opaque or the price columns show through it
+                        as they scroll underneath. */}
+                    <td
+                      className={`sticky left-0 z-10 bg-[color:var(--panel)] px-3 py-2.5 ${
+                        isMain ? MAIN_TINT : ''
+                      }`}
+                    >
+                      <span className="flex items-center gap-2">
+                        {o.key === 'home' ? (
+                          <Avatar name={f.homeName} logoUrl={f.homeLogo} size={18} />
+                        ) : o.key === 'away' ? (
+                          <Avatar name={f.awayName} logoUrl={f.awayLogo} size={18} />
+                        ) : o.key === 'draw' ? (
+                          <DrawIcon sport={f.sport} size={18} />
+                        ) : null}
+                        <span className="text-gray-100">{o.label}</span>
+                        {suffix && (
+                          <span className="rounded bg-black/[0.3] px-1.5 py-0.5 text-[10.5px] tabular-nums text-[color:var(--muted)]">
+                            {suffix}
+                          </span>
+                        )}
+                      </span>
+                    </td>
+
+                    {hasExchange && (
+                      <>
+                        <td
+                          className={`border-l border-[color:var(--line)] px-2 py-2.5 text-center tabular-nums ${
+                            back != null ? 'bg-sky-500/[0.06] text-sky-200' : ''
+                          }`}
+                          {...(back != null
+                            ? hoverProps({
+                                book: BACK_BOOK,
+                                column: 'Betfair back',
+                                title: `${o.label}${suffix ? ` ${suffix}` : ''}`,
+                                price: back,
+                                snaps: snapsFor(g, BACK_BOOK, o.key, line),
+                              })
+                            : {})}
+                        >
+                          {back != null ? back.toFixed(2) : <span className="text-gray-700">–</span>}
+                        </td>
+                        <td
+                          className={`px-2 py-2.5 text-center tabular-nums ${
+                            lay != null ? 'bg-pink-500/[0.06] text-pink-200' : ''
+                          }`}
+                          {...(lay != null
+                            ? hoverProps({
+                                book: LAY_BOOK,
+                                column: 'Betfair lay',
+                                title: `${o.label}${suffix ? ` ${suffix}` : ''}`,
+                                price: lay,
+                                snaps: snapsFor(g, LAY_BOOK, o.key, line),
+                              })
+                            : {})}
+                        >
+                          {lay != null ? lay.toFixed(2) : <span className="text-gray-700">–</span>}
+                        </td>
+                      </>
+                    )}
+                    {hasLive && (
+                      <td
+                        className={`border-l border-[color:var(--line)] px-2 py-2.5 text-center tabular-nums ${
+                          isMain ? MAIN_ROW : ''
+                        }`}
+                      >
+                        {live != null ? (
+                          <span className="font-semibold text-[color:var(--live)]">{live.toFixed(2)}</span>
+                        ) : (
+                          <span className="text-gray-700">–</span>
+                        )}
+                      </td>
+                    )}
+
+                    <td
+                      className={`border-l border-[color:var(--line)] px-2 py-2.5 text-center tabular-nums transition-colors hover:bg-white/[0.05] ${
+                        isMain ? MAIN_ROW : ''
+                      }`}
+                      {...(bestPrice != null && bestBook
+                        ? hoverProps({
+                            book: bestBook,
+                            column: `Best · ${titleCaseBook(bestBook)}`,
+                            title: `${o.label}${suffix ? ` ${suffix}` : ''}`,
+                            price: bestPrice,
+                            snaps: snapsFor(g, bestBook, o.key, line),
+                          })
+                        : {})}
+                    >
+                      {bestPrice != null ? (
+                        <BestPrice price={bestPrice} book={bestBook} />
+                      ) : (
+                        <span className="text-gray-700">–</span>
+                      )}
+                    </td>
+
+                    {hasFair && <FairCell value={g.fair[fairKey(o.key, line)] ?? null} />}
+
+                    {books.map((b, bi) => {
+                      const v = prices[bi]
+                      return (
+                        <td
+                          key={b}
+                          className={`border-l border-[color:var(--line)] px-2 py-2.5 text-center tabular-nums ${
+                            // The best book's whole cell carries the tint, so the
+                            // column it sits in is findable down the page rather
+                            // than only the digits being coloured.
+                            v != null && v === bestPrice
+                              ? 'bg-[color:var(--total)]/[0.10]'
+                              : isMain
+                                ? MAIN_ROW
+                                : ''
+                          } ${v != null ? 'cursor-help transition-colors hover:bg-white/[0.05]' : ''}`}
+                          {...(v != null
+                            ? hoverProps({
+                                book: b,
+                                column: titleCaseBook(b),
+                                title: `${o.label}${suffix ? ` ${suffix}` : ''}`,
+                                price: v,
+                                snaps: snapsFor(g, b, o.key, line),
+                              })
+                            : {})}
+                        >
+                          {v != null && suspended.has(b) ? (
+                            <span className={SUSPENDED} title="Suspended — this price cannot be taken">
+                              {v.toFixed(2)}
+                            </span>
+                          ) : suspended.has(b) ? (
+                            <span className={`text-[10.5px] ${SUSPENDED}`} title="Suspended">susp</span>
+                          ) : v == null ? (
+                            <span className="text-gray-700">–</span>
+                          ) : (
+                            <span
+                              title={`${americanOdds(v)} · ${impliedPct(v)} implied`}
+                              className={v === bestPrice ? 'font-semibold text-[var(--total)]' : 'text-gray-100'}
+                            >
+                              {v.toFixed(2)}
+                            </span>
+                          )}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                )
+              })}
+            </tbody>
+          )
+        })}
+      </table>
+      {hover && <PriceHoverCard target={hover} now={now.getTime()} />}
+    </div>
   )
 }
 
@@ -1205,16 +1577,42 @@ function FairCell({ value }: { value: number | null }) {
 
 function BestPrice({ price, book }: { price: number; book: string | null }) {
   const logo = bookLogo(book)
+  // Mark first, then the number — the question a best-price cell answers is
+  // "who has it", and the eye lands on the left of the pill.
   return (
     <span
       title={`${americanOdds(price)} · ${impliedPct(price)} implied · ${book ?? ''}`}
-      className="inline-flex items-center gap-1.5 rounded bg-[color:var(--total)]/15 px-1.5 py-0.5 font-semibold text-[color:var(--total)]"
+      className="inline-flex items-center gap-1.5 rounded-md bg-[color:var(--total)]/15 px-2 py-0.5 font-semibold text-[color:var(--total)]"
     >
-      {price.toFixed(2)}
       {logo ? (
-        <img src={logo} alt={book ?? ''} loading="lazy" className="h-3.5 w-3.5 rounded-[2px] object-contain" />
+        <img src={logo} alt={book ?? ''} loading="lazy" className="h-4 w-4 rounded-[2px] object-contain" />
       ) : (
         <span className="text-[10px] opacity-70">{titleCaseBook(book ?? '').slice(0, 3)}</span>
+      )}
+      <span className="tabular-nums">{price.toFixed(2)}</span>
+    </span>
+  )
+}
+
+/**
+ * A book's column heading: the logo alone, as Arb Tracker shows it. The name
+ * lives in the tooltip — at column width a three-letter abbreviation cannot
+ * separate Bet365 from Betano, Betway, Betsafe or Betsson, and the marks can.
+ */
+function BookHead({ book }: { book: string }) {
+  const logo = bookLogo(book)
+  const name = titleCaseBook(book)
+  return (
+    <span className="flex items-center justify-center" title={name}>
+      {logo ? (
+        <img
+          src={logo}
+          alt={name}
+          loading="lazy"
+          className="h-6 w-6 shrink-0 rounded object-contain"
+        />
+      ) : (
+        <span className="text-[11px] font-semibold text-gray-300">{name.slice(0, 3)}</span>
       )}
     </span>
   )
@@ -2142,40 +2540,6 @@ function BetsPanel({
  * strip. Reuses the same stat tiles; each shows the total with a per-brand
  * split so you can see both books at once from any tab.
  */
-function CombinedExposure({ fixture: f, swiftBets, mybetBets }: { fixture: Fixture; swiftBets: SwiftBetRow[]; mybetBets: MybetBetRow[] }) {
-  const s = aggregateBets(swiftBets, scoreCtx(f))
-  const mUsers = new Set(mybetBets.map((b) => b.user_accountID)).size
-  const mStake = mybetBets.reduce((a, b) => a + (b.amount_bet ?? 0), 0)
-  const mPl = mybetBets.reduce((a, b) => a + (b.bet_result ?? 0), 0)
-  const mOpen = mybetBets.filter((b) => /accepted/i.test(b.bet_status ?? '')).length
-
-  const users = s.users + mUsers
-  const bets = s.count + mybetBets.length
-  const stake = s.stake + mStake
-  const pl = s.pl + mPl
-  const open = s.open + mOpen
-  const live = f.status === 'live'
-  const mode = f.status === 'completed' ? 'FINAL' : live ? 'LIVE' : 'PENDING'
-  const split = (a: number | string, b: number | string) => `SWIFT ${a} · mybet ${b}`
-
-  return (
-    <div className="grid grid-cols-2 gap-2 border-t border-white/[0.05] bg-black/[0.1] px-5 py-3 sm:grid-cols-4">
-      <StatCard label="Users" value={users} sub={split(s.users, mUsers)} />
-      <StatCard label="Bets" value={bets} sub={split(s.count, mybetBets.length)} />
-      <StatCard label="Stake" value={`$${stake.toFixed(2)}`} sub={split(`$${s.stake.toFixed(0)}`, `$${mStake.toFixed(0)}`)} />
-      <StatCard
-        label="P/L"
-        value={`${pl < 0 ? '-' : ''}$${Math.abs(pl).toFixed(2)}`}
-        tone={plTone(pl)}
-        badge={mode}
-        live={live}
-        sub={open > 0 ? `${open} open` : split(`$${s.pl.toFixed(0)}`, `$${mPl.toFixed(0)}`)}
-      />
-    </div>
-  )
-}
-
-/** Fetch mybet bets for a game — lifted so the sub-tab count and the view share it. */
 function useMybetBets(args: { eventId: string | null; suspendAt: string | null; liveAt: string | null; home: string; away: string }) {
   const { eventId, suspendAt, liveAt, home, away } = args
   const [bets, setBets] = useState<MybetBetRow[] | null>(null)
@@ -3181,59 +3545,103 @@ function prettyLegStatus(s: string): string {
   return s.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^Resulted /, '')
 }
 
-function StatusBadge({ fixture: f, now }: { fixture: Fixture; now: Date }) {
-  if (f.status === 'live') {
-    return (
-      <span className="flex items-center gap-1.5 text-[12.5px] font-semibold text-[color:var(--live)]">
-        <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--live)] pulse-dot" />
-        Live · {periodState(f.sport, f.periods) ?? 'Live'}
-      </span>
-    )
-  }
-  if (f.status === 'completed') {
-    return <span className="text-[12.5px] font-medium text-[color:var(--muted)]">Final</span>
-  }
-  const overdue = overdueMinutes(f.startTime, now)
-  return (
-    <span className="flex items-center gap-1.5 text-[12.5px] font-medium text-[color:var(--up)]">
-      {startsInLabel(f.startTime, now)}
-      {overdue >= 3 && (
-        <span
-          className="inline-flex items-center gap-1 rounded-full bg-[color:var(--live)]/10 px-2 py-0.5 text-[10px] font-semibold text-[color:var(--live)]"
-          title={`Scheduled start was ${overdue} min ago but it hasn't gone live — possibly delayed`}
-        >
-          <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--live)] pulse-dot" />
-          possible delay
-        </span>
-      )}
-    </span>
-  )
-}
+/**
+ * The event scoreboard, in Arb Tracker's shape: a meta line naming the
+ * competition and the kickoff, then home / score / away across one row, then
+ * the per-period breakdown once it says more than the total does.
+ *
+ * The score column carries the state of the game — a big score for a match
+ * under way or finished, the kickoff time for one that hasn't started — with
+ * the live period or countdown in a tinted pill directly beneath it. That is
+ * the one thing a reader wants first, so it sits in the middle at the largest
+ * size rather than in a badge off to the right.
+ */
+function EventHeader({ fixture: f, now }: { fixture: Fixture; now: Date }) {
+  const isLive = f.status === 'live'
+  const hasScore = f.homeScore != null && f.awayScore != null
+  const overdue = f.status === 'upcoming' && overdueMinutes(f.startTime, now) >= 3
 
-function Score({
-  name,
-  logo,
-  score,
-  leads,
-}: {
-  name: string
-  logo: string | null
-  score: number | null
-  leads: boolean
-}) {
+  const pillTone = isLive
+    ? 'bg-[color:var(--live)]/15 text-[color:var(--live)] ring-1 ring-[color:var(--live)]/30'
+    : f.status === 'completed'
+      ? 'bg-white/[0.06] text-[color:var(--muted)] ring-1 ring-white/10'
+      : 'bg-[color:var(--up)]/15 text-[color:var(--up)] ring-1 ring-[color:var(--up)]/30'
+
+  const pillText = isLive
+    ? (periodState(f.sport, f.periods) ?? 'Live')
+    : f.status === 'completed'
+      ? 'Full time'
+      : startsInLabel(f.startTime, now)
+
   return (
-    <div className="flex items-center justify-between py-1.5">
-      <span className="flex min-w-0 items-center gap-3 pr-3">
-        <Avatar name={name} logoUrl={logo} size={28} />
-        <span className="truncate text-lg text-gray-100">{name}</span>
-      </span>
-      <span
-        className={`text-2xl font-bold tabular-nums ${
-          score == null ? 'text-gray-700' : leads ? 'text-[var(--total)]' : 'text-gray-100'
-        }`}
-      >
-        {score == null ? '–' : score}
-      </span>
+    <div className="border-b border-white/[0.05] px-5 py-3">
+      {/* meta line — competition on the left, kickoff on the right */}
+      <div className="mb-2.5 flex items-center justify-between gap-3 text-[12px] text-[color:var(--muted)]">
+        <span className="flex min-w-0 items-center gap-2">
+          <LeagueBadge sport={f.sport} league={f.league} size={16} />
+          <span className="truncate">{leagueLabel(f.sport, f.league, f.seasonType)}</span>
+        </span>
+        <span className="shrink-0 tabular-nums">{melbLongDateTime(f.startTime)}</span>
+      </div>
+
+      {/* scoreboard */}
+      <div className="flex items-center gap-3">
+        <div className="flex min-w-0 flex-1 items-center justify-end gap-2.5">
+          <span className="truncate text-right text-[15px] font-semibold text-gray-100">{f.homeName}</span>
+          <Avatar name={f.homeName} logoUrl={f.homeLogo} size={36} />
+        </div>
+
+        <div className="flex shrink-0 flex-col items-center gap-1">
+          {hasScore ? (
+            <div className="flex items-baseline gap-2 text-[28px] font-bold leading-none tabular-nums">
+              <span className={leads(f.homeScore, f.awayScore) ? 'text-[color:var(--total)]' : 'text-gray-100'}>
+                {f.homeScore}
+              </span>
+              <span className="text-[18px] text-[color:var(--muted-2)]">–</span>
+              <span className={leads(f.awayScore, f.homeScore) ? 'text-[color:var(--total)]' : 'text-gray-100'}>
+                {f.awayScore}
+              </span>
+            </div>
+          ) : (
+            <div className="text-[20px] font-semibold leading-none tabular-nums text-gray-300">
+              {melbTime(f.startTime)}
+            </div>
+          )}
+          <div
+            className={`flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11.5px] font-semibold tabular-nums ${pillTone}`}
+          >
+            {isLive && <span className="h-1.5 w-1.5 rounded-full bg-current pulse-dot" />}
+            {pillText}
+          </div>
+          {overdue && (
+            <span
+              className="text-[10px] font-semibold text-[color:var(--live)]"
+              title="Scheduled start has passed but it hasn't gone live — possibly delayed"
+            >
+              possible delay
+            </span>
+          )}
+        </div>
+
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
+          <Avatar name={f.awayName} logoUrl={f.awayLogo} size={36} />
+          <span className="truncate text-[15px] font-semibold text-gray-100">{f.awayName}</span>
+        </div>
+      </div>
+
+      {/* per-period breakdown — only once it adds something beyond the total */}
+      {f.periods.length > 1 && (
+        <div className="mt-2.5 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[11px] text-[color:var(--muted-2)]">
+          {f.periods.map((p) => (
+            <span key={p.index} className="tabular-nums">
+              {periodAbbrev(f.sport, p.index)}{' '}
+              <span className="text-gray-300">
+                {p.home ?? '·'}-{p.away ?? '·'}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

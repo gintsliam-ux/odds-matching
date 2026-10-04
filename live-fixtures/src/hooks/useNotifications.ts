@@ -6,6 +6,7 @@ import { fetchMybetStatuses } from '../lib/mybetStatus'
 import { betSettlement, fetchSwiftBets, type SwiftBetRow } from '../lib/swiftBets'
 import { fetchMybetBets, mybetSettlement, type MybetBetRow } from '../lib/mybetBets'
 import { pollWithVisibility } from '../lib/poll'
+import { betMisSettled, legMisSettled, type ScoreCtx } from '../lib/settleBet'
 import type { Fixture } from '../lib/types'
 
 export type NotificationKind =
@@ -16,6 +17,8 @@ export type NotificationKind =
   | 'optic_overdue_prematch'
   | 'swift_unsettled'
   | 'mybet_unsettled'
+  | 'swift_missettled'
+  | 'mybet_missettled'
 
 /** One bet that landed after OPTIC went live, normalised across both books for
  *  display on the notifications page. */
@@ -70,6 +73,10 @@ export interface Notification {
   /** Pending multi bets held up by a leg in another game — shown as context,
    *  never a trigger. */
   unsettledMultiCount?: number
+  /** *_missettled alerts: bets the book resulted the opposite way to the final
+   *  score. Won<->Lost only; a Push either way is too noisy to flag. */
+  misSettledCount?: number
+  misSettledStake?: number
   /** When OPTIC finished the game (its `updated_at`). */
   endedAt?: string | null
 }
@@ -91,9 +98,17 @@ type LateAgg = {
  * the 29 affected games had ONLY that kind. Triggering on them would make the
  * alert ~93% false positives.
  */
+/** Per-brand mis-settlement tally: bets the book resulted against the score. */
+type MisAgg = { count: number; stake: number }
+
 type UnsettledAgg = {
   swift?: { count: number; stake: number; other: number }
   mybet?: { count: number; stake: number; other: number }
+  /** Bets the book HAS settled, against the final score. Computed in the same
+   *  pass — the sweep already has every bet for the fixture and was discarding
+   *  the settled ones, so this costs no extra requests. */
+  swiftMis?: MisAgg
+  mybetMis?: MisAgg
 }
 
 /**
@@ -115,6 +130,50 @@ type UnsettledAgg = {
  * `matched_leg` is null when the bet joined by slug rather than by leg
  * event_id; fall back to the whole-exposure test there.
  */
+/** The final-score context a mis-settlement check reads. */
+function scoreCtxOf(f: Fixture): ScoreCtx {
+  return {
+    status: f.status,
+    homeScore: f.homeScore,
+    awayScore: f.awayScore,
+    homeName: f.homeName,
+    awayName: f.awayName,
+  }
+}
+
+/**
+ * Does mybet's settlement of this bet contradict the final score?
+ *
+ * SINGLES ONLY, deliberately. mybet has no per-leg status — only one status for
+ * the whole bet — so on a multi that status is also about games this fixture
+ * knows nothing about, and reading it against THIS scoreline would flag bets
+ * that are perfectly correctly settled. SwiftBet results legs individually, so
+ * its check has no such restriction.
+ *
+ * The market is inferred from the selection text (mybet doesn't carry one), and
+ * `settleFromScore` returns null for anything it can't decide unambiguously —
+ * so an unflagged bet means "we can't tell", never "verified correct".
+ */
+function mybetMisSettled(b: MybetBetRow, ctx: ScoreCtx): boolean {
+  if (b.is_multi) return false
+  const outcome = b.legs[0]?.outcome ?? b.selections ?? null
+  if (!outcome) return false
+  const t = outcome.toLowerCase()
+  const market = /\bover\b|\bunder\b/.test(t)
+    ? 'Total'
+    : /\bdraw\b/.test(t) || teamNamed(t, ctx.homeName) || teamNamed(t, ctx.awayName)
+      ? 'Match Winner'
+      : null
+  if (!market) return false
+  return legMisSettled(b.bet_status, { market, mt: null, outcome }, ctx)
+}
+
+/** Loose "does this text name that team" — first significant word is enough. */
+function teamNamed(text: string, team: string): boolean {
+  const word = (team ?? '').toLowerCase().split(/\s+/).filter((w) => w.length > 3)[0]
+  return !!word && text.includes(word)
+}
+
 function swiftLegUnresulted(b: SwiftBetRow): boolean {
   const st = (b.matched_leg?.status ?? '').trim().toLowerCase()
   if (!st) return (b.leg_count ?? 0) <= 1
@@ -582,6 +641,13 @@ export function useNotifications(fixtures: Fixture[]): {
                   other: pending.length - own.length,
                 }
               }
+              const wrong = bets.filter((b) => betMisSettled(b, scoreCtxOf(f)))
+              if (wrong.length) {
+                entry.swiftMis = {
+                  count: wrong.length,
+                  stake: wrong.reduce((sum, b) => sum + (b.bet_amount ?? 0), 0),
+                }
+              }
             } catch {/* skip this fixture's swift bets */}
           }
           const mid = mybetMap.get(f.id)
@@ -597,6 +663,13 @@ export function useNotifications(fixtures: Fixture[]): {
                   count: own.length,
                   stake: own.reduce((sum, b) => sum + (b.amount_bet ?? 0), 0),
                   other: pending.length - own.length,
+                }
+              }
+              const mwrong = mbets.filter((b) => mybetMisSettled(b, scoreCtxOf(f)))
+              if (mwrong.length) {
+                entry.mybetMis = {
+                  count: mwrong.length,
+                  stake: mwrong.reduce((sum, b) => sum + (b.amount_bet ?? 0), 0),
                 }
               }
             } catch {/* skip this fixture's mybet bets */}
@@ -762,6 +835,26 @@ export function useNotifications(fixtures: Fixture[]): {
           unsettledCount: agg.mybet.count,
           unsettledStake: agg.mybet.stake,
           unsettledMultiCount: agg.mybet.other,
+        })
+      }
+      if (agg.swiftMis) {
+        out.push({
+          id: `swiftmis-${f.id}`,
+          kind: 'swift_missettled',
+          ...base,
+          misSettledCount: agg.swiftMis.count,
+          misSettledStake: agg.swiftMis.stake,
+        })
+      }
+      if (agg.mybetMis) {
+        out.push({
+          id: `mybetmis-${f.id}`,
+          kind: 'mybet_missettled',
+          ...base,
+          mybetEventId: mid,
+          mybetEventName: mid ? mybetLive.get(mid)?.name ?? null : null,
+          misSettledCount: agg.mybetMis.count,
+          misSettledStake: agg.mybetMis.stake,
         })
       }
     }

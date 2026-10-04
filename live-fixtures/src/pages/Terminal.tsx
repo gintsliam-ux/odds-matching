@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, Search } from 'lucide-react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { fixturePath, golfPath } from '../lib/routes'
 import { FixtureGrid } from '../components/FixtureGrid'
-import { DateBar } from '../components/DateBar'
+import { FilterBar } from '../components/FilterBar'
 import { GridSkeleton } from '../components/Skeleton'
 import { useTerminal } from '../components/Layout'
 import { favouriteMatches, useFavourites } from '../lib/favourites'
 import { displaySport, prettyLeague, prettySport, sportGroupKey, slugToSport } from '../lib/sports'
 import { melbDateTimeShort } from '../lib/format'
+import { melbDateOf, melbToday } from '../lib/dates'
 import type { GolfTournament } from '../lib/golfOutrights'
 import { useSportUniverse } from '../hooks/useSportUniverse'
 import { useGolfTournaments } from '../hooks/useGolfTournaments'
@@ -16,18 +16,6 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { useMainScrollMemory } from '../hooks/useMainScrollMemory'
 import { fetchFixturesBySport } from '../lib/dataSource'
 import type { Fixture, FixtureStatus } from '../lib/types'
-
-function DropdownLabel({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="flex items-center gap-2 text-[11px] tracking-widest text-gray-500">
-      {label}
-      <div className="relative">
-        {children}
-        <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-500" />
-      </div>
-    </label>
-  )
-}
 
 function titleCaseSport(s: string): string {
   return s
@@ -84,14 +72,38 @@ export default function Terminal() {
     : pathStatus
   const fav = favId ? favourites.find((f) => f.id === favId) : undefined
   const search = params.get('q') ?? ''
-  // Sport is pinned by the URL on `/sport/:sport`; elsewhere it's a local filter.
-  const [sportFilter, setSportFilter] = useState('all')
-  const [league, setLeague] = useState('all')
-  const effectiveSport = sport ?? (sportFilter === 'all' ? null : sportFilter)
+  // Sport is pinned by the URL on `/sport/:sport`; elsewhere it's a local
+  // filter. Multi-select: [] means "all", so the pills read as unset.
+  const [sportSel, setSportSel] = useState<string[]>([])
+  const [leagueSel, setLeagueSel] = useState<string[]>([])
+  // `effectiveSport` still drives the league options and counts, which are
+  // single-sport concepts. With several sports picked there is no one sport to
+  // scope them to, so they widen to everything and `sportSel` does the filtering.
+  const effectiveSport = sport ?? (sportSel.length === 1 ? sportSel[0] : null)
 
   // /upcoming and /completed browse a specific day (fetched in Layout).
   const dateMode = day.mode
-  const date = day.date
+
+  // Board date filter, on the Melbourne day.
+  //
+  // Defaults to TODAY rather than "no filter", so every Events board opens on
+  // today's card. An absent param means "never touched", so clearing the pill
+  // writes an `all` sentinel rather than removing the param — otherwise the
+  // default would put today straight back and the pill could never be cleared.
+  //
+  // /upcoming and /completed already FETCH a single day (Layout reads `?date=`),
+  // so there the pill drives that fetch rather than filtering on top of it.
+  // This is the ONLY date control on those boards now — they used to carry a
+  // day-chip strip with its own picker as well, which meant two controls that
+  // could disagree and blank the board between them.
+  const onParam = params.get('on')
+  const dateFilter = dateMode
+    ? day.date
+    : onParam === null
+      ? melbToday()
+      : onParam === 'all'
+        ? ''
+        : onParam
 
   function setParam(key: string, value: string) {
     const next = new URLSearchParams(params)
@@ -102,6 +114,10 @@ export default function Terminal() {
   // When the user pins a sport via /sport/:sport, the in-window ±6h feed often
   // has nothing (NBA between games, EPL midweek, etc). Fall back to a direct
   // by-sport DB fetch (paginated; first page = 200 rows; user can "Load more").
+  // Completed browses into the past; every other view walks forward from now,
+  // so anything in play leads the page instead of sitting behind the whole
+  // future slate.
+  const sportDirection: 'forward' | 'back' = status === 'completed' ? 'back' : 'forward'
   const [sportFallback, setSportFallback] = useState<Fixture[] | null>(null)
   const [sportFallbackLoading, setSportFallbackLoading] = useState(false)
   const [sportPage, setSportPage] = useState(0)
@@ -127,7 +143,8 @@ export default function Terminal() {
     return { raws: own.length ? own : raws, leagues }
   }, [sport, universe])
 
-  // Reset paging when the sport switches.
+  // Reset paging when the sport switches — or when the direction flips, since
+  // switching to Completed asks for a different slice of the slate entirely.
   useEffect(() => {
     setSportFallback(null)
     setSportPage(0)
@@ -137,7 +154,12 @@ export default function Terminal() {
     // from rugby_union AND reclassified `rugby` rows).
     let alive = true
     setSportFallbackLoading(true)
-    fetchFixturesBySport(sportQuery?.raws ?? [sport], 0, sportQuery?.leagues ?? [])
+    fetchFixturesBySport(
+      sportQuery?.raws ?? [sport],
+      0,
+      sportQuery?.leagues ?? [],
+      sportDirection,
+    )
       .then(({ rows, hasMore }) => {
         if (!alive) return
         setSportFallback(rows)
@@ -148,7 +170,7 @@ export default function Terminal() {
     return () => {
       alive = false
     }
-  }, [sport, dateMode, sportQuery])
+  }, [sport, dateMode, sportQuery, sportDirection])
 
   const loadMoreSport = async () => {
     if (!sport || sportLoadingMore || !sportHasMore) return
@@ -159,6 +181,7 @@ export default function Terminal() {
         sportQuery?.raws ?? [sport],
         next,
         sportQuery?.leagues ?? [],
+        sportDirection,
       )
       setSportFallback((prev) => (prev ?? []).concat(rows))
       setSportPage(next)
@@ -178,17 +201,34 @@ export default function Terminal() {
       ? sportFallback
       : fixtures
 
-  // Status / route-sport / favourite scope (before the user's local sport+league dropdowns).
-  const routeScoped = useMemo(
+  // Route-sport / favourite scope, WITHOUT the status filter — the status pill
+  // counts each bucket against this, so its numbers don't collapse to the
+  // bucket you are already looking at.
+  const baseScoped = useMemo(
     () =>
       source.filter(
         (f) =>
-          (status === 'all' || f.status === status) &&
           (!sport || sportMatches(f.sport, sport)) &&
           (!fav || favouriteMatches(fav, f.sport, f.league)),
       ),
-    [source, status, sport, fav],
+    [source, sport, fav],
   )
+
+  const routeScoped = useMemo(
+    () => (status === 'all' ? baseScoped : baseScoped.filter((f) => f.status === status)),
+    [baseScoped, status],
+  )
+
+  /** Per-bucket counts for the status pill, in the current sport/fav scope. */
+  const statusCounts = useMemo(() => {
+    let live = 0, upcoming = 0, completed = 0
+    for (const f of baseScoped) {
+      if (f.status === 'live') live++
+      else if (f.status === 'upcoming') upcoming++
+      else completed++
+    }
+    return { live, upcoming, completed }
+  }, [baseScoped])
 
   // Status-tab counts for /sport/:sport[/:league]: the same scope the grid uses
   // but ignoring the status filter, so the tabs show totals across every bucket.
@@ -204,13 +244,13 @@ export default function Terminal() {
     let live = 0, upcoming = 0, completed = 0
     for (const f of source) {
       if (!sportMatches(f.sport, sport)) continue
-      if (league !== 'all' && f.league !== league && f.rawLeague !== league) continue
+      if (leagueSel.length && !leagueSel.some((l) => f.league === l || f.rawLeague === l)) continue
       if (f.status === 'live') live++
       else if (f.status === 'upcoming') upcoming++
       else completed++
     }
     return { all: live + upcoming + completed, live, upcoming, completed }
-  }, [source, sport, league])
+  }, [source, sport, leagueSel])
 
   // Counts per sport in the current scope (for the SPORT dropdown badges).
   //
@@ -253,7 +293,7 @@ export default function Terminal() {
         // dead weight — the list was mostly zeroes. The current selection is
         // kept regardless, or choosing a sport that then empties would blank
         // the control instead of showing what is selected.
-        .filter(([key]) => (sportCounts.get(key) ?? 0) > 0 || key === sportFilter || key === 'golf')
+        .filter(([key]) => (sportCounts.get(key) ?? 0) > 0 || sportSel.includes(key) || key === 'golf')
         .map(([key, name]) => ({ key, name }))
         .sort((a, b) => {
           const ca = sportCounts.get(a.key) ?? 0
@@ -262,7 +302,7 @@ export default function Terminal() {
           return a.name.localeCompare(b.name)
         })
     )
-  }, [universe, sportCounts, golfActive, sportFilter])
+  }, [universe, sportCounts, golfActive, sportSel])
 
   // The `/sport/:sport/:league` path segment (raw league slug, e.g. from the
   // sidebar's expandable sports) pre-selects the league filter. The dropdown
@@ -275,17 +315,17 @@ export default function Terminal() {
   // thing and the dropdown another.
   const leagueParam = leagueSlug ? prettyLeague(leagueSlug) : null
   useEffect(() => {
-    if (leagueParam) setLeague(leagueParam)
+    if (leagueParam) setLeagueSel([leagueParam])
   }, [leagueParam])
 
   // Reset the league when the selected sport changes (a stale value would yield
   // zero matches) — unless a league param came in with the same navigation.
-  const sportKey = effectiveSport ?? '__all__'
+  const sportKey = sport ?? sportSel.join(',') ?? '__all__'
   const lastSportKey = useRef(sportKey)
   useEffect(() => {
     if (lastSportKey.current !== sportKey) {
       lastSportKey.current = sportKey
-      setLeague(leagueParam ?? 'all')
+      setLeagueSel(leagueParam ? [leagueParam] : [])
     }
   }, [sportKey, leagueParam])
 
@@ -309,25 +349,30 @@ export default function Terminal() {
     return [...all]
       // Same as the sport list: an empty league filters to nothing, so it is
       // only noise. The selected one stays so the control never reads blank.
-      .filter((l) => (leagueCounts.get(l) ?? 0) > 0 || l === league)
+      .filter((l) => (leagueCounts.get(l) ?? 0) > 0 || leagueSel.includes(l))
       .sort((a, b) => {
         const ca = leagueCounts.get(a) ?? 0
         const cb = leagueCounts.get(b) ?? 0
         if ((ca > 0) !== (cb > 0)) return ca > 0 ? -1 : 1
         return a.localeCompare(b)
       })
-  }, [universe, leagueCounts, effectiveSport, league])
+  }, [universe, leagueCounts, effectiveSport, leagueSel])
 
-  const scoped = useMemo(
-    () => (effectiveSport ? routeScoped.filter((f) => sportMatches(f.sport, effectiveSport)) : routeScoped),
-    [routeScoped, effectiveSport],
-  )
+  const scoped = useMemo(() => {
+    if (sport) return routeScoped.filter((f) => sportMatches(f.sport, sport))
+    if (sportSel.length === 0) return routeScoped
+    return routeScoped.filter((f) => sportSel.some((t) => sportMatches(f.sport, t)))
+  }, [routeScoped, sport, sportSel])
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase()
     const filtered = scoped.filter((f) => {
-      // `league` is a pretty name (dropdown) or a raw slug (URL) — match either.
-      if (league !== 'all' && f.league !== league && f.rawLeague !== league) return false
+      // A selection holds pretty names (the pill) or a raw slug (the URL) —
+      // match either, so /sport/x/y and the pill agree on what is selected.
+      if (leagueSel.length && !leagueSel.some((l) => f.league === l || f.rawLeague === l)) return false
+      // In day mode the fetch already scoped the day; filtering again on the
+      // scheduled start would drop anything that rolled over midnight.
+      if (!dateMode && dateFilter && melbDateOf(new Date(f.startTime)) !== dateFilter) return false
       if (q && !`${f.homeName} ${f.awayName} ${f.league}`.toLowerCase().includes(q)) return false
       return true
     })
@@ -345,7 +390,7 @@ export default function Terminal() {
       const tb = Date.parse(b.startTime)
       return a.status === 'completed' ? tb - ta : ta - tb
     })
-  }, [scoped, league, search])
+  }, [scoped, leagueSel, dateFilter, dateMode, search])
 
   const title = fav
     ? fav.name
@@ -367,61 +412,76 @@ export default function Terminal() {
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-3 border-b border-[color:var(--line-soft)] px-5 py-4">
-        <h1 className="text-[18px] font-semibold tracking-tight text-gray-100">{title}</h1>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-[color:var(--line-soft)] px-5 py-3">
+        <h1 className="shrink-0 text-[18px] font-semibold tracking-tight text-gray-100">{title}</h1>
 
-        {/* Only show the SPORT picker when the route hasn't pinned one. */}
-        {!sport && (
-          <DropdownLabel label="SPORT">
-            <select
-              value={sportFilter}
-              onChange={(e) => {
-                // Golf isn't a filter over this board — it has no fixtures on
-                // it — so selecting it navigates to the golf board instead.
-                if (sportGroupKey(e.target.value) === 'golf') navigate('/sport/golf')
-                else setSportFilter(e.target.value)
-              }}
-              className="appearance-none rounded-md border border-[var(--line)] bg-[var(--panel)] py-1.5 pl-3 pr-8 text-[12px] font-bold tracking-wider text-gray-200 focus:border-gray-600 focus:outline-none"
-            >
-              <option value="all">ALL ({routeScoped.length})</option>
-              {sportsForFilter.map(({ key, name }) => {
-                const n = key === 'golf' ? golfActive.length : (sportCounts.get(key) ?? 0)
-                return (
-                  <option key={key} value={key}>
-                    {name.toUpperCase()} ({n})
-                  </option>
-                )
-              })}
-            </select>
-          </DropdownLabel>
-        )}
-
-        <DropdownLabel label="LEAGUE">
-          <select
-            value={league}
-            onChange={(e) => setLeague(e.target.value)}
-            disabled={leagues.length === 0}
-            className="appearance-none rounded-md border border-[var(--line)] bg-[var(--panel)] py-1.5 pl-3 pr-8 text-[12px] font-bold tracking-wider text-gray-200 focus:border-gray-600 focus:outline-none disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <option value="all">ALL</option>
-            {leagues.map((l) => {
-              const n = leagueCounts.get(l) ?? 0
-              return (
-                <option key={l} value={l}>
-                  {l} ({n})
-                </option>
-              )
-            })}
-          </select>
-        </DropdownLabel>
-
-        <div className="relative ml-auto">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-600" />
-          <input
-            value={search}
-            onChange={(e) => setParam('q', e.target.value)}
-            placeholder="SEARCH TEAM…"
-            className="w-48 rounded-md border border-[var(--line)] bg-[var(--panel)] py-1.5 pl-9 pr-3 text-[12px] tracking-wider text-gray-200 placeholder:text-gray-600 focus:border-gray-600 focus:outline-none"
+        <div className="min-w-0 flex-1">
+          <FilterBar
+            date={dateFilter}
+            // Clearing writes the sentinel, not an empty param — see `dateFilter`.
+            onDate={(v) => (dateMode ? setParam('date', v || melbToday()) : setParam('on', v || 'all'))}
+            // Upcoming can't look back, Completed can't look forward — the
+            // bounds the old day-chip strip enforced.
+            dateMin={dateMode && pathStatus === 'upcoming' ? melbToday() : undefined}
+            dateMax={dateMode && pathStatus === 'completed' ? melbToday() : undefined}
+            // On /live, /upcoming and /completed the route IS the status, so the
+            // pill shows it locked rather than offering a choice that would
+            // contradict the page you clicked to get here.
+            // On a sport route the status is a query param alongside the tab
+            // strip; on the top-level boards it IS the route, because /upcoming
+            // and /completed don't filter the loaded board — they fetch a
+            // specific day. So the pill navigates there rather than filtering,
+            // which is exactly what the nav items it replaced used to do.
+            statusSel={
+              sport ? (sportStatusParam ? [sportStatusParam] : []) : pathStatus === 'all' ? [] : [pathStatus]
+            }
+            statusOptions={[
+              { value: 'live', label: 'Live', hint: statusCounts.live },
+              { value: 'upcoming', label: 'Upcoming', hint: statusCounts.upcoming },
+              { value: 'completed', label: 'Completed', hint: statusCounts.completed },
+            ]}
+            onStatus={(v) => {
+              // Sport routes: same `?status=` the tab strip writes, so the two
+              // controls stay in step and the sport stays pinned.
+              if (sport) {
+                setParam('status', v[0] ?? '')
+                return
+              }
+              // Top-level: carry the other filters across, or picking a status
+              // would silently drop the date, search and league you had set.
+              const next = new URLSearchParams(params)
+              next.delete('status')
+              const qs = next.toString()
+              navigate(`/${v[0] ?? ''}${qs ? `?${qs}` : ''}`)
+            }}
+            // The sport pill is hidden when /sport/:sport already pins one —
+            // there is nothing to choose, and a pill saying "Sport" over a
+            // board locked to Tennis would be a lie.
+            sportSel={sport ? undefined : sportSel}
+            sportOptions={
+              sport
+                ? undefined
+                : sportsForFilter.map(({ key, name }) => ({
+                    value: key,
+                    label: name,
+                    hint: key === 'golf' ? golfActive.length : (sportCounts.get(key) ?? 0),
+                  }))
+            }
+            onSport={
+              sport
+                ? undefined
+                : (v) => {
+                    // Golf isn't a filter over this board — it has no fixtures
+                    // on it — so choosing it navigates to the golf board.
+                    if (v.some((k) => sportGroupKey(k) === 'golf')) navigate('/sport/golf')
+                    else setSportSel(v)
+                  }
+            }
+            leagueSel={leagueSel}
+            leagueOptions={leagues.map((l) => ({ value: l, label: l, hint: leagueCounts.get(l) ?? 0 }))}
+            onLeague={setLeagueSel}
+            query={search}
+            onQuery={(v) => setParam('q', v)}
           />
         </div>
       </div>
@@ -453,14 +513,6 @@ export default function Terminal() {
             )
           })}
         </div>
-      )}
-
-      {dateMode && (
-        <DateBar
-          status={status as 'upcoming' | 'completed'}
-          date={date}
-          onChange={(d) => setParam('date', d)}
-        />
       )}
 
       {isGolf ? (

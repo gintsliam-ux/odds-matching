@@ -176,3 +176,51 @@ function dur(ms: number): string {
   const rh = h % 24
   return rh === 0 ? `${d}d` : `${d}d ${rh}h`
 }
+
+/**
+ * Short code for the ticker, where a cell is too narrow for a full name.
+ * Clubs key off the city/first word ("Adelaide Crows" -> ADE, "Milwaukee
+ * Brewers" -> MIL); individuals off the surname ("Yannick Hanfmann" -> HAN).
+ */
+export function teamAbbr(name: string, isPerson = false): string {
+  const words = (name ?? '').trim().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return '—'
+  const word = (isPerson ? words[words.length - 1] : words[0]) ?? name
+  return word.slice(0, 3).toUpperCase()
+}
+
+/** Ticker countdown — startsInLabel without the "in " prefix ("12m", "3d 4h"). */
+export function startsInShort(iso: string, now: Date): string {
+  return startsInLabel(iso, now).replace(/^in /, '')
+}
+
+/**
+ * "Tue 10 Sep, 12:30 MEL" — the event header's kickoff line.
+ *
+ * Long-form rather than the app's usual DD/MM/YY: the header names ONE event,
+ * where the weekday is what tells you whether it is tonight or Thursday, and
+ * there is no column of dates for a numeric format to line up with.
+ */
+export function melbLongDateTime(iso: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  // en-AU renders this as "Tue, 18 Aug"; the comma after the weekday is the
+  // locale's, not ours, and the only separator wanted here is the one before
+  // the time.
+  const date = d
+    .toLocaleDateString('en-AU', {
+      timeZone: MELB_TZ,
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+    })
+    .replace(/,/g, '')
+  const time = d.toLocaleTimeString('en-AU', {
+    timeZone: MELB_TZ,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+  return `${date}, ${time} MEL`
+}

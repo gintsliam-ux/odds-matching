@@ -44,6 +44,12 @@ const PAGE_SIZE = 1000
 const PRICED_COMPLETED_H = 24
 /** Backstop so a runaway slate cannot page forever. */
 const BOARD_MAX_ROWS = 20000
+/** How far behind now a 'forward' sport page starts, so in-play games lead it.
+ *  Matches the stale-live guard: nothing older than this still reads as live. */
+const LIVE_LOOKBACK_H = 8
+/** Board pages fetched at once. The pages are independent, so they need not
+ *  be walked in order. */
+const PAGE_CONCURRENCY = 6
 
 
 
@@ -62,25 +68,92 @@ const COLUMNS = '*'
  * 1,000-row ceiling; ordered by the primary key so the pages tile without
  * repeating or dropping rows.
  */
+/** How far ahead the ticker reaches. Must match the Ticker's own horizon. */
+const TICKER_HORIZON_H = 6
+
+/**
+ * Just the fixtures the ticker shows: live now, plus whatever jumps in the next
+ * few hours.
+ *
+ * Its own query, deliberately. The ticker used to render off the board's
+ * fixtures, which meant a strip of ~100 events waited on a load of 18,444 rows
+ * plus the logo and price lookups for 4,000 of them — about nine seconds before
+ * a single cell appeared. The rows it actually needs come back in 0.08s, and
+ * enriching ~100 ids is one chunk rather than fourteen, so the strip now paints
+ * while the board behind it is still loading.
+ *
+ * `ensureLogoCache` is NOT awaited here: it pages the whole entities table (2s)
+ * and only backs the name-matched FALLBACK logo. The exact per-fixture lookup
+ * inside `enrich` doesn't need it, and the board's own load warms it anyway —
+ * waiting on it would hand back most of what this query saves.
+ */
+export async function fetchTickerFixtures(): Promise<Fixture[]> {
+  const now = Date.now()
+  const until = new Date(now + TICKER_HORIZON_H * 3_600_000).toISOString()
+
+  await ensureBooks()
+  const { data, error } = await getSupabase()
+    .from(TABLE)
+    .select(COLUMNS)
+    .eq('source', 'optic')
+    .or(`status.eq.live,and(status.eq.upcoming,scheduled_start.lte.${until})`)
+    .order('scheduled_start', { ascending: true })
+    .limit(400)
+    .returns<FixtureRow[]>()
+  if (error) throw error
+
+  const nowMs = Date.now()
+  return enrich((data ?? []).map((r) => mapFixture(r, nowMs)))
+}
+
 export async function fetchFixtures(): Promise<Fixture[]> {
   const now = Date.now()
   const since = new Date(now - COMPLETED_WINDOW_D * 86_400_000).toISOString()
+  const filter = `status.eq.live,status.eq.upcoming,and(status.eq.completed,scheduled_start.gte.${since})`
 
   await Promise.all([ensureLogoCache(), ensureBooks()])
-  const rows: FixtureRow[] = []
-  for (let from = 0; from < BOARD_MAX_ROWS; from += PAGE_SIZE) {
-    const { data, error } = await getSupabase()
+
+  const page = (from: number) =>
+    getSupabase()
       .from(TABLE)
       .select(COLUMNS)
       .eq('source', 'optic')
-      .or(`status.eq.live,status.eq.upcoming,and(status.eq.completed,scheduled_start.gte.${since})`)
+      .or(filter)
+      // Ordered on the PRIMARY KEY, so the ranges below tile without repeating
+      // or dropping rows even though they are fetched out of order.
       .order('fixture_id', { ascending: true })
       .range(from, from + PAGE_SIZE - 1)
       .returns<FixtureRow[]>()
-    if (error) throw error
-    const page = data ?? []
-    rows.push(...page)
-    if (page.length < PAGE_SIZE) break
+
+  // Count first, then fetch the pages together. The set runs ~18 pages, and
+  // walking them one at a time cost 6.2s of the board's load for no reason —
+  // the pages don't depend on each other. The count is one cheap indexed read.
+  const { count } = await getSupabase()
+    .from(TABLE)
+    .select('fixture_id', { count: 'exact', head: true })
+    .eq('source', 'optic')
+    .or(filter)
+
+  const rows: FixtureRow[] = []
+  if (count == null) {
+    // No count (the head request failed) — fall back to walking the pages.
+    for (let from = 0; from < BOARD_MAX_ROWS; from += PAGE_SIZE) {
+      const { data, error } = await page(from)
+      if (error) throw error
+      const got = data ?? []
+      rows.push(...got)
+      if (got.length < PAGE_SIZE) break
+    }
+  } else {
+    const starts: number[] = []
+    for (let from = 0; from < Math.min(count, BOARD_MAX_ROWS); from += PAGE_SIZE) starts.push(from)
+    for (let i = 0; i < starts.length; i += PAGE_CONCURRENCY) {
+      const batch = await Promise.all(starts.slice(i, i + PAGE_CONCURRENCY).map(page))
+      for (const { data, error } of batch) {
+        if (error) throw error
+        rows.push(...(data ?? []))
+      }
+    }
   }
 
   const nowMs = Date.now()
@@ -192,6 +265,20 @@ export async function fetchFixturesBySport(
   rawSports: string | string[],
   page = 0,
   rawLeagues: string[] = [],
+  /**
+   * Which way to walk the slate.
+   *
+   * 'forward' (the default) starts just behind NOW and goes into the future:
+   * anything in play is at the top, then the next to jump. 'back' starts at now
+   * and walks into the past, for browsing completed games.
+   *
+   * This used to be a single furthest-future-first ordering, which put a game
+   * happening RIGHT NOW at the bottom of the sport's whole future slate —
+   * measured on American Football, 553 fixtures were scheduled after a live
+   * NFL game, so it sat on page 3 and /sport/american-football?status=live
+   * rendered nothing at all while the game was on.
+   */
+  direction: 'forward' | 'back' = 'forward',
 ): Promise<{ rows: Fixture[]; hasMore: boolean }> {
   await Promise.all([ensureLogoCache(), ensureBooks()])
   const from = page * SPORT_PAGE_SIZE
@@ -224,8 +311,18 @@ export async function fetchFixturesBySport(
   } else {
     q = list.length === 1 ? q.eq('sport', list[0]) : q.in('sport', list)
   }
+  // A live game kicked off hours ago, so 'forward' has to start behind now —
+  // far enough back to keep anything still in play, which the stale-live guard
+  // caps at 8h anyway.
+  const now = Date.now()
+  const anchor = new Date(now - (direction === 'forward' ? LIVE_LOOKBACK_H * 3_600_000 : 0)).toISOString()
+  q =
+    direction === 'forward'
+      ? q.gte('scheduled_start', anchor)
+      : q.lt('scheduled_start', anchor)
+
   const { data, error } = await q
-    .order('scheduled_start', { ascending: false })
+    .order('scheduled_start', { ascending: direction === 'forward' })
     .range(from, to)
     .returns<FixtureRow[]>()
   if (error) throw error
@@ -329,7 +426,6 @@ async function enrich(input: Fixture[]): Promise<Fixture[]> {
   // returns 13,943 rows and 13,943 distinct ids. The pagers were fixed instead.
   const fixtures = input
   if (!fixtures.length) return fixtures
-  const ids = fixtures.map((f) => f.id)
   // Odds are fetched for a SUBSET. `odds` returns ~20 rows per fixture and
   // PostgREST caps a page at 1,000, so a price costs roughly one request per
   // 40 fixtures — bounded work for the 1,400 live and upcoming, and ~266
@@ -350,9 +446,14 @@ async function enrich(input: Fixture[]): Promise<Fixture[]> {
   // A closed market on a fixture that has not started is a stale row, not a
   // closing price — see usable() in cardOdds.
   const notStarted = new Set(fixtures.filter((f) => f.status === 'upcoming').map((f) => f.id))
+  // Logos are fetched for the SAME subset as prices, not for every id.
+  // `fixture_entities` costs roughly a fixed amount per id asked for, so
+  // covering the whole 30-day completed tail took 28.2s of a 35.7s board load
+  // — the single largest cost on the page. The tail keeps the pattern-based
+  // resolver below, which is local and free.
   const [prices, logos] = await Promise.all([
     fetchCardOdds(wantPrice, notStarted),
-    fetchFixtureLogos(ids),
+    fetchFixtureLogos(wantPrice),
   ])
   for (const f of fixtures) {
     // `fixture_entities` already ties a logo to this fixture and side, so it is

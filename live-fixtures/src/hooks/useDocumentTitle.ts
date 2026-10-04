@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 
-const BASE = 'Live Events Terminal'
+const BASE = 'Sport Events'
 
 /** Updates `document.title` whenever the page title changes. Restores the base
  *  title on unmount so going back doesn't leave a stale tab name. */

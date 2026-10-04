@@ -57,6 +57,8 @@ function Gate() {
             <Route path="golf/:tournamentId" element={<GolfDetailPage />} />
             <Route path="golf/:tournamentId/:tab" element={<GolfDetailPage />} />
             <Route path="notifications" element={<NotificationsPage />} />
+            <Route path="late-bets" element={<NotificationsPage variant="late" />} />
+            <Route path="settlement" element={<NotificationsPage variant="settlement" />} />
             <Route path="users" element={<UsersPage />} />
             {/* A dead link used to bounce silently to the board, which reads
                 as "the terminal lost my game" rather than "that URL is wrong". */}

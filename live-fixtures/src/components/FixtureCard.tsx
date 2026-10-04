@@ -22,7 +22,7 @@ export const FixtureCard = memo(function FixtureCard({ fixture: f, now, onSelect
   return (
     <article
       onClick={() => onSelect?.(f)}
-      className={`cursor-pointer rounded-lg bg-[color:var(--panel)] transition-all hover:bg-[color:var(--panel-2)] ${border}`}
+      className={`cursor-pointer overflow-hidden rounded-lg bg-[color:var(--panel)] transition-all hover:bg-[color:var(--panel-2)] ${border}`}
     >
       {/* header */}
       <div className="flex items-center justify-between border-b border-white/[0.04] px-4 py-2.5">
@@ -53,18 +53,29 @@ export const FixtureCard = memo(function FixtureCard({ fixture: f, now, onSelect
         />
       </div>
 
-      {/* odds */}
-      <div className="flex items-center gap-2 px-4 pb-3 pt-3">
+      {/* odds
+          A GRID, not a flex row. The cells were `flex-1` without `min-w-0`, so
+          they could not shrink below their own content: two fit a card, three
+          did not, and a win-draw-win market pushed its prices out through the
+          side of the card. Grid tracks are minmax(0,1fr), so three share the
+          width and stay inside it however narrow the column gets. */}
+      <div className="flex items-center gap-1.5 px-4 pb-3 pt-3">
         <span
-          className={`w-14 shrink-0 text-[11px] font-medium ${
+          className={`shrink-0 text-[10px] font-medium tracking-wide ${
             isLive ? 'text-[color:var(--live)]' : 'text-[color:var(--muted-2)]'
           }`}
         >
-          {isLive ? 'Live H2H' : 'H2H'}
+          {isLive ? 'LIVE' : 'H2H'}
         </span>
-        <OddsCell label="H" value={f.oddsHome} live={isLive} />
-        {f.oddsDraw != null && <OddsCell label="D" value={f.oddsDraw} live={isLive} />}
-        <OddsCell label="A" value={f.oddsAway} live={isLive} />
+        <div
+          className={`grid min-w-0 flex-1 gap-1.5 ${
+            f.oddsDraw != null ? 'grid-cols-3' : 'grid-cols-2'
+          }`}
+        >
+          <OddsCell label="H" value={f.oddsHome} live={isLive} />
+          {f.oddsDraw != null && <OddsCell label="D" value={f.oddsDraw} live={isLive} />}
+          <OddsCell label="A" value={f.oddsAway} live={isLive} />
+        </div>
       </div>
 
       {/* footer */}
@@ -154,14 +165,18 @@ function cardPeriods(f: Fixture, side: 'home' | 'away'): (number | null)[] | nul
 function OddsCell({ label, value, live }: { label: string; value: number | null; live: boolean }) {
   return (
     <div
-      className={`flex flex-1 items-center justify-between rounded-md border px-2.5 py-1.5 ${
+      className={`flex min-w-0 items-center justify-between gap-1 rounded-md border px-1.5 py-1.5 ${
         live
           ? 'border-[color:var(--live)]/25 bg-[color:var(--live)]/[0.06]'
           : 'border-[color:var(--line-soft)] bg-black/20'
       }`}
     >
-      <span className="text-[10px] font-medium text-[color:var(--muted-2)]">{label}</span>
-      <span className="text-[13px] font-semibold tabular-nums text-gray-100">{fmtOdds(value)}</span>
+      <span className="shrink-0 text-[10px] font-medium text-[color:var(--muted-2)]">{label}</span>
+      {/* A three-figure price ("101.00") is the widest thing here — truncate
+          rather than let it widen the track and reintroduce the overflow. */}
+      <span className="truncate text-[12.5px] font-semibold tabular-nums text-gray-100">
+        {fmtOdds(value)}
+      </span>
     </div>
   )
 }

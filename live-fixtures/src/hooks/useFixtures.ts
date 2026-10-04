@@ -31,8 +31,14 @@ export function useFixtures(): UseFixtures {
   const [nextPollAt, setNextPollAt] = useState<number>(() => Date.now() + POLL_MS)
   const [error, setError] = useState<string | null>(null)
   const alive = useRef(true)
+  // A board load can outrun the 15s poll interval. Without this the timer kept
+  // firing into the gap and the requests stacked, each one making the next
+  // slower.
+  const inFlight = useRef(false)
 
   const load = useCallback(async () => {
+    if (inFlight.current) return
+    inFlight.current = true
     try {
       const data = await fetchFixtures()
       if (!alive.current) return
@@ -45,6 +51,7 @@ export function useFixtures(): UseFixtures {
       setFeed('error')
       setError(e instanceof Error ? e.message : 'Feed error')
     } finally {
+      inFlight.current = false
       // Report the delay actually in force, or the header's countdown hits 0
       // and sits there for the rest of a hidden-tab interval.
       if (alive.current) {

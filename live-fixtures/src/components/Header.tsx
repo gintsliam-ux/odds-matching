@@ -1,4 +1,3 @@
-import { Menu } from 'lucide-react'
 import type { FeedState } from '../hooks/useFixtures'
 import type { MongoFeedState, MongoPulse } from '../hooks/useMongoPulse'
 import { melbTime, utcClock } from '../lib/format'
@@ -18,8 +17,6 @@ interface Props {
   lastUpdated: Date | null
   mongoState: MongoFeedState
   mongoPulse: MongoPulse | null
-  navOpen: boolean
-  onToggleNav: () => void
 }
 
 /** "42s" / "3m" / "1h12m" — compact age for the freshness label. */
@@ -84,16 +81,7 @@ function mongoHealth(state: MongoFeedState): Health {
   return 'stale' // 'connecting' | 'stale'
 }
 
-function Stat({ label, value, color }: { label: string; value: number; color: string }) {
-  return (
-    <span className="flex items-baseline gap-1.5">
-      <span className="text-[11px] text-[color:var(--muted)]">{label}</span>
-      <span className={`text-sm font-semibold tabular-nums ${color}`}>{value}</span>
-    </span>
-  )
-}
-
-export function Header({ counts, now, nextPollAt, feed, lastUpdated, mongoState, mongoPulse, navOpen, onToggleNav }: Props) {
+export function Header({ counts, now, nextPollAt, feed, lastUpdated, mongoState, mongoPulse }: Props) {
   const secs = Math.max(0, Math.round((nextPollAt - now.getTime()) / 1000))
 
   const board = boardHealth(feed, lastUpdated, now)
@@ -130,26 +118,14 @@ export function Header({ counts, now, nextPollAt, feed, lastUpdated, mongoState,
 
   return (
     <header className="sticky top-0 z-20 border-b border-[color:var(--line-soft)] bg-[color:var(--bg)]/80 backdrop-blur-md">
-      <div className="flex h-14 items-center gap-5 px-4">
-        {/* nav toggle */}
-        <button
-          onClick={onToggleNav}
-          className="rounded-md p-2 text-[color:var(--muted)] transition-colors hover:bg-white/5 hover:text-gray-200"
-          title={navOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-          aria-label={navOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-        >
-          <Menu className="h-[18px] w-[18px]" />
-        </button>
-
-        {/* counts */}
-        <div className="hidden items-center gap-5 md:flex">
-          <Stat label="Live" value={counts.live} color="text-[color:var(--live)]" />
-          <Stat label="Upcoming" value={counts.upcoming} color="text-[color:var(--up)]" />
-          <Stat label="Completed" value={counts.completed} color="text-[color:var(--muted)]" />
-        </div>
-
-        {/* feed status — two health pulses: OpticOdds board + SwiftBet (Mongo) */}
-        <div className="ml-auto flex items-center gap-4 text-[12px] text-[color:var(--muted)]">
+      {/* Status only. The brand and the nav toggle live at the head of the
+          sidebar, so this is a thin strip rather than a page header. */}
+      <div className="flex h-8 items-center px-3">
+        {/* feed status — health pulses: OpticOdds board + SwiftBet/mybet (Mongo).
+            Scrolls rather than spilling: three pulses, a countdown and two
+            clocks do not fit a phone, and `justify-around` alone would push
+            them out through the side of the bar. */}
+        <div className="flex flex-1 items-center justify-around gap-3 overflow-x-auto whitespace-nowrap text-[11px] text-[color:var(--muted)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <StatusPulse label="Optic Odds" health={board} detail={boardDetail} title={boardTitle} />
           <StatusPulse label="Swiftbet" health={mongo} detail={mongoDetail} title={mongoTitle} />
           {mybetShown && (

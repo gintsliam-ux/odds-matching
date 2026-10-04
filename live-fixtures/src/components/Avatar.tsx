@@ -18,6 +18,11 @@ export function Avatar({ name, logoUrl, fallbackLogoUrl, size = 20 }: Props) {
 
   const current = stage === 0 ? logoUrl : stage === 1 ? fallbackLogoUrl : null
   if (current) {
+    // Flags are 4:3 and a circle crops them — the middle stripe of a tricolour
+    // is not the flag. They letterbox inside the same square slot every other
+    // mark uses, so rows stay aligned whether the competitor is a club or a
+    // person, and only the corner radius differs.
+    const isFlag = current.includes('flagcdn.com')
     return (
       <img
         key={current}
@@ -25,7 +30,9 @@ export function Avatar({ name, logoUrl, fallbackLogoUrl, size = 20 }: Props) {
         alt={name}
         loading="lazy"
         onError={() => setStage((s) => ((s + 1) as 0 | 1 | 2))}
-        className="shrink-0 rounded-full bg-black/30 object-contain"
+        className={`shrink-0 object-contain ${
+          isFlag ? 'rounded-[2px]' : 'rounded-full bg-black/30'
+        }`}
         style={{ width: size, height: size }}
       />
     )

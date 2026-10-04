@@ -153,3 +153,58 @@ export function settleFromScore(
   }
   return null
 }
+
+/* ------------------------------------------------- mis-settlement detection */
+
+/**
+ * The book's own Won/Lost/Open label, normalised across both brands' wording.
+ *
+ * SwiftBet writes "Winner"/"Loser"/"Unresulted", mybet "won"/"no return"/"paid"
+ * — same three states, different vocabulary.
+ */
+export function bookLabel(raw: string | null): 'Won' | 'Lost' | 'Open' {
+  const s = (raw ?? '').toLowerCase()
+  if (/won|winner|\bpaid\b|\bwin\b/.test(s)) return 'Won'
+  if (/lost|loser|no return|\blos/.test(s)) return 'Lost'
+  return 'Open'
+}
+
+/**
+ * Does the book's settlement of ONE selection contradict the final score?
+ *
+ * Only a Won<->Lost flip counts. A Push against either is too noisy to flag —
+ * refunds, dead heats and voids are settled for reasons a scoreline can't see.
+ * `settleFromScore` is deliberately conservative and returns null for anything
+ * a final score cannot decide unambiguously, so an unflagged bet means "we
+ * can't tell", never "verified correct".
+ */
+export function legMisSettled(
+  officialRaw: string | null,
+  sel: SettleSel,
+  ctx: ScoreCtx,
+): boolean {
+  const off = bookLabel(officialRaw)
+  if (off === 'Open') return false
+  const derived = settleFromScore(sel, ctx)
+  return (derived === 'Won' || derived === 'Lost') && derived !== off
+}
+
+/** A bet with any selection the book appears to have settled the wrong way. */
+export function betMisSettled(
+  bet: {
+    matched_leg: {
+      status: string | null
+      market: string | null
+      mt: string | null
+      outcome: string | null
+      selections?: Array<{ status: string | null; market: string | null; mt: string | null; outcome: string | null }>
+    } | null
+  },
+  ctx: ScoreCtx,
+): boolean {
+  const ml = bet.matched_leg
+  if (!ml) return false
+  const sels = ml.selections ?? []
+  if (sels.length) return sels.some((s) => legMisSettled(s.status, s, ctx))
+  return legMisSettled(ml.status, ml, ctx)
+}

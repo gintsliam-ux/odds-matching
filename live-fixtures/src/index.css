@@ -1,22 +1,25 @@
 @import "tailwindcss";
 
 :root {
-  /* Surfaces — slightly bluer-dark, less harsh than pure #050608 */
-  --bg: #0b0f17;
-  --panel: #141a25;
-  --panel-2: #1c2331;
-  --line: #252b3a;
-  --line-soft: #1a1f29;
+  /* Surfaces — Arb Tracker's palette, taken from its tailwind config rather
+     than approximated: surface #0b0e14, surface-raised #11151f, surface-border
+     #1e2432. This app has a genuine third level (dropdowns, hovers) where Arb
+     reuses `raised`, so --panel-2 sits one step above it in the same family. */
+  --bg: #0b0e14;
+  --panel: #11151f;
+  --panel-2: #171d2a;
+  --line: #1e2432;
+  --line-soft: #161b25;
 
-  /* Text */
-  --text: #e6eaf2;
-  --muted: #8b94a8;
-  --muted-2: #5e6679;
+  /* Text — Arb's body colour over Tailwind's slate scale for the dim tiers. */
+  --text: #e6e9ef;
+  --muted: #94a3b8;      /* slate-400 */
+  --muted-2: #64748b;    /* slate-500 */
 
-  /* Accents — softer than the original neon */
-  --total: #4ade80;     /* mapped/best/positive (green) */
-  --up: #fbbf24;        /* upcoming / warning (amber) */
-  --live: #f43f5e;      /* live / negative (rose) */
+  /* Accents — emerald / amber / rose, as Arb uses them. */
+  --total: #34d399;     /* emerald-400 — best/positive */
+  --up: #fbbf24;        /* amber-400 — upcoming/warning */
+  --live: #f43f5e;      /* rose-500 — live/negative */
 
   /* Brand identities — one colour per data source, used for every badge, pill,
      panel and chip that represents that book. Distinct from the semantic
@@ -34,14 +37,33 @@ html, body, #root {
 body {
   margin: 0;
   color: var(--text);
-  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  font-feature-settings: 'cv11', 'ss01';
-  font-size: 13.5px;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  /* No base size, as Arb Tracker has none — inherited text is the browser
+     default 16px rather than 13.5px.
+     Worth knowing what this does and does not touch: `rem` resolves against
+     the ROOT element, and this override was on `body`, so Tailwind's rem-based
+     text-* classes were already computing off 16px. Removing it only changes
+     text that pins no size of its own. */
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: radial-gradient(ellipse at top, #131826 0%, var(--bg) 60%);
+  /* Flat, not the radial wash this had. Arb's body is one solid colour and the
+     gradient was the most visible difference between the two apps at a glance. */
+  background: var(--bg);
   min-height: 100vh;
+}
+
+/* Everything still scrolls; there is just no visible bar. Arb does this
+   globally, and a dark board with pale scrollbar tracks down every panel was
+   the other thing that read as "a different app". */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 /* Reserve the mono font for things that genuinely benefit from it — odds,

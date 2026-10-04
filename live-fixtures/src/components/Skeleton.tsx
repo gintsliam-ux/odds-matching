@@ -5,10 +5,6 @@
 // jumps — which is what the detail page did, showing a narrow card where a
 // full-width three-panel layout was about to land.
 
-import { BRAND_TONE } from '../lib/brand'
-
-const PANEL_TONES = [BRAND_TONE.optic, BRAND_TONE.swift, BRAND_TONE.mybet]
-
 function Bar({ className = '' }: { className?: string }) {
   return <div className={`skeleton rounded ${className}`} />
 }
@@ -30,10 +26,13 @@ export function CardSkeleton() {
           <Bar className="h-4 w-5" />
         </div>
       </div>
-      <div className="flex items-center gap-2 px-4 pb-3">
-        <Bar className="h-7 w-14" />
-        <Bar className="h-7 flex-1" />
-        <Bar className="h-7 flex-1" />
+      <div className="flex items-center gap-1.5 px-4 pb-3">
+        <Bar className="h-3 w-7 shrink-0" />
+        <div className="grid min-w-0 flex-1 grid-cols-3 gap-1.5">
+          <Bar className="h-7" />
+          <Bar className="h-7" />
+          <Bar className="h-7" />
+        </div>
       </div>
       <div className="flex items-center justify-between border-t border-white/5 px-4 py-2">
         <Bar className="h-3 w-16" />
@@ -44,11 +43,14 @@ export function CardSkeleton() {
 }
 
 export function GridSkeleton({ count = 12 }: { count?: number }) {
+  // Padding and section head copied from FixtureGrid — px-5 py-6 with a round
+  // status dot — so the board doesn't nudge sideways when the cards land.
   return (
-    <div className="px-4 py-5">
-      <div className="mb-3 flex items-center gap-2">
-        <span className="h-3.5 w-1 bg-[var(--line)]" />
+    <div className="px-5 py-6">
+      <div className="mb-3 flex items-baseline gap-2.5">
+        <span className="h-2 w-2 rounded-full bg-[var(--line)]" />
         <Bar className="h-3 w-24" />
+        <Bar className="h-2.5 w-8" />
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {Array.from({ length: count }).map((_, i) => (
@@ -143,78 +145,58 @@ export function PanelSkeleton({
 /**
  * The fixture/golf detail page while its row is in flight.
  *
- * Mirrors the real page's frame — full width, hero, four stat cards, tab bar,
- * three source panels. The previous version was a single `max-w-2xl` card, so
- * every detail page visibly jumped from a narrow column to a 1700px layout the
- * moment it resolved.
+ * Mirrors the page as it now stands: a centred scoreboard header, the tab strip
+ * with Markets first, and the markets grid — which is what the page opens on.
+ * It used to mirror the OLD layout (a league strip, two stacked competitor
+ * rows, a kickoff strip, four stat cards and three source panels); the kickoff
+ * strip and stat cards no longer exist and Details is no longer the default
+ * tab, so every load swapped one layout for a different one.
  */
-export function DetailSkeleton({
-  panels = 3,
-  fullWidth = false,
-}: {
-  panels?: number
+export function DetailSkeleton({ fullWidth = false }: {
   /** The golf page is full-bleed where the fixture page caps at 1700px; match
    *  whichever is about to render, or the swap still shifts the layout. */
   fullWidth?: boolean
 }) {
   return (
-    <div className={`px-5 py-5 ${fullWidth ? '' : 'mx-auto max-w-[1700px]'}`}>
-      <Bar className="mb-5 h-3 w-32" />
+    <div className={`flex h-full flex-col px-5 py-5 ${fullWidth ? '' : 'mx-auto max-w-[1700px]'}`}>
+      <Bar className="mb-4 h-3 w-32 shrink-0" />
 
-      <div className="rounded-lg bg-[var(--panel)]">
-        {/* league strip */}
-        <div className="flex items-center justify-between border-b border-white/[0.05] px-5 py-3.5">
-          <div className="flex items-center gap-2.5">
-            <Bar className="h-4 w-4 rounded-full" />
-            <Bar className="h-3.5 w-40" />
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg bg-[var(--panel)]">
+        {/* scoreboard header: meta line, then home / score / away */}
+        <div className="shrink-0 border-b border-white/[0.05] px-5 py-3">
+          <div className="mb-2.5 flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <Bar className="h-4 w-4 rounded-full" />
+              <Bar className="h-3 w-44" />
+            </span>
+            <Bar className="h-3 w-32" />
           </div>
-          <Bar className="h-3 w-16" />
-        </div>
-
-        {/* hero: two competitors and their scores */}
-        <div className="space-y-3 px-5 py-5">
-          {[0, 1].map((i) => (
-            <div key={i} className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Bar className="h-5 w-5 rounded-full" />
-                <Bar className="h-5 w-52" />
-              </div>
-              <Bar className="h-6 w-6" />
+          <div className="flex items-center gap-3">
+            <div className="flex flex-1 items-center justify-end gap-2.5">
+              <Bar className="h-4 w-40" />
+              <Bar className="h-9 w-9 shrink-0 rounded-full" />
             </div>
-          ))}
-        </div>
-
-        {/* kickoff strip */}
-        <div className="flex items-center gap-6 border-t border-white/[0.05] bg-black/[0.15] px-5 py-3">
-          <Bar className="h-3 w-44" />
-          <Bar className="h-3 w-44" />
-          <Bar className="ml-auto h-3 w-20" />
-        </div>
-
-        {/* stat cards */}
-        <div className="grid grid-cols-2 gap-2 px-5 py-4 lg:grid-cols-4">
-          {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="space-y-2 rounded-md bg-black/[0.18] px-4 py-3">
-              <Bar className="h-2 w-14" />
-              <Bar className="h-5 w-20" />
-              <Bar className="h-2 w-24" />
+            <div className="flex shrink-0 flex-col items-center gap-1.5">
+              <Bar className="h-7 w-20" />
+              <Bar className="h-4 w-14 rounded-md" />
             </div>
-          ))}
+            <div className="flex flex-1 items-center gap-2.5">
+              <Bar className="h-9 w-9 shrink-0 rounded-full" />
+              <Bar className="h-4 w-40" />
+            </div>
+          </div>
         </div>
 
-        {/* tab bar */}
-        <div className="flex gap-2 px-5 pb-4">
-          <Bar className="h-7 w-16" />
+        {/* tab strip — Markets, Bets, Details */}
+        <div className="flex shrink-0 items-center gap-1 border-b border-white/[0.05] bg-black/[0.1] px-3 py-2">
           <Bar className="h-7 w-20" />
           <Bar className="h-7 w-14" />
+          <Bar className="h-7 w-16" />
         </div>
 
-        {/* the three source panels the DETAILS tab opens on, each already
-            wearing its source's accent */}
-        <div className="grid grid-cols-1 gap-4 px-5 pb-5 lg:grid-cols-3">
-          {Array.from({ length: panels }).map((_, i) => (
-            <PanelSkeleton key={i} fields={10} tone={PANEL_TONES[i % PANEL_TONES.length]} />
-          ))}
+        {/* the markets grid the page opens on */}
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <MarketsSkeleton />
         </div>
       </div>
     </div>
@@ -270,6 +252,89 @@ export function NotificationsSkeleton({ rows = 4 }: { rows?: number }) {
           </div>
           <Bar className="mb-2 h-4 w-2/5" />
           <Bar className="h-2.5 w-3/5" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Ticker cells at the real 132px width, so the strip doesn't resize when the
+ * fixtures land.
+ *
+ * The ticker has its own feed now, and until this it rendered nothing at all
+ * while that feed was in flight — the strip simply appeared and pushed the
+ * board down. Holding the row's height and its cells keeps the page still.
+ */
+export function TickerSkeleton({ cells = 12 }: { cells?: number }) {
+  return (
+    <div
+      role="status"
+      aria-label="Loading fixtures"
+      className="flex shrink-0 overflow-hidden border-b border-[color:var(--line-soft)] bg-[color:var(--panel)]"
+    >
+      {Array.from({ length: cells }).map((_, i) => (
+        <div
+          key={i}
+          className="flex w-[132px] shrink-0 flex-col gap-1.5 border-r border-[color:var(--line-soft)] px-3 py-2"
+        >
+          <div className="flex items-center justify-between">
+            <Bar className="h-3.5 w-3.5 rounded-full" />
+            <Bar className="h-2.5 w-8" />
+          </div>
+          {[0, 1].map((row) => (
+            <div key={row} className="flex items-center justify-between gap-2">
+              <span className="flex min-w-0 items-center gap-1.5">
+                <Bar className="h-3.5 w-3.5 shrink-0 rounded-full" />
+                <Bar className="h-2.5 w-7" />
+              </span>
+              <Bar className="h-2.5 w-6" />
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * The markets price grid while the odds are in flight.
+ *
+ * The Markets tab used PanelSkeleton — a two-column grid of label/value pairs —
+ * for what resolves into a wide book-by-selection table, so the placeholder
+ * looked nothing like the thing arriving. This carries the real shape: a 56px
+ * header strip of book marks, then market bands of a couple of rows each.
+ */
+export function MarketsSkeleton({ groups = 4, books = 6 }: { groups?: number; books?: number }) {
+  return (
+    <div role="status" aria-label="Loading odds">
+      <div className="flex h-14 items-center gap-4 border-b border-white/[0.08] bg-[color:var(--panel-2)] px-3">
+        <Bar className="h-2.5 w-20" />
+        <div className="ml-auto flex gap-4">
+          {Array.from({ length: books }).map((_, i) => (
+            <Bar key={i} className="h-6 w-6 rounded" />
+          ))}
+        </div>
+      </div>
+      {Array.from({ length: groups }).map((_, g) => (
+        <div key={g}>
+          <div className="border-b border-white/[0.06] bg-[color:var(--panel-2)] px-3 py-1.5">
+            <Bar className="h-3 w-28" />
+          </div>
+          {[0, 1].map((row) => (
+            <div
+              key={row}
+              className="flex items-center gap-4 border-b border-white/[0.03] px-3 py-2.5"
+            >
+              <Bar className="h-3.5 w-3.5 shrink-0 rounded-full" />
+              <Bar className={`h-3 ${row ? 'w-28' : 'w-36'}`} />
+              <div className="ml-auto flex gap-4">
+                {Array.from({ length: books }).map((_, i) => (
+                  <Bar key={i} className="h-4 w-10" />
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       ))}
     </div>

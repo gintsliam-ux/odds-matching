@@ -857,9 +857,16 @@ export async function fetchFixtureMarkets(
       // Only genuine suspension. `status` also carries `closed`, which every
       // row on a finished fixture holds — treating that as suspended would
       // badge every book on every completed event.
+      //
+      // PREGAME rows only. The book columns show pregame prices, and a book
+      // suspending its IN-PLAY market is routine — books pull in-play markets
+      // between plays all game long. Reading those rows struck the pregame
+      // price of nearly every book on any live fixture: measured on Broncos @
+      // Chiefs mid-game, 984 of 3,393 rows were suspended and every one of
+      // them was in-play, while not a single pregame row was.
       suspended: [
         ...new Set(
-          marketRows.filter((r) => r.status === 'suspended').map((r) => r.sportsbook),
+          pregameRows.filter((r) => r.status === 'suspended').map((r) => r.sportsbook),
         ),
       ],
     })
