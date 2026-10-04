@@ -18,3 +18,16 @@ Thumbs.db
 # Claude
 .claude/
 .vercel
+
+# Secrets. The per-project ignores cover the projects that have one, but a new
+# directory without its own .gitignore would otherwise land credentials in the
+# repo — arb-tracker/.env and hong-kong-model/.env were both one `git add -A`
+# away from being committed.
+.env
+.env.*
+!.env.example
+
+# launchd agent output — runtime logs, not source.
+logs/launchd-*.log
+**/logs/launchd-*.log
+live-fixtures/logs-*.log
