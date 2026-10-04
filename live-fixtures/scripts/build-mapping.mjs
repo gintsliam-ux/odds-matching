@@ -4,12 +4,15 @@
 //   stage 2: event_mapping        optic_fixture_id            → gutsy_event_id
 //
 // Run with:  npm run build-mapping
-// Env: MONGO_URI / MONGO_DB / MONGO_COLL plus VITE_SUPABASE_URL/KEY in ../.env.
+// Env: MONGO_URI / MONGO_DB / MONGO_COLL (gutsy on Atlas, the match TARGET) and
+// SPORT_MONGO_URI (gutsys_sport on the NAS, the source fixtures and the mapping
+// tables written) in ../.env. Results go to Mongo — see lib/mappingStore.mjs.
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MongoClient } from 'mongodb'
+import { createMongoStore } from './lib/mappingStore.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const env = parseEnv(join(HERE, '..', '.env'))
@@ -17,10 +20,15 @@ const SUP_URL = env.VITE_SUPABASE_URL ?? process.env.VITE_SUPABASE_URL
 const SUP_KEY = env.VITE_SUPABASE_ANON_KEY ?? process.env.VITE_SUPABASE_ANON_KEY
 const MONGO_URI = env.MONGO_URI ?? process.env.MONGO_URI
 const MONGO_DB = env.MONGO_DB ?? process.env.MONGO_DB ?? 'gutsy'
+// gutsys_sport on the NAS — source fixtures and the mapping tables the Mongo
+// store reads and writes. Distinct from MONGO_URI above, which is gutsy on
+// Atlas (the books' own events, the match TARGET).
+const SPORT_MONGO_URI = process.env.SPORT_MONGO_URI ?? env.SPORT_MONGO_URI
+const SPORT_MONGO_DB = process.env.SPORT_MONGO_DB ?? env.SPORT_MONGO_DB ?? 'gutsys_sport'
 const MONGO_COLL = env.MONGO_COLL ?? process.env.MONGO_COLL ?? 'events'
 
-if (!SUP_URL || !SUP_KEY) bail('Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY')
-if (!MONGO_URI) bail('Missing MONGO_URI')
+if (!MONGO_URI) bail('Missing MONGO_URI (gutsy on Atlas — the match target)')
+if (!SPORT_MONGO_URI) bail('Missing SPORT_MONGO_URI (gutsys_sport on the NAS — source and destination)')
 
 /** How far back a fixture is still worth loading for matching. Comfortably
  *  clears the event window while keeping the query near the old table's size. */
@@ -519,6 +527,17 @@ export async function runMapping(opts = {}) {
 }
 
 async function main(opts = { writeSnapshot: true }) {
+  // Where results land. Defaults to Supabase, which is what the Vercel cron and
+  // mapping-tick have always written; `scripts/build-mapping-mongo.mjs` passes
+  // a Mongo store instead so gutsys_sport gets the same decisions. The matching
+  // below cannot tell the difference, and must not be allowed to.
+  // Mongo is the default: the Supabase project this once wrote to is gone
+  // (NXDOMAIN since ~2026-09, which is why gutsys_sport went stale), so a run
+  // with no store should do the thing that works rather than fail at a dead
+  // host. build-mapping-mongo.mjs passes one explicitly; this covers a bare CLI
+  // invocation.
+  const store = opts.store ?? createMongoStore({ uri: SPORT_MONGO_URI, db: SPORT_MONGO_DB })
+  console.log(`• Store: ${store.name}`)
   console.log('• Loading OpticOdds fixtures…')
   // `fixtures`, not `live_fixtures`. The old table was retired on 2026-08-24
   // (its four live-tracker crons removed); nothing writes it now. By then 424
@@ -543,15 +562,7 @@ async function main(opts = { writeSnapshot: true }) {
   // and this fetches ~5k rows instead of paging all ~18k — which is what kept
   // the matcher over its budget on Vercel even after the index landed.
   const horizon = new Date(Date.now() - MATCH_HORIZON_D * 86_400_000).toISOString()
-  const opticRows = (
-    await getAllSupabase(
-      'fixtures?select=fixture_id,optic_fixture_id:fixture_id,sport,league:optic_league,season_type,home_team,away_team,scheduled_start' +
-        `&source=eq.optic&scheduled_start=gte.${horizon}`,
-      // Seek on the REAL column: `order=`/`gt.` resolve against the table, so
-      // the aliased name 400s with "column does not exist".
-      'fixture_id',
-    )
-  ).filter((r) => r.optic_fixture_id)
+  const opticRows = await store.loadFixtures(horizon)
   console.log(`  ${opticRows.length} fixtures.`)
 
   console.log('• Loading gutsy.events from Mongo…')
@@ -599,9 +610,7 @@ async function main(opts = { writeSnapshot: true }) {
   // matches so a competition attaches to only one OPTIC tournament (e.g. "Série
   // B", verified on Brazil, won't fuzzy-attach to Ecuador - Serie B).
   const stickyCompIds = new Set()
-  for (const r of await getAllSupabase(
-    'competition_mapping?provider=eq.swift&select=id,optic_sport,optic_league,optic_tournament,gutsy_competition_id,source,verified',
-  )) {
+  for (const r of await store.loadCompetitionMappings('swift')) {
     const k = `${r.optic_sport}|${r.optic_league}|${r.optic_tournament}`
     const cur = compStatus.get(k) ?? { hasSticky: false, hasAuto: false, hasManual: false }
     if (r.source === 'manual' || r.verified) cur.hasSticky = true
@@ -611,7 +620,7 @@ async function main(opts = { writeSnapshot: true }) {
     compStatus.set(k, cur)
   }
   const existingEvent = new Map(
-    (await getAllSupabase('event_mapping?provider=eq.swift&select=id,optic_fixture_id,source')).map((r) => [r.optic_fixture_id, r.source]),
+    (await store.loadEventMappings('swift')).map((r) => [r.optic_fixture_id, r.source]),
   )
 
   // -- Stage 1: competitions
@@ -735,11 +744,8 @@ async function main(opts = { writeSnapshot: true }) {
   // per-tournament cleanup we tried first only covered tournaments with
   // active fixtures this run — Ethiopia Premier League with no live rows
   // still had its June-4 ghost. This wipe covers them all.
-  await deleteAllAutoUnverified()
-  await upsertAll(
-    'competition_mapping?on_conflict=provider,optic_sport,optic_league,optic_tournament,gutsy_competition_id',
-    compAutoUpserts,
-  )
+  await store.deleteAutoUnverifiedCompetitions('swift')
+  await store.upsertCompetitions(compAutoUpserts)
 
   // -- Stage 2: events, scoped to each paired competition
   // Index gutsy events by competition_id for quick lookup.
@@ -788,9 +794,7 @@ async function main(opts = { writeSnapshot: true }) {
       compIdsByOptic.set(k, list)
     }
   }
-  for (const r of await getAllSupabase(
-    'competition_mapping?provider=eq.swift&select=id,optic_sport,optic_league,optic_tournament,gutsy_competition_id',
-  )) {
+  for (const r of await store.loadCompetitionMappings('swift')) {
     if (!r.gutsy_competition_id) continue
     const k = `${r.optic_sport}|${r.optic_league}|${r.optic_tournament}`
     const list = compIdsByOptic.get(k) ?? []
@@ -897,7 +901,7 @@ async function main(opts = { writeSnapshot: true }) {
   console.log(
     `• Stage 2: ${opticPairedComp}/${eventResults.length} fixtures in mapped competitions, paired ${eventPaired} events (manual kept: ${eventManualKept}).`,
   )
-  await upsertAll('event_mapping?on_conflict=provider,optic_fixture_id', eventAutoUpserts.map((r) => ({ ...r, provider: 'swift' })))
+  await store.upsertEvents(eventAutoUpserts.map((r) => ({ ...r, provider: 'swift' })))
 
   // -- Stage 3: confirm competitions from where their events actually land.
   // High-confidence event matches are ground truth, so:
@@ -950,145 +954,40 @@ async function main(opts = { writeSnapshot: true }) {
 
     if (isTennis) {
       // Upsert the evidence-derived mapping (fixes wrong/missing), verified.
-      await upsertAll('competition_mapping?on_conflict=provider,optic_sport,optic_league,optic_tournament,gutsy_competition_id', [{
+      await store.upsertCompetitions([{
         provider: 'swift', optic_sport, optic_league, optic_tournament,
         gutsy_sport: dom.sport, gutsy_competition: dom.name, gutsy_competition_id: domCid,
         confidence: 1, source: 'auto', verified: true, verified_at: stamp,
       }])
       // Remove any other AUTO rows for this tournament (stale/wrong guesses).
-      const del = new URLSearchParams({
-        provider: 'eq.swift', optic_sport: `eq.${optic_sport}`, optic_league: `eq.${optic_league}`,
-        optic_tournament: `eq.${optic_tournament}`, source: 'eq.auto', gutsy_competition_id: `neq.${domCid}`,
+      await store.deleteOtherAutoCompetitions({
+        provider: 'swift', optic_sport, optic_league, optic_tournament, keepCid: domCid,
       })
-      await fetch(`${REST}/competition_mapping?${del}`, { method: 'DELETE', headers: { ...HDR, Prefer: 'return=minimal' } })
       fixed++
     } else {
       // Non-tennis: events only match when they're in the mapped competition
       // (Stage 2 pools candidates from it), so ≥3 high-conf hits prove the
       // pairing is right — verify the tournament's auto mapping(s).
-      const q = new URLSearchParams({
-        provider: 'eq.swift', optic_sport: `eq.${optic_sport}`, optic_league: `eq.${optic_league}`,
-        optic_tournament: `eq.${optic_tournament}`, source: 'eq.auto',
-      })
-      await fetch(`${REST}/competition_mapping?${q}`, {
-        method: 'PATCH', headers: { ...HDR, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-        body: JSON.stringify({ verified: true, verified_at: stamp }),
+      await store.verifyAutoCompetitions({
+        provider: 'swift', optic_sport, optic_league, optic_tournament, stamp,
       })
     }
     verified++
   }
   console.log(`• Stage 3: confirmed ${verified} competitions from event evidence (tennis fixed/derived: ${fixed}).`)
 
+  // The Mongo store holds a client open across the whole run; the Supabase one
+  // has nothing to release. Closing an injected store is this function's job
+  // either way — the caller passed it in, but only main() knows it is finished.
+  await store.close()
   console.log('✓ done.')
+  return { competitions: compResults.length, events: eventResults.length, eventPaired, verified, fixed }
 }
 
-// --- supabase helpers ----------------------------------------------------
 
-/**
- * Page a table, seeking on a unique key rather than OFFSET.
- *
- * OFFSET pagination collapses on this database. Measured over 20 samples per
- * offset against `fixtures` (~97k rows):
- *
- *     offset      0    20/20 ok   0.10s
- *     offset 20,000     8/20 ok   2.06s
- *     offset 50,000     0/20 ok   3.21s   ← statement timeout, 57014
- *
- * Postgres has to walk every skipped row to honour an OFFSET, so the deeper
- * the page the longer the scan, until it exceeds the statement timeout. The
- * matcher pages the whole table, so it died partway through every run — which
- * is what had mapping-tick alerting.
- *
- * Seeking instead (`key > last-seen`) reads an index range whatever the depth,
- * so page 90 costs the same as page 1. `keyCol` must be UNIQUE and match the
- * sort, or rows are skipped or repeated.
- */
-async function getAllSupabase(pathAndQuery, keyCol = 'id') {
-  const rows = []
-  const size = 1000
-  let after = null
-  for (;;) {
-    const sep = pathAndQuery.includes('?') ? '&' : '?'
-    const seek = after == null ? '' : `&${keyCol}=gt.${encodeURIComponent(after)}`
-    const url = `${REST}/${pathAndQuery}${sep}order=${keyCol}.asc&limit=${size}${seek}`
-    const r = await fetchRetry(url, { headers: HDR })
-    if (!r.ok) bail(`GET ${pathAndQuery} → ${r.status}: ${await r.text()}`)
-    const batch = await r.json()
-    rows.push(...batch)
-    if (batch.length < size) break
-    const last = batch[batch.length - 1]
-    // The key must be in the projection, or this loops on the same page.
-    const next = last?.[keyCol]
-    if (next == null) bail(`getAllSupabase: '${keyCol}' missing from ${pathAndQuery} — add it to the select`)
-    after = next
-  }
-  return rows
-}
-
-/**
- * Wipe every auto+non-verified competition_mapping row. Run BEFORE the
- * upsert so the matcher's fresh decisions are the only auto rows in the
- * table. Sticky-manual rows (source='manual') and verified rows are left
- * alone. PostgREST returns 204 on success.
- */
-/**
- * Sports the matcher does not process, and whose mappings it must therefore
- * never delete.
- *
- * The cleanup below clears every auto row so the upsert that follows is the
- * only source of auto mappings — correct, but only for sports this script
- * actually rebuilds. Golf is not one: it has no rows in `live_fixtures` at all
- * (its OPTIC side is the `golf_outrights` price table), so the matcher can
- * neither see it nor recreate it. Golf mappings made in the UI were being
- * wiped within five minutes by the next mapping-tick and silently reverting to
- * Unmapped.
- */
 /** Season-long outright markets, not fixtures. Matched on the competition name
  *  because that is where both books put it: "AFL Futures", "NFL 2027 Futures". */
 const IS_FUTURES = /\bfutures?\b/i
-
-const UNMANAGED_SPORTS = ['golf']
-const UNMANAGED_FILTER = `&optic_sport=not.in.(${UNMANAGED_SPORTS.join(',')})`
-
-async function deleteAllAutoUnverified() {
-  const qs = `provider=eq.swift&source=eq.auto&verified=eq.false${UNMANAGED_FILTER}`
-  const r = await fetchRetry(`${REST}/competition_mapping?${qs}`, {
-    method: 'DELETE',
-    headers: { ...HDR, Prefer: 'return=minimal' },
-  })
-  if (!r.ok) bail(`delete auto unverified → ${r.status}: ${await r.text()}`)
-}
-
-/** Drop rows repeating a conflict key within one batch. Postgres refuses an
- *  ON CONFLICT DO UPDATE that would touch a row twice — and fails the whole
- *  statement, not the row. Keeps the last occurrence, which is what a second
- *  upsert would have left anyway. */
-function dedupeOnConflict(pathAndQuery, items) {
-  const m = /on_conflict=([^&]+)/.exec(pathAndQuery)
-  if (!m) return items
-  const cols = decodeURIComponent(m[1]).split(',')
-  const byKey = new Map()
-  for (const it of items) byKey.set(cols.map((c) => String(it[c] ?? '')).join('\u0000'), it)
-  return [...byKey.values()]
-}
-
-async function upsertAll(pathAndQuery, itemsRaw) {
-  const items = dedupeOnConflict(pathAndQuery, itemsRaw)
-  const CHUNK = 500
-  for (let i = 0; i < items.length; i += CHUNK) {
-    const slice = items.slice(i, i + CHUNK)
-    const r = await fetchRetry(`${REST}/${pathAndQuery}`, {
-      method: 'POST',
-      headers: {
-        ...HDR,
-        'Content-Type': 'application/json',
-        Prefer: 'resolution=merge-duplicates,return=minimal',
-      },
-      body: JSON.stringify(slice),
-    })
-    if (!r.ok) bail(`upsert ${pathAndQuery} → ${r.status}: ${await r.text()}`)
-  }
-}
 
 /** Snapshot SWIFT competitions + events as JSON in public/ for the in-app picker. */
 function writeSwiftSnapshots(gutsy) {

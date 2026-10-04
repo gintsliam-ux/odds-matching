@@ -21,6 +21,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MongoClient } from 'mongodb'
+import { createMongoStore } from './lib/mappingStore.mjs'
 import { canonSport, sim, prettyOpticLeague, aliasExpand, EXCLUDE_LEAGUES, eventPairSim, gradeKey } from './build-mapping.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -29,6 +30,11 @@ const SUP_URL = env.VITE_SUPABASE_URL ?? process.env.VITE_SUPABASE_URL
 const SUP_KEY = env.VITE_SUPABASE_ANON_KEY ?? process.env.VITE_SUPABASE_ANON_KEY
 const MONGO_URI = env.MONGO_URI ?? process.env.MONGO_URI
 const MONGO_DB = env.MONGO_DB ?? process.env.MONGO_DB ?? 'gutsy'
+// gutsys_sport on the NAS — source fixtures and the mapping tables the Mongo
+// store reads and writes. Distinct from MONGO_URI above, which is gutsy on
+// Atlas (the books' own events, the match TARGET).
+const SPORT_MONGO_URI = process.env.SPORT_MONGO_URI ?? env.SPORT_MONGO_URI
+const SPORT_MONGO_DB = process.env.SPORT_MONGO_DB ?? env.SPORT_MONGO_DB ?? 'gutsys_sport'
 const MYBET_COLL = env.MONGO_MYBET_COLL ?? process.env.MONGO_MYBET_COLL ?? 'mybet_events'
 /** How far back a fixture is still worth loading for matching. Comfortably
  *  clears the event window while keeping the query near the old table's size. */
@@ -86,8 +92,18 @@ export async function runMybetMapping(opts = {}) {
 }
 
 async function main(opts = { writeSnapshot: true }) {
-  if (!SUP_URL || !SUP_KEY) bail('Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY')
-  if (!MONGO_URI) bail('Missing MONGO_URI')
+  // Where results land. Defaults to Supabase — what the Vercel cron and
+  // mapping-tick have always written — while build-mapping-mongo.mjs passes a
+  // Mongo store so gutsys_sport gets the same decisions. See lib/mappingStore.
+  // Mongo is the default: the Supabase project this once wrote to is gone
+  // (NXDOMAIN since ~2026-09, which is why gutsys_sport went stale), so a run
+  // with no store should do the thing that works rather than fail at a dead
+  // host. build-mapping-mongo.mjs passes one explicitly; this covers a bare CLI
+  // invocation.
+  const store = opts.store ?? createMongoStore({ uri: SPORT_MONGO_URI, db: SPORT_MONGO_DB })
+  if (!MONGO_URI) bail('Missing MONGO_URI (gutsy on Atlas — the match target)')
+  if (!opts.store && !SPORT_MONGO_URI) bail('Missing SPORT_MONGO_URI (gutsys_sport on the NAS)')
+  console.log(`• Store: ${store.name}`)
 
   console.log('• Loading OpticOdds fixtures…')
   // `fixtures`, not `live_fixtures`. The old table was retired on 2026-08-24
@@ -111,15 +127,7 @@ async function main(opts = { writeSnapshot: true }) {
   // Filtered server-side: fixtures now has an index covering
   // (source, scheduled_start), so this no longer statement-timeouts.
   const horizon = new Date(Date.now() - MATCH_HORIZON_D * 86_400_000).toISOString()
-  const opticRows = (
-    await getAllSupabase(
-      'fixtures?select=fixture_id,optic_fixture_id:fixture_id,sport,league:optic_league,season_type,home_team,away_team,scheduled_start' +
-        `&source=eq.optic&scheduled_start=gte.${horizon}`,
-      // Seek on the REAL column — `order=`/`gt.` resolve against the table, so
-      // the aliased name 400s with "column does not exist".
-      'fixture_id',
-    )
-  ).filter((r) => r.optic_fixture_id)
+  const opticRows = await store.loadFixtures(horizon)
   console.log(`  ${opticRows.length} fixtures.`)
 
   console.log('• Loading gutsy.mybet_events from Mongo…')
@@ -156,9 +164,7 @@ async function main(opts = { writeSnapshot: true }) {
   // Competitions held by a verified/manual mapping — off-limits to AUTO matches
   // (1:1: a competition attaches to only one tournament).
   const stickyCompIds = new Set()
-  for (const r of await getAllSupabase(
-    'competition_mapping?provider=eq.mybet&select=id,optic_sport,optic_league,optic_tournament,gutsy_competition_id,source,verified',
-  )) {
+  for (const r of await store.loadCompetitionMappings('mybet')) {
     const k = `${r.optic_sport}|${r.optic_league}|${r.optic_tournament}`
     if (r.source === 'manual' || r.verified) {
       compStatus.set(k, true)
@@ -166,7 +172,7 @@ async function main(opts = { writeSnapshot: true }) {
     }
   }
   const existingEvent = new Map(
-    (await getAllSupabase('event_mapping?provider=eq.mybet&select=id,optic_fixture_id,source')).map((r) => [
+    (await store.loadEventMappings('mybet')).map((r) => [
       r.optic_fixture_id,
       r.source,
     ]),
@@ -249,11 +255,8 @@ async function main(opts = { writeSnapshot: true }) {
   const compUpserts = compResults.filter(
     (r) => !compStatus.get(`${r.optic_sport}|${r.optic_league}|${r.optic_tournament}`),
   )
-  await deleteAllAutoUnverified()
-  await upsertAll(
-    'competition_mapping?on_conflict=provider,optic_sport,optic_league,optic_tournament,gutsy_competition_id',
-    compUpserts,
-  )
+  await store.deleteAutoUnverifiedCompetitions('mybet')
+  await store.upsertCompetitions(compUpserts)
   console.log(`• Stage 1: paired ${compResults.filter((r) => r.gutsy_competition).length}/${compResults.length} competitions (mybet has leagues for a subset).`)
 
   // ---- Stage 2: events by team names + time across the whole sport ----
@@ -374,7 +377,7 @@ async function main(opts = { writeSnapshot: true }) {
   }
   const eventUpserts = eventResults.filter((r) => existingEvent.get(r.optic_fixture_id) !== 'manual')
   const paired = eventResults.filter((r) => r.gutsy_event_id).length
-  await upsertAll('event_mapping?on_conflict=provider,optic_fixture_id', eventUpserts)
+  await store.upsertEvents(eventUpserts)
   console.log(`• Stage 2: ${inWindow}/${eventResults.length} fixtures had a same-sport/day candidate, paired ${paired} events (skipped ${skippedOld} outside the window).`)
 
   // ---- Stage 3: derive competitions from where mapped events land ----
@@ -417,21 +420,22 @@ async function main(opts = { writeSnapshot: true }) {
     let dom = null
     for (const info of byLeague.values()) if (!dom || info.n > dom.n) dom = info
     if (!dom || dom.n < need) continue
-    await upsertAll('competition_mapping?on_conflict=provider,optic_sport,optic_league,optic_tournament,gutsy_competition_id', [{
+    await store.upsertCompetitions([{
       provider: PROVIDER, optic_sport, optic_league, optic_tournament,
       gutsy_sport: dom.sport, gutsy_competition: dom.name, gutsy_competition_id: String(dom.id),
       confidence: 1, source: 'auto', verified: true, verified_at: stamp,
     }])
     // Drop any other auto rows for this tournament (Stage 1's guesses / NULLs).
-    const del = new URLSearchParams({
-      provider: 'eq.mybet', optic_sport: `eq.${optic_sport}`, optic_league: `eq.${optic_league}`,
-      optic_tournament: `eq.${optic_tournament}`, source: 'eq.auto', gutsy_competition_id: `neq.${String(dom.id)}`,
+    await store.deleteOtherAutoCompetitions({
+      provider: PROVIDER, optic_sport, optic_league, optic_tournament, keepCid: String(dom.id),
     })
-    await fetch(`${REST}/competition_mapping?${del}`, { method: 'DELETE', headers: { ...HDR, Prefer: 'return=minimal' } })
     derived++
   }
   console.log(`• Stage 3: derived ${derived} competitions from event evidence.`)
+  // Only main() knows the run is finished; the Mongo store holds a client open.
+  await store.close()
   console.log('Done.')
+  return { competitions: compResults.length, events: eventResults.length, paired, derived }
 }
 
 /**
@@ -506,79 +510,6 @@ function writeMybetSnapshots(events) {
   writeFileSync(join(pub, 'mybet-competitions.json'), JSON.stringify(comps))
   writeFileSync(join(pub, 'mybet-events.json'), JSON.stringify(evs))
   console.log(`  wrote public/mybet-competitions.json (${comps.length}) + mybet-events.json (${evs.length}).`)
-}
-
-/**
- * Page a table, seeking on a unique key rather than OFFSET.
- *
- * Mirrors build-mapping.mjs. OFFSET pagination times out on this database once
- * the offset is deep — Postgres walks every skipped row — and `fixtures` is
- * ~97k rows, so the walk exceeded the statement timeout partway through every
- * run. Seeking reads an index range at any depth.
- *
- * `keyCol` must be UNIQUE and present in the select, or rows are skipped,
- * repeated, or the loop spins on one page.
- */
-async function getAllSupabase(pathAndQuery, keyCol = 'id') {
-  const rows = []
-  const size = 1000
-  let after = null
-  for (;;) {
-    const sep = pathAndQuery.includes('?') ? '&' : '?'
-    const seek = after == null ? '' : `&${keyCol}=gt.${encodeURIComponent(after)}`
-    const r = await fetchRetry(`${REST}/${pathAndQuery}${sep}order=${keyCol}.asc&limit=${size}${seek}`, {
-      headers: HDR,
-    })
-    if (!r.ok) bail(`GET ${pathAndQuery} → ${r.status}: ${await r.text()}`)
-    const batch = await r.json()
-    rows.push(...batch)
-    if (batch.length < size) break
-    const next = batch[batch.length - 1]?.[keyCol]
-    if (next == null) bail(`getAllSupabase: '${keyCol}' missing from ${pathAndQuery} — add it to the select`)
-    after = next
-  }
-  return rows
-}
-
-/** Wipe every auto+non-verified mybet competition row before re-upserting. */
-/** See the note in build-mapping.mjs — the matcher must not delete mappings
- *  for sports it cannot rebuild. */
-const UNMANAGED_SPORTS = ['golf']
-
-async function deleteAllAutoUnverified() {
-  const qs = `provider=eq.mybet&source=eq.auto&verified=eq.false&optic_sport=not.in.(${UNMANAGED_SPORTS.join(',')})`
-  const r = await fetchRetry(`${REST}/competition_mapping?${qs}`, {
-    method: 'DELETE',
-    headers: { ...HDR, Prefer: 'return=minimal' },
-  })
-  if (!r.ok) bail(`delete auto unverified → ${r.status}: ${await r.text()}`)
-}
-
-/** Drop rows repeating a conflict key within one batch. Postgres refuses an
- *  ON CONFLICT DO UPDATE that would touch a row twice — and fails the whole
- *  statement, not the row. Keeps the last occurrence, which is what a second
- *  upsert would have left anyway. */
-function dedupeOnConflict(pathAndQuery, items) {
-  const m = /on_conflict=([^&]+)/.exec(pathAndQuery)
-  if (!m) return items
-  const cols = decodeURIComponent(m[1]).split(',')
-  const byKey = new Map()
-  for (const it of items) byKey.set(cols.map((c) => String(it[c] ?? '')).join('\u0000'), it)
-  return [...byKey.values()]
-}
-
-async function upsertAll(pathAndQuery, itemsRaw) {
-  const items = dedupeOnConflict(pathAndQuery, itemsRaw)
-  const CHUNK = 500
-  for (let i = 0; i < items.length; i += CHUNK) {
-    const slice = items.slice(i, i + CHUNK)
-    const r = await fetchRetry(`${REST}/${pathAndQuery}`, {
-      method: 'POST',
-      headers: { ...HDR, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify(slice),
-    })
-    if (!r.ok) bail(`upsert ${pathAndQuery} → ${r.status}: ${await r.text()}`)
-  }
 }
 
 function parseEnv(path) {
