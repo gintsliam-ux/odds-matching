@@ -354,7 +354,7 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
           aria-labelledby="tab-details"
           className="flex min-h-0 flex-1 flex-col"
         >
-          <EventDetailsPanel fixtureId={event.id} />
+          <EventDetailsPanel fixtureId={event.id} sport={event.league.id} />
         </div>
       )}
 

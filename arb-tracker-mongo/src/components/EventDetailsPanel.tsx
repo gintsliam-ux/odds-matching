@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Database, Info, Link2, Link2Off } from 'lucide-react';
 import { fetchEventDetails, type EventDetails, type ProviderEventMapping } from '../lib/db';
+import { useCapabilities } from '../lib/capabilitiesContext';
 import { PanelNotice } from './EventTabs';
 
 function stamp(iso: string | null): string {
@@ -246,14 +247,15 @@ function MappingSection({
  * where the row came from, and what odds we actually hold for it. Loaded on
  * demand — these fields are deliberately absent from the board payload.
  */
-export function EventDetailsPanel({ fixtureId }: { fixtureId: string }) {
+export function EventDetailsPanel({ fixtureId, sport }: { fixtureId: string; sport: string }) {
+  const { source } = useCapabilities();
   const [details, setDetails] = useState<EventDetails | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
 
   useEffect(() => {
     let cancelled = false;
     setState('loading');
-    fetchEventDetails(fixtureId)
+    fetchEventDetails(fixtureId, sport)
       .then((d) => {
         if (cancelled) return;
         setDetails(d);
@@ -265,7 +267,7 @@ export function EventDetailsPanel({ fixtureId }: { fixtureId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [fixtureId]);
+  }, [fixtureId, sport]);
 
   if (state === 'loading') {
     return (
@@ -387,7 +389,14 @@ export function EventDetailsPanel({ fixtureId }: { fixtureId: string }) {
         </Grid>
         <p className="mt-3 flex items-center gap-1.5 text-[11px] text-slate-600">
           <Database size={12} />
-          gutsys_sport · fixtures + odds
+          {/* Where this panel's numbers actually came from. On a deployed
+              instance there is no `fixtures` document and `odds` cannot be
+              aggregated, so it is assembled from the board, the mirrored
+              mapping tables and the rows this page already loaded — saying
+              gutsys_sport there would be untrue. */}
+          {source === 'mongo'
+            ? 'gutsys_sport · fixtures + odds'
+            : 'sport.gutsysapi.com · board + odds, mapping from the mirror'}
         </p>
       </Section>
     </div>

@@ -230,9 +230,16 @@ export interface EventDetails {
  * hold. Loaded only when the Details tab is opened — 1800 board events do not
  * each need to carry a venue string.
  */
-export const fetchEventDetails = (fixtureId: string): Promise<EventDetails | null> =>
+export const fetchEventDetails = (
+  fixtureId: string,
+  sport: string,
+): Promise<EventDetails | null> =>
   fixtureId
-    ? apiGet<EventDetails | null>(`/api/event/details?id=${encodeURIComponent(fixtureId)}`)
+    ? apiGet<EventDetails | null>(
+        // The sport rides along for the same reason fetchOdds sends it: the
+        // public odds surface is queried per sport.
+        `/api/event/details?id=${encodeURIComponent(fixtureId)}&sport=${encodeURIComponent(sport)}`,
+      )
     : Promise.resolve(null);
 
 /* -------------------------------------------------------------------- bets */

@@ -74,7 +74,9 @@ const ROUTES = {
   // Lazily loaded by the Details tab, so it is not on the board's hot path.
   'GET /api/event/details': (url) => {
     const id = url.searchParams.get('id') ?? '';
-    return cached(`details:${id}`, TTL.odds, () => eventDetails(id));
+    // The API source is queried per sport; the Mongo path ignores it.
+    const sport = url.searchParams.get('sport') ?? '';
+    return cached(`details:${id}`, TTL.odds, () => eventDetails(id, sport));
   },
 
   // Bets live on a different cluster and are only read when the tab is opened.
@@ -195,6 +197,10 @@ const MIRROR_SERVES = new Set([
   'POST /api/mapping/tournament',
   'POST /api/mapping/tournaments/apply',
   'POST /api/mapping/tournament/clear',
+  // Assembled from the board row, the mirrored mapping tables and the odds the
+  // event page already holds — see apiEventDetails. Not everything the Mongo
+  // path shows, but the mapping block is the point of the tab.
+  'GET /api/event/details',
 ]);
 
 /** Routes whose data only exists on the Mongo source, and why. */

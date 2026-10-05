@@ -256,10 +256,103 @@ export async function searchEvents(query) {
  * board payload — 1800 events do not need a venue string each — so they are
  * deliberately not part of the `SportEvent` shape.
  */
-export async function eventDetails(fixtureId) {
+/**
+ * The Details panel, assembled without `gutsys_sport`.
+ *
+ * A deployed instance has no `fixtures` document and cannot aggregate `odds`
+ * (10.7 GB), so this used to answer "unavailable" outright. That threw away the
+ * part of the panel that matters most and IS reachable: the swiftbet/mybet
+ * mapping block, which lives in the mirrored `event_mapping` and
+ * `competition_mapping`.
+ *
+ * So the three sections come from three places instead of one:
+ *   league / times / teams  the board row, which the pivot already carries
+ *   mapping                 the Atlas mirror, via fixtureMapping
+ *   odds coverage           counted off the rows the event page just fetched,
+ *                           rather than aggregated over the whole collection
+ *
+ * The fields with no source — venue, broadcast, tier, season, the odds open and
+ * close stamps — come back null rather than absent, so the panel renders its
+ * normal empty state for them instead of looking broken.
+ */
+async function apiEventDetails(fixtureId, sport) {
+  if (!sport) return null;
+  const [fixtures, rows] = await Promise.all([
+    apiFixtures(sport).catch(() => []),
+    apiOddsForFixture(fixtureId, sport).catch(() => []),
+  ]);
+  const f = fixtures.find((x) => x.fixture_id === fixtureId);
+  if (!f && rows.length === 0) return null;
+
+  const mapping = await fixtureMapping(fixtureId, f?.optic_league).catch(() => null);
+
+  const books = new Set();
+  const markets = new Set();
+  let firstSeen = null;
+  let lastSeen = null;
+  for (const r of rows) {
+    if (r.sportsbook) books.add(r.sportsbook);
+    if (r.market_id) markets.add(r.market_id);
+    const o = r.open_at ? new Date(r.open_at).getTime() : null;
+    const c = r.current_at ? new Date(r.current_at).getTime() : null;
+    if (o && (!firstSeen || o < firstSeen)) firstSeen = o;
+    if (c && (!lastSeen || c > lastSeen)) lastSeen = c;
+  }
+
+  return {
+    fixtureId,
+    venue: null,
+    location: null,
+    country: f?.category ?? null,
+    season: null,
+    seasonType: null,
+    tier: null,
+    broadcast: null,
+    status: f?.status ?? null,
+    opticStatus: null,
+    isLive: !!f?.is_live,
+    source: 'optic',
+    category: f?.category ?? null,
+    tournament: f?.tournament ?? null,
+    tournamentStage: null,
+    opticLeague: f?.optic_league ?? null,
+    opticLeagueId: null,
+    currentRound: null,
+    hasOdds: rows.length > 0,
+    hasSp: false,
+    competitors: [
+      f?.home_team ? { name: f.home_team, side: 'home', id: null, country: null } : null,
+      f?.away_team ? { name: f.away_team, side: 'away', id: null, country: null } : null,
+    ].filter(Boolean),
+    times: {
+      scheduledStart: f?.scheduled_start ?? null,
+      actualStart: null,
+      endDate: null,
+      oddsOpenAt: firstSeen ? new Date(firstSeen).toISOString() : null,
+      oddsCloseAt: null,
+      settledAt: null,
+      createdAt: null,
+      updatedAt: null,
+    },
+    mapping,
+    coverage: {
+      rows: rows.length,
+      // This path serves pre-match prices only, so there is nothing in-play to
+      // count — see the closing-pivot note in sportApi.explode.
+      liveRows: 0,
+      books: [...books].sort(),
+      markets: [...markets].sort(),
+      firstSeen: firstSeen ? new Date(firstSeen).toISOString() : null,
+      lastSeen: lastSeen ? new Date(lastSeen).toISOString() : null,
+    },
+  };
+}
+
+export async function eventDetails(fixtureId, sport) {
   if (!fixtureId) return null;
-  // Details reads the raw fixture document, which only the Mongo path has.
-  if (isApi) return null;
+  // The raw fixture document is Mongo-only, but most of what this panel shows
+  // is reachable without it — see apiEventDetails.
+  if (isApi) return apiEventDetails(fixtureId, sport);
   const f = await (await coll('fixtures')).findOne({ fixture_id: fixtureId });
   if (!f) return null;
   const mapping = isApi ? null : await fixtureMapping(fixtureId, f.optic_league).catch(() => null);
