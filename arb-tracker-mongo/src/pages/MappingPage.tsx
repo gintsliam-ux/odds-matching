@@ -391,16 +391,17 @@ export default function MappingPage() {
   const [applyingAll, setApplyingAll] = useState(false);
   const { mappingWrite } = useCapabilities();
 
-  const load = () => {
+  // `fresh` on every reload that follows a write — see fetchTournamentMapping.
+  const load = (fresh = false) => {
     setState('loading');
-    fetchTournamentMapping()
+    fetchTournamentMapping(fresh)
       .then((d) => {
         setData(d);
         setState('ready');
       })
       .catch(() => setState('error'));
   };
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
 
   const auto = data?.thresholds?.auto ?? 0.88;
 
@@ -466,7 +467,7 @@ export default function MappingPage() {
           confidence: r.suggestion.score,
         })),
       );
-      load();
+      load(true);
     } finally {
       setApplyingAll(false);
     }
@@ -714,7 +715,7 @@ export default function MappingPage() {
                         cell={l.providers[p.key]}
                         auto={auto}
                         options={data.candidates?.[p.key] ?? []}
-                        onChanged={load}
+                        onChanged={() => load(true)}
                       />
                     </td>
                   ))}

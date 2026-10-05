@@ -427,8 +427,19 @@ export interface TournamentMapping {
   leagues: MappingLeague[];
 }
 
-export const fetchTournamentMapping = (): Promise<TournamentMapping> =>
-  apiGet<TournamentMapping>('/api/mapping/tournaments');
+/**
+ * The mapping table. Pass `fresh` after a write.
+ *
+ * This response is CDN-cached for five minutes, which is right for opening the
+ * page — it is a 20-second read — and wrong immediately after saving: the
+ * reload came back from cache without the change, so a successful Apply looked
+ * like it had done nothing. A nonce makes the post-write reload a cache miss
+ * while leaving the ordinary load cheap.
+ */
+export const fetchTournamentMapping = (fresh = false): Promise<TournamentMapping> =>
+  apiGet<TournamentMapping>(
+    `/api/mapping/tournaments${fresh ? `?t=${Date.now()}` : ''}`,
+  );
 
 export const saveTournamentMapping = (body: {
   opticLeague: string;
