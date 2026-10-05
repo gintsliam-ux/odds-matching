@@ -37,6 +37,7 @@ export const mirrorConfigured = Boolean(MIRROR_URI);
  */
 const MIRRORED = new Set([
   'entities', 'eventMapping', 'competitionMapping', 'leagues', 'leagueSquads', 'mappingPending',
+  'leagueHealth',
 ]);
 
 const client = URI
@@ -93,6 +94,13 @@ export const COLLECTIONS = {
    * drains it. See scripts/sync-to-atlas.mjs.
    */
   mappingPending: 'mapping_pending',
+  /**
+   * Per-league evidence that a mapping is actually working: fixtures in the
+   * window, how many paired, and how much the book is trading. Built hourly by
+   * scripts/sync-to-atlas.mjs and mirrored, so both sides read one number
+   * rather than each deriving it from `fixtures`.
+   */
+  leagueHealth: 'league_health',
   // Not yet surfaced by the UI, but present in the schema:
   oddsSp: 'odds_sp',
   eventMapping: 'event_mapping',

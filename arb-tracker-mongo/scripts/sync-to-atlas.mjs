@@ -55,7 +55,12 @@ const PLAN = [
   { name: 'entities', mode: 'watermark', field: 'resolved_at' },
   { name: 'competition_mapping', mode: 'replace' },
   { name: 'leagues', mode: 'replace' },
+  { name: 'league_health', mode: 'replace' },
 ];
+
+/** How far either side of now the health check looks. */
+const HEALTH_BACK_D = 14;
+const HEALTH_FWD_D = 7;
 
 /** The team sample the mapping page scores candidates against. Matches TEAM_SAMPLE
  *  in server/lib/mapping.mjs — the summary below has to look like what that
@@ -79,6 +84,7 @@ try {
   // on the deployed site would be deleted on the way past unless it has already
   // been replayed upstream by the time the rebuild runs.
   await drainPendingWrites(S, D);
+  await buildLeagueHealth(S);
 
   for (const spec of PLAN) {
     const t0 = Date.now();
@@ -185,7 +191,10 @@ async function drainPendingWrites(S, D) {
               $set: {
                 optic_sport: league?.sport ?? null,
                 optic_league: i.opticLeague,
-                optic_tournament: league?.tournament ?? '',
+                // Empty for everything but tennis — the key Stage 2 looks up.
+                // See matcherTournamentKey in server/lib/mapping.mjs; writing
+                // the league's display name here makes the mapping invisible.
+                optic_tournament: (league?.sport ?? '').toLowerCase() === 'tennis' ? (league?.tournament ?? '') : '',
                 gutsy_sport: i.sport ?? null,
                 gutsy_competition: i.competitionName ?? null,
                 gutsy_competition_id: i.competitionId ?? null,
@@ -218,6 +227,103 @@ async function drainPendingWrites(S, D) {
     }
   }
   console.log(`  ${'mapping_pending'.padEnd(21)} replayed ${applied} upserts, ${deleted} deletes onto the NAS${failed ? `, ${failed} left queued` : ''}`);
+}
+
+/**
+ * Per league and provider: is this mapping actually producing matches?
+ *
+ * A tournament mapped to the WRONG competition looks perfectly healthy on the
+ * mapping page — it has a name, a confidence, a verified tick — and quietly
+ * matches none of its fixtures. soccer_turkey_1_lig pointed at the Turkish Cup
+ * rather than the second division; soccer_argentina_torneo_federal_a at the top
+ * flight rather than the third tier. Nothing in the mapping itself says so. The
+ * only evidence is downstream: events that never pair.
+ *
+ * `books` is what separates a wrong mapping from a quiet one. A competition the
+ * book is not trading right now (NBA out of season) matches nothing for a
+ * perfectly good reason, and flagging it would bury the real ones.
+ *
+ * Written to the NAS and mirrored, so the deployed page reads the same numbers
+ * rather than recomputing them from `fixtures`, which it does not have.
+ */
+async function buildLeagueHealth(S) {
+  const t0 = Date.now();
+  const from = new Date(Date.now() - HEALTH_BACK_D * 86_400_000);
+  const to = new Date(Date.now() + HEALTH_FWD_D * 86_400_000);
+
+  const per = await S.collection('fixtures')
+    .aggregate(
+      [
+        { $match: { source: 'optic', scheduled_start: { $gte: from, $lte: to } } },
+        { $group: { _id: '$optic_league', ids: { $push: '$fixture_id' }, n: { $sum: 1 } } },
+      ],
+      { allowDiskUse: true },
+    )
+    .toArray();
+
+  const allIds = per.flatMap((p) => p.ids);
+  const em = await S.collection('event_mapping')
+    .find({ optic_fixture_id: { $in: allIds }, gutsy_event_id: { $ne: null } })
+    .project({ _id: 0, optic_fixture_id: 1, provider: 1 })
+    .toArray();
+  const matched = { swift: new Set(), mybet: new Set() };
+  for (const m of em) matched[m.provider]?.add(m.optic_fixture_id);
+
+  // What each book is trading in the same window, by competition id.
+  const books = new MongoClient(process.env.BETS_URI ?? DST_URI, { maxPoolSize: 3 });
+  const trading = { swift: new Map(), mybet: new Map() };
+  try {
+    await books.connect();
+    const g = books.db('gutsy');
+    for (const r of await g.collection('events').aggregate([
+      { $match: { start_date: { $gte: from.toISOString(), $lte: to.toISOString() } } },
+      { $group: { _id: '$competition.id', n: { $sum: 1 } } },
+    ]).toArray()) if (r._id) trading.swift.set(String(r._id), r.n);
+    for (const r of await g.collection('mybet_events').aggregate([
+      { $match: { outcomeAt: { $gte: from, $lte: to } } },
+      { $group: { _id: '$leagueId', n: { $sum: 1 } } },
+    ]).toArray()) if (r._id != null) trading.mybet.set(String(r._id), r.n);
+  } finally {
+    await books.close().catch(() => {});
+  }
+
+  const maps = await S.collection('competition_mapping')
+    .find({ gutsy_competition_id: { $nin: [null, ''] } })
+    .project({ _id: 0, provider: 1, optic_league: 1, gutsy_competition_id: 1 })
+    .toArray();
+  const byLeagueProvider = new Map();
+  for (const m of maps) {
+    const k = `${m.optic_league}|${m.provider}`;
+    const n = trading[m.provider]?.get(String(m.gutsy_competition_id)) ?? 0;
+    byLeagueProvider.set(k, (byLeagueProvider.get(k) ?? 0) + n);
+  }
+
+  const docs = per.filter((p) => p._id).map((p) => {
+    const out = { _id: p._id, fixtures: p.n, computed_at: new Date(), providers: {} };
+    for (const provider of ['swift', 'mybet']) {
+      const hit = p.ids.filter((id) => matched[provider].has(id)).length;
+      const k = `${p._id}|${provider}`;
+      if (!byLeagueProvider.has(k)) continue; // not mapped for this provider
+      out.providers[provider] = { matched: hit, bookEvents: byLeagueProvider.get(k) };
+    }
+    return out;
+  });
+
+  const to_ = S.collection('league_health');
+  for (let i = 0; i < docs.length; i += CHUNK) {
+    await to_.bulkWrite(
+      docs.slice(i, i + CHUNK).map((d) => ({ replaceOne: { filter: { _id: d._id }, replacement: d, upsert: true } })),
+      { ordered: false },
+    );
+  }
+  const keep = new Set(docs.map((d) => String(d._id)));
+  const stale = (await to_.find({}, { projection: { _id: 1 } }).toArray())
+    .filter((d) => !keep.has(String(d._id))).map((d) => d._id);
+  if (stale.length) await to_.deleteMany({ _id: { $in: stale } });
+
+  const suspect = docs.filter((d) =>
+    Object.values(d.providers).some((v) => v.matched === 0 && v.bookEvents > 0));
+  console.log(`  ${'league_health'.padEnd(21)} ${docs.length} leagues, ${suspect.length} mapped-but-matching-nothing   ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 }
 
 /**

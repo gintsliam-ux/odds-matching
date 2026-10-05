@@ -355,6 +355,26 @@ export interface MappingCell {
   currents: MappingCurrent[];
   suggestion: MappingCandidate | null;
   alternatives: MappingCandidate[];
+  /** Evidence the mapping is working — null when there is nothing to judge on. */
+  health: MappingHealth | null;
+}
+
+/**
+ * Whether a mapping is actually producing event matches.
+ *
+ * A wrong competition mapping is indistinguishable from a right one here — same
+ * name, same confidence, same verified tick — and quietly pairs none of its
+ * fixtures. `suspect` is the downstream evidence: the book IS trading this
+ * competition, and not one fixture matched.
+ */
+export interface MappingHealth {
+  /** Optic fixtures in the window (−14d…+7d). */
+  fixtures: number;
+  /** How many paired to a book event. */
+  matched: number;
+  /** Events the book is trading in the mapped competition over the same window. */
+  bookEvents: number;
+  suspect: boolean;
 }
 
 export interface MappingLeague {

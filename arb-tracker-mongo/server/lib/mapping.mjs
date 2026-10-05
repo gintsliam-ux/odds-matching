@@ -214,12 +214,17 @@ export async function tournamentMapping() {
   const db = await betsDb();
   if (!db) return { configured: false, providers: {}, leagues: [] };
 
-  const [leagues, existing, swift, mybet] = await Promise.all([
+  const [leagues, existing, swift, mybet, health] = await Promise.all([
     opticLeagues(),
     (await coll('competitionMapping')).find({}).toArray(),
     swiftCandidates(db),
     mybetCandidates(db),
+    // Built hourly rather than derived here: it needs `fixtures`, which a
+    // deployed instance does not carry. Missing is fine — the page just shows
+    // no health, rather than failing.
+    (await coll('leagueHealth')).find({}).toArray().catch(() => []),
   ]);
+  const healthBy = new Map((health ?? []).map((h) => [h._id, h]));
 
   const candidates = { swift, mybet };
   // One optic league maps to MANY provider competitions, not one. A tennis
@@ -246,6 +251,7 @@ export async function tournamentMapping() {
   const rowsByProvider = { swift: [], mybet: [] };
 
   const leagueRows = leagues.map((l) => {
+    const h = healthBy.get(l.opticLeague);
     const row = { ...l, teams: undefined, providers: {} };
     for (const p of PROVIDERS) {
       const hits = mapped.get(`${p}|${l.opticLeague}`) ?? [];
@@ -285,6 +291,29 @@ export async function tournamentMapping() {
         continue;
       }
       row.providers[p] = { currents, suggestion, alternatives: [] };
+    }
+    /*
+     * Flag a mapping that is producing nothing.
+     *
+     * A wrong competition mapping looks identical to a right one on this page —
+     * it has a name, a confidence, a verified tick — and silently matches none
+     * of its fixtures. The only evidence is downstream, so it is surfaced here:
+     * mapped, the book IS trading that competition, and not one fixture paired.
+     *
+     * `bookEvents > 0` is what keeps this honest. A competition the book is not
+     * trading right now matches nothing for a good reason — the NBA out of
+     * season is not a broken mapping — and flagging those would bury the 35
+     * that are worth looking at.
+     */
+    for (const p of PROVIDERS) {
+      const hp = h?.providers?.[p];
+      if (!hp || !row.providers[p]?.currents?.length) continue;
+      row.providers[p].health = {
+        fixtures: h.fixtures ?? 0,
+        matched: hp.matched ?? 0,
+        bookEvents: hp.bookEvents ?? 0,
+        suspect: (hp.matched ?? 0) === 0 && (hp.bookEvents ?? 0) > 0 && (h.fixtures ?? 0) > 0,
+      };
     }
     return row;
   });
@@ -344,6 +373,10 @@ export async function tournamentMapping() {
             currents: l.providers[p].currents,
             suggestion: slim(l.providers[p].suggestion),
             alternatives: l.providers[p].alternatives.map(slim),
+            // Explicit projection, so anything added upstream has to be named
+            // here too — `health` was attached correctly and silently dropped
+            // on the way out until it was.
+            health: l.providers[p].health ?? null,
           },
         ]),
       ),
@@ -359,6 +392,20 @@ export async function tournamentMapping() {
  * would silently rewrite one arbitrary row of the 87 that `tennis_atp_challenger`
  * already holds. Applying adds; removing is explicit.
  */
+/**
+ * The tournament key the MATCHER will look this mapping up by.
+ *
+ * Stage 2 scopes a fixture's candidates with `sport|league|tournament`, and it
+ * builds that key with an EMPTY tournament for every sport but tennis — only
+ * tennis groups by `season_type`, because one OPTIC tennis league spans dozens
+ * of separate events. Writing `leagues.tournament` here instead produced
+ * `amfootball|amfootball_nfl|NFL`, which matches nothing, so every NFL fixture
+ * was skipped and the mapping sat on the page looking perfectly healthy while
+ * pairing zero events. 63 hand-made mappings were silently dead this way.
+ */
+const matcherTournamentKey = (league) =>
+  (league?.sport ?? '').toLowerCase() === 'tennis' ? (league?.tournament ?? '') : '';
+
 export async function saveTournamentMapping({ opticLeague, provider, competitionId, competitionName, sport, confidence }) {
   if (!opticLeague || !PROVIDERS.includes(provider)) throw new Error('bad mapping target');
   const league = await (await coll('leagues')).findOne({ optic_league: opticLeague });
@@ -367,7 +414,7 @@ export async function saveTournamentMapping({ opticLeague, provider, competition
   const doc = {
     optic_sport: league?.sport ?? null,
     optic_league: opticLeague,
-    optic_tournament: league?.tournament ?? '',
+    optic_tournament: matcherTournamentKey(league),
     gutsy_sport: sport ?? null,
     gutsy_competition: competitionName ?? null,
     gutsy_competition_id: competitionId ?? null,
@@ -442,7 +489,7 @@ export async function saveTournamentMappings(items) {
           $set: {
             optic_sport: league?.sport ?? null,
             optic_league: i.opticLeague,
-            optic_tournament: league?.tournament ?? '',
+            optic_tournament: matcherTournamentKey(league),
             gutsy_sport: i.sport ?? null,
             gutsy_competition: i.competitionName ?? null,
             gutsy_competition_id: i.competitionId ?? null,

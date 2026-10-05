@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Check, Link2, Link2Off, Loader2, Pencil, Plus, Search, Users } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Check, Link2, Link2Off, Loader2, Pencil, Plus, Search, Users } from 'lucide-react';
 import { CompetitionPicker } from '../components/CompetitionPicker';
 import {
   clearTournamentMapping,
@@ -21,10 +21,14 @@ const PROVIDERS: { key: Provider; label: string }[] = [
   { key: 'mybet', label: 'Mybet' },
 ];
 
-type Filter = 'all' | 'auto' | 'review' | 'unmatched' | 'mapped';
+type Filter = 'all' | 'auto' | 'review' | 'unmatched' | 'mapped' | 'suspect';
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'auto', label: 'Ready to apply' },
+  // Mapped, the book is trading it, and nothing pairs — almost always the wrong
+  // competition. Second in the list because it is the most actionable thing on
+  // the page: a bad mapping is worse than a missing one, since it looks done.
+  { key: 'suspect', label: 'Mapped, matching nothing' },
   { key: 'review', label: 'Needs a look' },
   { key: 'unmatched', label: 'No candidate' },
   { key: 'mapped', label: 'Mapped' },
@@ -33,6 +37,7 @@ const FILTERS: { key: Filter; label: string }[] = [
 
 /** Which bucket a single provider cell falls in. */
 function bucketOf(cell: MappingCell, auto: number): Filter {
+  if (cell.health?.suspect) return 'suspect';
   if (cell.currents.length > 0) return 'mapped';
   if (cell.suggestion && cell.suggestion.score >= auto && !cell.suggestion.contested) return 'auto';
   if (cell.suggestion) return 'review';
@@ -46,6 +51,7 @@ function bucketOf(cell: MappingCell, auto: number): Filter {
  */
 function rowBucket(l: MappingLeague, auto: number): Filter {
   const cells = PROVIDERS.map((p) => bucketOf(l.providers[p.key], auto));
+  if (cells.includes('suspect')) return 'suspect';
   if (cells.includes('auto')) return 'auto';
   if (cells.includes('review')) return 'review';
   if (cells.includes('unmatched')) return 'unmatched';
@@ -245,6 +251,18 @@ function Cell({
             <Plus size={11} /> add another
           </button>
         </div>
+      {cell.health?.suspect && (
+        /* Mapped, the book is trading it, and nothing pairs. Stated as evidence
+           rather than a verdict: usually the wrong competition, but it can also
+           be an event matcher that cannot read the two feeds' team names. */
+        <div className="mt-2 flex items-start gap-1.5 rounded border border-amber-500/25 bg-amber-500/[0.07] px-2 py-1.5 text-[11px] text-amber-200/90">
+          <AlertTriangle size={11} className="mt-px shrink-0" />
+          <span>
+            None of {cell.health.fixtures} fixtures matched, though the book has{' '}
+            {cell.health.bookEvents} — likely the wrong competition.
+          </span>
+        </div>
+      )}
         {picker}
       </div>
     );
@@ -456,7 +474,7 @@ export default function MappingPage() {
 
   /** Bucket counts for the current sport, across both providers. */
   const counts = useMemo(() => {
-    const out: Record<Filter, number> = { all: 0, auto: 0, review: 0, unmatched: 0, mapped: 0 };
+    const out: Record<Filter, number> = { all: 0, auto: 0, review: 0, unmatched: 0, mapped: 0, suspect: 0 };
     if (!data) return out;
     for (const l of data.leagues) {
       if (sport !== 'all' && l.sport !== sport) continue;
