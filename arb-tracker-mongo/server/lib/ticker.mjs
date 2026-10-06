@@ -1,5 +1,5 @@
 import { coll, mongoConfigured } from './mongo.mjs';
-import { apiFixtures, apiOddsForSport } from './sportApi.mjs';
+import { apiFixtures, apiOddsForFixture, apiOddsForSport } from './sportApi.mjs';
 import { betsConfigured, betsDb } from './betsMongo.mjs';
 import { betInstant } from './bets.mjs';
 
@@ -118,6 +118,15 @@ export const streamMatch = (name) =>
 /** Words that mark a string as naming a market rather than a competition. */
 const MARKETY =
   /\b(quarter|half|period|inning|set|game|total|over|under|handicap|line|spread|margin|score|winner|result|tri ?bet|double|alternate|player|points|goals|runs|first|last|anytime|odd|even|btts|draw)\b/i;
+
+/**
+ * How many fixtures a deployed instance will fetch in full for one feed.
+ *
+ * Only reached for bets the cheap head-to-head drain cannot price, and only
+ * one call per fixture — but it is the one cost here that grows with the feed,
+ * so it is bounded rather than trusted to stay small.
+ */
+const FULL_FIXTURE_CAP = 25;
 
 /** How many bets the feed carries. The table is a glance, not an export. */
 const LIMIT = 150;
@@ -527,15 +536,35 @@ async function pricesFor(bets, byEventId, fixtures) {
       })
       .toArray();
   } else {
-    // The public surface is pre-match h2h only, so on a deployed instance the
-    // comparison columns fill for moneyline bets and stay blank for handicaps
-    // and totals. Blank is the honest answer there — inventing a column from a
-    // market we were not served would be worse than an empty one.
-    const want = new Set(wanted.keys());
+    const onFeed = new Set(wanted.keys());
     const perSport = await Promise.all(
       apiSportsIn(bets).map((sport) => apiOddsForSport(sport).catch(() => [])),
     );
-    rows = perSport.flat().filter((r) => want.has(r.fixture_id));
+    rows = perSport.flat().filter((r) => onFeed.has(r.fixture_id));
+
+    /*
+     * That per-sport drain asks for head-to-head only — 0.5 MB against 28 MB
+     * unfiltered across seven sports — so it carries no row a handicap or a
+     * total could ever match against, and the deployed board priced none of
+     * them however well they parsed.
+     *
+     * The fixtures that actually carry such a bet are few: 12 of them behind 33
+     * bets on a typical feed. So those are fetched WHOLE, one call each, which
+     * is exactly what opening the event page does. Capped, because the cost is
+     * per fixture and this endpoint answers on a 30-second cache.
+     */
+    const needFull = [...wanted.entries()]
+      .filter(([, list]) => list.some((b) => want.get(b)?.kind !== 'moneyline'))
+      .map(([fixtureId]) => fixtureId)
+      .slice(0, FULL_FIXTURE_CAP);
+
+    const extra = await Promise.all(
+      needFull.map((fixtureId) => {
+        const sport = fixtures.get(fixtureId)?.sport;
+        return sport ? apiOddsForFixture(fixtureId, sport).catch(() => []) : Promise.resolve([]);
+      }),
+    );
+    rows = [...rows, ...extra.flat()];
   }
 
   const byFixture = new Map();
