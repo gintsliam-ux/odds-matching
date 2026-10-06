@@ -151,10 +151,10 @@ export function mapSwift(b) {
     tournament: text(leg.meeting_name),
     event: text(leg.event_name),
     market: text(sd.market_name ?? b.derived?.market_raw),
-    outcome: text(sd.name ?? leg.selections?.[0]?.name),
+    outcome: stripBonus(sd.name ?? leg.selections?.[0]?.name),
     price: num(b.odd),
     stake: num(b.bet_amount),
-    bonus: !!b.is_bonus,
+    bonus: !!b.is_bonus || saysBonus(sd.name ?? leg.selections?.[0]?.name),
     eventId: (b.derived?.legs_event_ids ?? [])[0] ?? null,
   };
 }
@@ -207,10 +207,10 @@ export function mapMulti(m) {
     // OPTIC says "Argentina Lnb" where mybet says "Argentine Liga Nacional",
     // which share no whole word.
     market: MARKETY.test(lead ?? '') ? text(lead) : text(m.bet_type),
-    outcome: text(m.selections),
+    outcome: stripBonus(m.selections),
     price: num(m.price),
     stake: num(m.amount_bet),
-    bonus: num(m.bonus_bet) ? true : false,
+    bonus: num(m.bonus_bet) ? true : saysBonus(m.selections),
     eventId: m.event_identifier != null ? String(m.event_identifier) : null,
   };
 }
@@ -277,6 +277,27 @@ async function fixturesFor(bets) {
   );
   return { byEventId, fixtures };
 }
+
+/**
+ * "(Bonus Cash)" is a marker on the selection, not part of it — the table shows
+ * it as an icon, so it comes off the text.
+ *
+ * Only this suffix. Other trailing parentheses carry meaning that would be lost
+ * with them: "(Sydney Roosters)" is the player's team, "(-1.5)" the line,
+ * "(Refund)" something else again.
+ *
+ * It also FEEDS the flag rather than merely deferring to it. Across three days
+ * of bets the text appears on 182 and `bonus_bet` is set on only 130 of those
+ * (and on none the text misses), so stripping it while trusting the flag alone
+ * would quietly leave 52 bonus bets looking like ordinary ones.
+ */
+const BONUS_SUFFIX = /\s*\(bonus[^)]*\)\s*$/i;
+const stripBonus = (v) => {
+  const t = text(v);
+  if (t == null) return null;
+  return text(t.replace(BONUS_SUFFIX, ''));
+};
+const saysBonus = (v) => BONUS_SUFFIX.test(String(v ?? ''));
 
 /** Normalise for comparing a bet's outcome text against a price's selection. */
 const key = (s) =>

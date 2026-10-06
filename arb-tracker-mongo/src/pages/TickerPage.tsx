@@ -81,6 +81,10 @@ export default function TickerPage() {
   const [brand, setBrand] = useState<'all' | 'swiftbet' | 'mybet' | 'multis'>('all');
   const [sport, setSport] = useState<string>('all');
   const [live, setLive] = useState(false);
+  // Ids that arrived on the stream in the last few seconds. The table is
+  // newest-first already, so without this a bet landing at the top is
+  // indistinguishable from the one it pushed down.
+  const [fresh, setFresh] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -118,6 +122,16 @@ export default function TickerPage() {
           const seen = new Set(incoming.map((b) => b.id));
           return [...incoming, ...prev.filter((b) => !seen.has(b.id))].slice(0, LIMIT);
         });
+        const ids = incoming.map((b) => b.id);
+        setFresh((prev) => new Set([...prev, ...ids]));
+        setTimeout(() => {
+          if (cancelled) return;
+          setFresh((prev) => {
+            const next = new Set(prev);
+            for (const id of ids) next.delete(id);
+            return next;
+          });
+        }, 6000);
         setState('ready');
       },
       () => {
@@ -159,6 +173,10 @@ export default function TickerPage() {
   );
 
   const columns = useMemo(() => bookColumns(bets), [bets]);
+
+  // The top of the feed, under whatever filters are on — so it still answers
+  // "what just came through" when the view is narrowed to one brand or sport.
+  const latest = shown[0] ?? null;
 
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: bets.length };
@@ -235,6 +253,30 @@ export default function TickerPage() {
         </div>
       </header>
 
+      {latest && (
+        <div className="shrink-0 border-b border-surface-border bg-surface-raised/60 px-5 py-2">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[12px]">
+            <span className="text-[10px] uppercase tracking-wide text-slate-500">Latest</span>
+            <span
+              className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                BRAND_TONE[latest.brand] ?? 'bg-white/10 text-slate-300'
+              }`}
+            >
+              {BRAND_LABEL[latest.brand] ?? latest.brand}
+            </span>
+            <span className="tabular-nums text-slate-400">{time(latest.placedAt)}</span>
+            <span className="text-slate-200">{latest.event ?? '–'}</span>
+            <span className="text-slate-500">{latest.market ?? '–'}</span>
+            <span className="font-medium text-slate-100">{latest.outcome ?? '–'}</span>
+            <span className="inline-flex items-center gap-1 tabular-nums text-slate-300">
+              {latest.bonus && <Gift size={11} className="text-amber-400" />}
+              {money(latest.stake)}
+            </span>
+            <span className="font-semibold tabular-nums text-emerald-300">@ {fmt(latest.price)}</span>
+          </div>
+        </div>
+      )}
+
       <div className="min-h-0 flex-1 overflow-auto">
         {state === 'error' ? (
           <p className="px-5 py-8 text-sm text-rose-300">The bet feed could not be loaded.</p>
@@ -279,7 +321,9 @@ export default function TickerPage() {
                 return (
                   <tr
                     key={b.id}
-                    className="border-b border-surface-border/40 hover:bg-white/[0.02]"
+                    className={`border-b border-surface-border/40 hover:bg-white/[0.02] ${
+                      fresh.has(b.id) ? 'bg-emerald-500/[0.07]' : ''
+                    }`}
                   >
                     <td className="px-3 py-1.5">
                       <span
