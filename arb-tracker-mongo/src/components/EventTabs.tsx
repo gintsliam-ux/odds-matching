@@ -78,6 +78,9 @@ export interface SubTab<T extends string> {
   key: T;
   label: string;
   badge?: string | number | null;
+  /** Classes for the selected pill, where the tab has a colour of its own —
+   *  bet brands do, and they should read the same here as on the ticker. */
+  tone?: string;
 }
 
 /**
@@ -125,7 +128,7 @@ export function SubTabs<T extends string>({
             onClick={() => onChange(t.key)}
             className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors ${
               selected
-                ? 'bg-emerald-500/15 text-emerald-300'
+                ? t.tone ?? 'bg-emerald-500/15 text-emerald-300'
                 : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
             }`}
           >

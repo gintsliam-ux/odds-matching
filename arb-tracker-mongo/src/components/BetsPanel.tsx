@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import { Receipt } from 'lucide-react';
 import { fetchBets, type Bet, type BrandBets, type FixtureBets } from '../lib/db';
 import { PanelNotice, SubTabs } from './EventTabs';
+import { BRAND_TONE } from '../lib/brands';
 
-export type BetBrand = 'swiftbet' | 'mybet' | 'multis';
+export type { BetBrand } from '../lib/brands';
+import type { BetBrand } from '../lib/brands';
 
 const BRANDS: { key: BetBrand; label: string }[] = [
   { key: 'swiftbet', label: 'Swiftbet' },
@@ -227,6 +229,7 @@ export function BetsPanel({ fixtureId }: { fixtureId: string }) {
           key: b.key,
           label: b.label,
           badge: data[b.key].bets.length || null,
+          tone: BRAND_TONE[b.key],
         }))}
         active={brand}
         onChange={setBrand}

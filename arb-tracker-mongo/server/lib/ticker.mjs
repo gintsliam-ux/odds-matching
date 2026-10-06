@@ -101,6 +101,10 @@ export const streamMatch = (name) =>
     Object.entries(SPORT_SINGLE[name]).map(([k, v]) => [`fullDocument.${k}`, v]),
   );
 
+/** Period phrasings, stripped before asking whether a total names someone. */
+const PERIOD_WORDS =
+  /\b(1st|2nd|3rd|4th|first|second|third|fourth|half|quarter|period|inning|innings|set|1h|2h|1q|2q|3q|4q|1s)\b/g;
+
 /** Words that mark a string as naming a market rather than a competition. */
 const MARKETY =
   /\b(quarter|half|period|inning|set|game|total|over|under|handicap|line|spread|margin|score|winner|result|tri ?bet|double|alternate|player|points|goals|runs|first|last|anytime|odd|even|btts|draw)\b/i;
@@ -581,6 +585,7 @@ async function resolveByNameAndStart(bets, byEventId, fixtures) {
     const hits = candidates.filter((f) => {
       if (Math.abs(new Date(f.scheduled_start).getTime() - at) > WINDOW_MIN * 60_000) return false;
       if (b.sport && sportLabel(f.sport) && sportLabel(f.sport) !== b.sport) return false;
+      if (!sameGrade(b.event, `${f.home_team ?? ''} ${f.away_team ?? ''} ${f.event_name ?? ''}`)) return false;
       const got = key(`${f.home_team ?? ''} ${f.away_team ?? ''} ${f.event_name ?? ''}`);
       let hit = 0;
       for (const t of want) if (got.includes(t)) hit++;
@@ -597,14 +602,31 @@ async function resolveByNameAndStart(bets, byEventId, fixtures) {
 }
 
 /**
- * Words that name a FORMAT rather than a competitor.
+ * Words that name a FORMAT or a club's legal form rather than the side itself.
  *
- * Swiftbet writes cricket sides as "India T20" and "Bahrain T20" where the
- * fixture is plain "India v West Indies". Counted as part of the name, the
- * suffix drags a perfect match down to three tokens out of four — 0.75, just
- * under the bar — and every T20 international went unmatched for it.
+ * Swiftbet writes cricket sides as "India T20" where the fixture is plain
+ * "India v West Indies", and clubs with whichever prefix each feed prefers —
+ * "PFC Minyor Pernik" against "FC Minyor Pernik", "Farense" against "SC
+ * Farense". Counted as part of the name these drag a correct match under the
+ * bar.
+ *
+ * "Women" is deliberately NOT in here. Dropping it would let a women's bet
+ * match the men's fixture, which is the one mistake this must never make — the
+ * two are played by the same clubs on the same day. It is checked for
+ * agreement instead, in sameGrade.
  */
-const FORMAT_TOKEN = /^(t20|t10|odi|test|xi|100|womens?|mens?)$/;
+const FORMAT_TOKEN = /^(t20|t10|odi|test|xi|100|fc|pfc|afc|sc|sv|cf|ac|cd|ud|gd|ec|sd|fk|bk|sk)$/;
+
+/**
+ * Women's and men's fixtures are different fixtures.
+ *
+ * The same clubs meet on the same day, and the only thing separating them is a
+ * word — "Manchester City Women" against the feed's "Manchester City WFC". So
+ * it is required to AGREE rather than be ignored: a side that says women must
+ * meet one that says women.
+ */
+const WOMENS = /\b(women|womens|ladies|wfc|w)\b/;
+const sameGrade = (a, b) => WOMENS.test(key(a)) === WOMENS.test(key(b));
 
 /** Normalise for comparing a bet's outcome text against a price's selection. */
 const key = (s) =>
@@ -719,7 +741,26 @@ function parseBetMarket(market, outcome) {
 
   // A total is the only market whose outcome is a side rather than a runner.
   if (side != null && line != null) {
-    return { kind: 'total', marketIds: [`${period}total`, `${period}team_total`], side, line };
+    /*
+     * Whose total, though. "total Korea Republic goals 1.5" is that team's
+     * goals; the match total at the same 1.5 is a different market and a
+     * different price — 1.22 against the 1.67 actually struck. Offering the
+     * match total as a stand-in put a bet 36% away from its own comparison.
+     *
+     * So a total that NAMES someone is only ever matched against team totals,
+     * and when the surface carries none for that fixture the row stays blank.
+     * Blank is the honest answer; the wrong market dressed as the right one is
+     * not.
+     */
+    const qualifier = km
+      .replace(PERIOD_WORDS, ' ')
+      .replace(/\b(total|totals|over|under|alternate|alt|line|lines|points?|goals?|runs?|games?|sets?|score|match|the)\b/g, ' ')
+      .replace(/[-+]?\d+(?:\.\d+)?/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return qualifier
+      ? { kind: 'total', marketIds: [`${period}team_total`], side, line, qualifier }
+      : { kind: 'total', marketIds: [`${period}total`], side, line };
   }
 
   // Everything else is named: a team, a player, a pair. What separates a

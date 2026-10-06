@@ -5,6 +5,7 @@ import { fetchTicker, subscribeTicker, type TickerBet } from '../lib/db';
 import { BookmakerLogo } from '../components/BookmakerLogo';
 import { brandById, BOOKMAKERS } from '../lib/markets';
 import { eventSlug } from '../lib/routing';
+import { BRAND_LABEL, BRAND_TONE } from '../lib/brands';
 
 /**
  * The bet ticker: every brand's single bets, newest first, across all sports.
@@ -14,17 +15,6 @@ import { eventSlug } from '../lib/routing';
  * showing on the same outcome. A price only means something next to the others.
  */
 
-const BRAND_TONE: Record<string, string> = {
-  swiftbet: 'bg-emerald-500/15 text-emerald-300',
-  mybet: 'bg-sky-500/15 text-sky-300',
-  multis: 'bg-violet-500/15 text-violet-300',
-};
-
-const BRAND_LABEL: Record<string, string> = {
-  swiftbet: 'Swiftbet',
-  mybet: 'Mybet',
-  multis: 'Multis',
-};
 
 const time = (v: string | null) =>
   v ? new Date(v).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '–';
@@ -103,6 +93,16 @@ const money = (n: number | null | undefined) =>
     minimumFractionDigits: Number.isInteger(n) ? 0 : 2,
     maximumFractionDigits: 2,
   })}`;
+
+/**
+ * Books that do not compete for "best price".
+ *
+ * An exchange quotes a back price that is not comparable with a bookmaker's:
+ * it moves with whatever is on offer, and on a thin market it sits far above
+ * every book without being a price anyone could have taken for a real stake.
+ * The column still shows, it just does not win.
+ */
+const NOT_BEST = new Set(['betfair', 'betfair_lay']);
 
 /**
  * The book columns, in the board's own order so the eye carries across from one
@@ -394,7 +394,11 @@ export default function TickerPage() {
               {shown.map((b) => {
                 // The bet's own price, against the best of everyone else's, so a
                 // standout is visible without reading every column.
-                const others = b.prices ? Object.values(b.prices) : [];
+                // The exchange is shown but excluded from the comparison —
+                // see NOT_BEST.
+                const others = Object.entries(b.prices ?? {})
+                  .filter(([book]) => !NOT_BEST.has(book))
+                  .map(([, p]) => p);
                 const best = others.length ? Math.max(...others) : null;
                 const beatsField = b.price != null && best != null && b.price > best;
                 return (
@@ -477,7 +481,9 @@ export default function TickerPage() {
                         <td
                           key={id}
                           className={`border-l border-surface-border px-1.5 py-1.5 text-center tabular-nums ${
-                            p != null && p === best ? 'text-emerald-300' : 'text-slate-400'
+                            p != null && p === best && !NOT_BEST.has(id)
+                              ? 'text-emerald-300'
+                              : 'text-slate-400'
                           }`}
                         >
                           {p != null ? fmt(p) : <span className="text-slate-700">–</span>}
