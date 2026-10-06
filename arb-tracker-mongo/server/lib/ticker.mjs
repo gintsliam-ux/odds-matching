@@ -117,7 +117,7 @@ async function swiftSingles(db, since) {
     .sort({ bet_time: -1 })
     .limit(LIMIT)
     .project({
-      bet_time: 1, odd: 1, bet_amount: 1, legs: 1, is_bonus: 1,
+      bet_time: 1, odd: 1, bet_amount: 1, legs: 1, is_bonus: 1, bet_id: 1, user_id: 1,
       'derived.sport': 1, 'derived.market_raw': 1, 'derived.mt': 1,
       'derived.legs_event_ids': 1, 'derived.minLegEventTime': 1,
     })
@@ -144,6 +144,8 @@ export function mapSwift(b) {
     // The document's own id. A pushed row and a polled row describe the same
     // bet, and without this the client cannot tell that and shows it twice.
     id: String(b._id),
+    betId: text(b.bet_id),
+    userId: text(b.user_id),
     brand: 'swiftbet',
     placedAt: iso(betInstant(b.bet_time)),
     startsAt: iso(b.derived?.minLegEventTime ?? leg.event_time),
@@ -167,6 +169,7 @@ async function multiSingles(db, since) {
     .limit(LIMIT)
     .project({
       transaction_date: 1, price: 1, amount_bet: 1, bonus_bet: 1,
+      transaction_id: 1, user_accountID: 1,
       sport_name: 1, bet_type: 1, selections: 1, event_string: 1,
       event_identifier: 1, transaction_licenseid: 1,
     })
@@ -193,6 +196,8 @@ export function mapMulti(m) {
   const lead = parts.length ? parts.join(' - ').trim() : null;
   return {
     id: String(m._id),
+    betId: m.transaction_id != null ? String(m.transaction_id) : null,
+    userId: m.user_accountID != null ? String(m.user_accountID) : null,
     brand: m.transaction_licenseid === 'MultisComAu' ? 'multis' : 'mybet',
     placedAt: iso(betInstant(m.transaction_date)),
     startsAt: null,

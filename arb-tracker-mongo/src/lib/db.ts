@@ -248,6 +248,9 @@ export const fetchEventDetails = (
 export interface TickerBet {
   /** The bet document's own id — stable across a polled and a pushed copy. */
   id: string;
+  /** The book's own bet reference, and who struck it. Shown truncated, copied whole. */
+  betId: string | null;
+  userId: string | null;
   brand: 'swiftbet' | 'mybet' | 'multis';
   placedAt: string | null;
   startsAt: string | null;

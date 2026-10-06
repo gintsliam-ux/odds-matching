@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Gift, Loader2, Radio } from 'lucide-react';
+import { ArrowLeft, Check, Copy, Gift, Loader2, Radio } from 'lucide-react';
 import { fetchTicker, subscribeTicker, type TickerBet } from '../lib/db';
 import { BookmakerLogo } from '../components/BookmakerLogo';
 import { brandById, BOOKMAKERS } from '../lib/markets';
@@ -54,6 +54,18 @@ const fmt = (n: number | null | undefined) => (n != null ? n.toFixed(2) : '–')
 /** Matches the server's own cap, so the table holds what the feed holds. */
 const LIMIT = 150;
 
+/**
+ * A bet cannot be struck on a game that has already started, so when the
+ * timestamp says otherwise it is not the placement time.
+ *
+ * It is a real pattern on mybet and multis, not a stray row: a quarter of them
+ * land after the book's OWN betting suspension, clustered 1.5-3.5 hours past
+ * the start — which is after full time, not during play. Flagged rather than
+ * hidden, because the number shown is what the source holds.
+ */
+const afterStart = (b: TickerBet) =>
+  !!b.placedAt && !!b.startsAt && b.placedAt > b.startsAt;
+
 /** Stakes are money, not odds: whole dollars unless the cents matter. */
 const money = (n: number | null | undefined) =>
   n == null ? '–' : `$${n.toLocaleString(undefined, {
@@ -73,6 +85,42 @@ function bookColumns(bets: TickerBet[]): string[] {
   for (const b of bets) for (const k of Object.keys(b.prices ?? {})) seen.add(k);
   const extra = [...seen].filter((id) => !core.includes(id)).sort();
   return [...core, ...extra];
+}
+
+/**
+ * The head of an id, with the whole thing a click away.
+ *
+ * Three characters is not an identifier, it is a glance — enough to see that
+ * two rows are the same punter without the column carrying a UUID. The copy is
+ * the part that is actually useful, so the whole chip is the button.
+ */
+function IdChip({ value, title }: { value: string | null; title: string }) {
+  const [copied, setCopied] = useState(false);
+  if (!value) return null;
+  return (
+    <button
+      type="button"
+      title={`${title}: ${value} — click to copy`}
+      onClick={(e) => {
+        e.stopPropagation();
+        navigator.clipboard?.writeText(value).then(
+          () => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          },
+          () => {},
+        );
+      }}
+      className="group inline-flex items-center gap-0.5 rounded bg-white/5 px-1 py-0.5 font-mono text-[9px] leading-none text-slate-400 transition hover:bg-white/10 hover:text-slate-200"
+    >
+      {value.slice(0, 3)}
+      {copied ? (
+        <Check size={8} className="text-emerald-400" />
+      ) : (
+        <Copy size={8} className="opacity-0 transition group-hover:opacity-60" />
+      )}
+    </button>
+  );
 }
 
 export default function TickerPage() {
@@ -325,16 +373,29 @@ export default function TickerPage() {
                       fresh.has(b.id) ? 'bg-emerald-500/[0.07]' : ''
                     }`}
                   >
-                    <td className="px-3 py-1.5">
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                          BRAND_TONE[b.brand] ?? 'bg-white/10 text-slate-300'
-                        }`}
-                      >
-                        {BRAND_LABEL[b.brand] ?? b.brand}
+                    <td className="whitespace-nowrap px-3 py-1.5">
+                      <span className="inline-flex items-center gap-1">
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                            BRAND_TONE[b.brand] ?? 'bg-white/10 text-slate-300'
+                          }`}
+                        >
+                          {BRAND_LABEL[b.brand] ?? b.brand}
+                        </span>
+                        <IdChip value={b.userId} title="User" />
+                        <IdChip value={b.betId} title="Bet" />
                       </span>
                     </td>
-                    <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-300">
+                    <td
+                      className={`whitespace-nowrap px-2 py-1.5 tabular-nums ${
+                        afterStart(b) ? 'text-amber-400/90' : 'text-slate-300'
+                      }`}
+                      title={
+                        afterStart(b)
+                          ? 'Timestamped after this event started — the source records a later transaction, not the placement'
+                          : undefined
+                      }
+                    >
                       {time(b.placedAt)}
                     </td>
                     <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-500">
