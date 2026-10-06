@@ -47,19 +47,33 @@ export default function EventView() {
     }
     let cancelled = false;
     setOddsLoading(true);
-    fetchOdds(selected)
-      .then((rows) => {
-        if (cancelled) return;
-        const built = buildMarkets(rows, selected.home, selected.away, selected.league.id);
-        setMarkets(built.groups);
-        setBooks(built.books);
-      })
-      .catch((e) => {
-        if (!cancelled) {
+    /*
+     * One retry before giving up.
+     *
+     * A single failed fetch used to empty the grid, and the silent refresh that
+     * would have repaired it is 30 seconds away — so one blip showed an event
+     * with no prices for half a minute, which reads as the page being broken
+     * rather than a request having failed. The retry costs one request on the
+     * rare path and nothing on the normal one.
+     */
+    const load = (attempt = 0): Promise<void> =>
+      fetchOdds(selected)
+        .then((rows) => {
+          if (cancelled) return;
+          const built = buildMarkets(rows, selected.home, selected.away, selected.league.id);
+          setMarkets(built.groups);
+          setBooks(built.books);
+        })
+        .catch((e) => {
+          if (cancelled) return;
+          if (attempt === 0) {
+            return new Promise<void>((r) => setTimeout(r, 1200)).then(() => load(1));
+          }
           console.error(e);
           setMarkets([]);
-        }
-      })
+        });
+
+    load()
       .finally(() => {
         if (!cancelled) setOddsLoading(false);
       });
