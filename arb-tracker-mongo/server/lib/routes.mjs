@@ -210,7 +210,6 @@ const MONGO_ONLY = {
   'POST /api/mapping/tournament': 'the mapping tables',
   'POST /api/mapping/tournaments/apply': 'the mapping tables',
   'POST /api/mapping/tournament/clear': 'the mapping tables',
-  'GET /api/pulse': 'feed heartbeats',
   'GET /api/meta': 'the reference tables',
   'GET /api/event/details': 'fixture detail',
 };

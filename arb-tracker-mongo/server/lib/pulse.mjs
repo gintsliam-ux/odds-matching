@@ -1,4 +1,6 @@
 import { coll } from './mongo.mjs';
+import { isApi } from './source.mjs';
+import { apiOddsForSport, apiSports } from './sportApi.mjs';
 
 /**
  * Feed freshness for the status bar: how long ago each source last moved.
@@ -24,7 +26,76 @@ const WATCHED_BOOKS = [
 
 const iso = (v) => (v instanceof Date ? v.toISOString() : v ?? null);
 
+/**
+ * The same bar, from the public surface.
+ *
+ * `fetchPulse` asks Mongo "when did each feed last write", which a deployed
+ * instance cannot ask at all — so the bar was simply absent there, and the one
+ * place you most want to know whether the upstream is moving had no indicator.
+ *
+ * The pivot answers a near-identical question: every price carries the moment
+ * the book last moved it, so the newest `current_at` per book IS that book's
+ * heartbeat. It reuses the drains the board has already cached, so the bar costs
+ * nothing extra.
+ *
+ * Two entries cannot be reproduced and are left out rather than faked: `optic`
+ * is a fixture-table write time with no counterpart here, and `scores` needs a
+ * score-change timestamp the surface does not publish.
+ */
+/**
+ * Sports sampled for the heartbeat, rather than all sixteen.
+ *
+ * "When did TAB last move a price" is answered just as well by the busy sports
+ * as by every one of them, and draining the lot took 13.6s cold. These six
+ * between them cover the clock, and they are the drains the board has already
+ * cached — so on a warm instance the bar costs nothing.
+ */
+const PULSE_SPORTS = ['soccer', 'tennis', 'basketball', 'baseball', 'icehockey', 'amfootball'];
+
+async function apiPulse() {
+  const rows = (
+    await Promise.all(PULSE_SPORTS.map((s) => apiOddsForSport(s).catch(() => [])))
+  ).flat();
+
+  const bookAt = new Map();
+  let liveAt = null;
+  const liveFixtures = new Set();
+  for (const r of rows) {
+    const at = r.current_at ? new Date(r.current_at).getTime() : null;
+    if (!at) continue;
+    const prev = bookAt.get(r.sportsbook);
+    if (!prev || at > prev) bookAt.set(r.sportsbook, at);
+    if (r.status === 'active') {
+      if (!liveAt || at > liveAt) liveAt = at;
+      if (r.fixture_id) liveFixtures.add(r.fixture_id);
+    }
+  }
+  const stamp = (ms) => (ms ? new Date(ms).toISOString() : null);
+
+  return [
+    ...WATCHED_BOOKS.map((b) => ({
+      key: b.key,
+      label: b.label,
+      at: stamp(bookAt.get(b.key)),
+      idle: !bookAt.has(b.key),
+      warn: b.warn,
+      stale: b.stale,
+    })),
+    {
+      key: 'live',
+      label: 'Quoting',
+      at: stamp(liveAt),
+      detail: liveFixtures.size ? `${liveFixtures.size}` : undefined,
+      // Nothing being quoted at 4am is not a fault.
+      idle: liveFixtures.size === 0,
+      warn: 5,
+      stale: 15,
+    },
+  ];
+}
+
 export async function fetchPulse() {
+  if (isApi) return apiPulse();
   const fixtures = await coll('fixtures');
   const now = Date.now();
 

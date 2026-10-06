@@ -88,8 +88,12 @@ export const CAPABILITIES = {
   mappingWrite: isMongo || mirrorConfigured,
   /** Browsing arbitrary past dates; the API surface only carries a short window. */
   history: isMongo,
-  /** Feed-freshness heartbeats, which read Mongo write timestamps. */
-  pulse: isMongo,
+  /**
+   * Feed-freshness heartbeats. On Mongo these are write timestamps; on the API
+   * source they are the newest price time per book, which answers the same
+   * question — see apiPulse.
+   */
+  pulse: true,
 };
 
 /** One line for the startup log, so the running mode is never a guess. */
