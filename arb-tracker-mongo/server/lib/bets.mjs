@@ -143,6 +143,15 @@ function swiftSelection(bet, gutsyEventId) {
 export const COUNTER_ENTRY = /^(Return of|Cancellation of)/;
 
 /**
+ * A bet that never stood. Both halves of a cancellation say so in `bet_type` —
+ * the original ("Cancelled at Tkt: 6490828", +250) and its reversal
+ * ("Cancellation of Tkt: 6490674", -250) — so that field removes the pair in
+ * one condition, where the status alone caught only the reversal and left 46
+ * cancelled bets on the feed over three days.
+ */
+export const VOID_BET = /cancellation/i;
+
+/**
  * Tidy a free-text field from either source. Swiftbet selections arrive padded
  * (" Kaleb Johnson Anytime "), and the Multis settlement status is stored as a
  * fragment of HTML ("Return of<br>Tkt: 6335418") — neither belongs on screen
@@ -313,6 +322,7 @@ async function multiBetsFor(db, eventId, fixtureId) {
       event_identifier: { $in: eventIds },
       transaction_date: { $gte: BET_CUTOFF },
       bet_status: { $not: COUNTER_ENTRY },
+      bet_type: { $not: VOID_BET },
     })
     .sort({ transaction_date: -1 })
     .limit(MAX_PER_BRAND * 2)

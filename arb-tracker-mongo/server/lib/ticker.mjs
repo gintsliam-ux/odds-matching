@@ -1,7 +1,7 @@
 import { coll, mongoConfigured } from './mongo.mjs';
 import { apiFixtures, apiOddsForFixture, apiOddsForSport } from './sportApi.mjs';
 import { betsConfigured, betsDb } from './betsMongo.mjs';
-import { betInstant, COUNTER_ENTRY } from './bets.mjs';
+import { betInstant, COUNTER_ENTRY, VOID_BET } from './bets.mjs';
 
 /**
  * The bet ticker: the latest single bets across every brand, side by side with
@@ -77,7 +77,8 @@ const RACING = /racing|gallop|greyhound|harness|trot|thoroughbred/i;
 const SPORT_SINGLE = {
   bets: { 'derived.is_racing': false, 'derived.type': 'SINGLE' },
   multi_bets: {
-    bet_type: { $not: /multi/i },
+    // Multis are not singles; a cancellation is not a bet. See VOID_BET.
+    bet_type: { $not: /multi|cancellation/i },
     sport_name: { $not: RACING, $nin: [null, ''] },
     bet_status: { $not: COUNTER_ENTRY },
   },
@@ -561,7 +562,9 @@ async function resolveByNameAndStart(bets, byEventId, fixtures) {
   if (!candidates.length) return;
 
   for (const b of orphans) {
-    const want = new Set(key(b.event).split(' ').filter((t) => t.length > 2));
+    const want = new Set(
+      key(b.event).split(' ').filter((t) => t.length > 2 && !FORMAT_TOKEN.test(t)),
+    );
     if (want.size < 2) continue;
     const at = new Date(b.startsAt).getTime();
     const hits = candidates.filter((f) => {
@@ -581,6 +584,16 @@ async function resolveByNameAndStart(bets, byEventId, fixtures) {
     fixtures.set(f.fixture_id, f);
   }
 }
+
+/**
+ * Words that name a FORMAT rather than a competitor.
+ *
+ * Swiftbet writes cricket sides as "India T20" and "Bahrain T20" where the
+ * fixture is plain "India v West Indies". Counted as part of the name, the
+ * suffix drags a perfect match down to three tokens out of four — 0.75, just
+ * under the bar — and every T20 international went unmatched for it.
+ */
+const FORMAT_TOKEN = /^(t20|t10|odi|test|xi|100|womens?|mens?)$/;
 
 /** Normalise for comparing a bet's outcome text against a price's selection. */
 const key = (s) =>
@@ -706,11 +719,18 @@ function parseBetMarket(market, outcome) {
     .replace(/\s+/g, ' ')
     .trim();
 
-  const handicap = /\b(handicap|line|spread|point spread)\b/.test(km) || (line != null && !/\btotal\b/.test(km));
-  if (handicap && line != null) {
+  // A market that SAYS handicap is one.
+  if (/\b(handicap|line|spread|point spread)\b/.test(km) && line != null) {
     return { kind: 'spread', marketIds: [`${period}spread`], name, line };
   }
 
+  /*
+   * A market that says head-to-head is one, whatever digits the outcome
+   * happens to contain. This has to be decided BEFORE a line is inferred:
+   * swiftbet writes cricket sides as "India T20", the 20 reads as a number,
+   * and a plain head-to-head bet was being hunted for as a spread at line 20 —
+   * which of course priced nothing.
+   */
   if (/\b(head to head|h2h|moneyline|money line|match result|result|win|winner|to win|draw)\b/.test(km)) {
     return {
       kind: 'moneyline',
@@ -718,6 +738,11 @@ function parseBetMarket(market, outcome) {
       name,
       line: null,
     };
+  }
+
+  // Otherwise a line in the text is the only sign it is a handicap at all.
+  if (line != null && !/\btotal\b/.test(km)) {
+    return { kind: 'spread', marketIds: [`${period}spread`], name, line };
   }
   return null;
 }
