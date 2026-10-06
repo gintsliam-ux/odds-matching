@@ -198,6 +198,11 @@ function normalise(o) {
     resolved: isResolved(text(o.result)),
     pl: isResolved(text(o.result)) ? num(o.pl) : null,
     em: num(o.em),
+    // The book's own event id and sport, so a row can link back to their page
+    // — see src/lib/bookmakerUrl.ts. Null for swiftbet, whose URL shape is not
+    // known and whose ids are UUIDs rather than the numeric ones mybet mints.
+    eventId: o.eventId ?? null,
+    sport: text(o.sport),
   };
 }
 
@@ -377,6 +382,10 @@ async function multiBetsFor(db, eventId, fixtureId) {
        * event — same rule the ticker uses, see classifyLeadSegments.
        */
       market: marketFromSlip(r, satellites) ?? r.bet_type ?? null,
+      // The book's own event id and sport, so the row can link back to their
+      // page for this match — see src/lib/bookmakerUrl.ts.
+      eventId: r.event_identifier != null ? String(r.event_identifier) : null,
+      sport: r.sport_name ?? null,
       betType: r.transaction_multid > 0 ? 'Multi' : r.sgm_flag ? 'SGM' : 'Single',
       legCount: Array.isArray(r.legs) && r.legs.length ? r.legs.length : null,
       // A non-zero bonus_bet is what marks a bonus stake here, not a flag.

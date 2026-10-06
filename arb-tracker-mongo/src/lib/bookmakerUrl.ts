@@ -16,6 +16,18 @@
  */
 const MYBET_SPORT_CODE: Record<string, string> = {
   Basketball: 'bask',
+  Baseball: 'base',
+  Soccer: 'socc',
+  Tennis: 'tenn',
+  Cricket: 'cric',
+  'Ice Hockey': 'nhl',
+  'American Football': 'grid',
+  'Aussie Rules': 'afl',
+  // The books' own spellings too, so this works on anything that has not been
+  // through the display vocabulary — mybet writes Gridiron and Australian Rules.
+  Gridiron: 'grid',
+  'Australian Rules': 'afl',
+  Football: 'socc',
 };
 
 const HOST: Record<string, string> = {

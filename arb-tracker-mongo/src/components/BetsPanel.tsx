@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Receipt } from 'lucide-react';
+import { ExternalLink, Receipt } from 'lucide-react';
 import { fetchBets, type Bet, type BrandBets, type FixtureBets } from '../lib/db';
 import { PanelNotice, SubTabs } from './EventTabs';
 import { BRAND_TONE } from '../lib/brands';
 import { marketLabel } from '../lib/marketLabel';
+import { bookmakerUrl } from '../lib/bookmakerUrl';
 
 export type { BetBrand } from '../lib/brands';
 import type { BetBrand } from '../lib/brands';
@@ -42,14 +43,29 @@ function ResultChip({ result }: { result: string | null }) {
   );
 }
 
-function BetRow({ bet }: { bet: Bet }) {
+function BetRow({ bet, brand }: { bet: Bet; brand: BetBrand }) {
+  // The book's own page for this match, where the URL can be built honestly.
+  const href = bookmakerUrl(brand, bet.sport ?? null, bet.eventId ?? null);
   const plTone = bet.pl == null ? 'text-slate-600' : bet.pl > 0 ? 'text-emerald-400' : bet.pl < 0 ? 'text-rose-400' : 'text-slate-400';
   return (
     <tr className="border-b border-surface-border/60 last:border-0 hover:bg-white/[0.03]">
       <td className="whitespace-nowrap px-3 py-2 text-slate-400">{when(bet.placedAt)}</td>
       <td className="max-w-[260px] px-3 py-2">
-        <div className="truncate text-slate-200" title={bet.selection ?? undefined}>
-          {bet.selection ?? '–'}
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-slate-200" title={bet.selection ?? undefined}>
+            {bet.selection ?? '–'}
+          </span>
+          {href && (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open this event on the book's site"
+              className="shrink-0 text-slate-600 transition hover:text-slate-300"
+            >
+              <ExternalLink size={11} />
+            </a>
+          )}
         </div>
         {bet.market && (
           <div className="truncate text-[11px] text-slate-500" title={bet.market}>
@@ -98,7 +114,7 @@ function BetRow({ bet }: { bet: Bet }) {
   );
 }
 
-function BrandTable({ data, label }: { data: BrandBets; label: string }) {
+function BrandTable({ data, label, brand }: { data: BrandBets; label: string; brand: BetBrand }) {
   if (data.bets.length === 0) {
     const notice =
       data.reason === 'not-configured'
@@ -160,7 +176,7 @@ function BrandTable({ data, label }: { data: BrandBets; label: string }) {
         </thead>
         <tbody>
           {data.bets.map((b) => (
-            <BetRow key={b.id} bet={b} />
+            <BetRow key={b.id} bet={b} brand={brand} />
           ))}
         </tbody>
       </table>
@@ -235,7 +251,11 @@ export function BetsPanel({ fixtureId }: { fixtureId: string }) {
         active={brand}
         onChange={setBrand}
       />
-      <BrandTable data={data[brand]} label={BRANDS.find((b) => b.key === brand)!.label} />
+      <BrandTable
+        data={data[brand]}
+        label={BRANDS.find((b) => b.key === brand)!.label}
+        brand={brand}
+      />
     </>
   );
 }

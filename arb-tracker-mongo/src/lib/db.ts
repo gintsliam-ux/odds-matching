@@ -351,6 +351,9 @@ export interface Bet {
   pl: number | null;
   /** Expected margin %, where the bet has been enriched. */
   em: number | null;
+  /** The book's own event id and sport, for linking back to their page. */
+  eventId?: string | null;
+  sport?: string | null;
 }
 
 /** Why a brand's list is empty — "never mapped" and "nobody bet" differ. */
