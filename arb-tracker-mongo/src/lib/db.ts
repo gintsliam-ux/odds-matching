@@ -242,6 +242,35 @@ export const fetchEventDetails = (
       )
     : Promise.resolve(null);
 
+/* ------------------------------------------------------------------ ticker */
+
+/** One single bet in the cross-sport feed, beside what the books were showing. */
+export interface TickerBet {
+  brand: 'swiftbet' | 'mybet' | 'multis';
+  placedAt: string | null;
+  startsAt: string | null;
+  sport: string | null;
+  category: string | null;
+  tournament: string | null;
+  event: string | null;
+  market: string | null;
+  outcome: string | null;
+  price: number | null;
+  stake: number | null;
+  bonus: boolean;
+  fixtureId: string | null;
+  /** Book -> best price on the same outcome; null when the market is one this
+   *  board does not price, so a blank column is never mistaken for agreement. */
+  prices: Record<string, number> | null;
+}
+
+export interface TickerFeed {
+  configured: boolean;
+  bets: TickerBet[];
+}
+
+export const fetchTicker = (): Promise<TickerFeed> => apiGet<TickerFeed>('/api/ticker');
+
 /* -------------------------------------------------------------------- bets */
 
 /** One bet on this fixture, normalised across the three brands. */

@@ -11,6 +11,7 @@
  * cannot do; the UI reads `capabilities` and hides those features outright.
  */
 import { coll, mirrorConfigured } from './mongo.mjs';
+import { betTicker } from './ticker.mjs';
 import { CAPABILITIES, DATA_SOURCE, isMongo } from './source.mjs';
 import { apiHealth } from './sportApi.mjs';
 import { betsForFixture } from './bets.mjs';
@@ -80,6 +81,9 @@ const ROUTES = {
   },
 
   // Bets live on a different cluster and are only read when the tab is opened.
+  // The cross-sport bet feed. Cheap enough to serve live; see ticker.mjs.
+  'GET /api/ticker': () => cached('ticker', TTL.bets, betTicker),
+
   'GET /api/bets': async (url) => {
     const id = url.searchParams.get('fixtureId') ?? '';
     if (!id) return { configured: false };
@@ -189,6 +193,7 @@ function unavailable(feature) {
  */
 const MIRROR_SERVES = new Set([
   'GET /api/bets',
+  'GET /api/ticker',
   'GET /api/mapping/tournaments',
   // Writes land on the mirror and queue an intent the tailnet agent replays
   // onto gutsys_sport — see queueForNas in mapping.mjs. Without that queue a
@@ -206,6 +211,7 @@ const MIRROR_SERVES = new Set([
 /** Routes whose data only exists on the Mongo source, and why. */
 const MONGO_ONLY = {
   'GET /api/bets': 'bets',
+  'GET /api/ticker': 'the bet feed',
   'GET /api/mapping/tournaments': 'the mapping tables',
   'POST /api/mapping/tournament': 'the mapping tables',
   'POST /api/mapping/tournaments/apply': 'the mapping tables',

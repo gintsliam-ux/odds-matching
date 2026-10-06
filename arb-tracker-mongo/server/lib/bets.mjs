@@ -63,7 +63,7 @@ function tzOffsetMs(instantMs) {
 }
 
 /** A stored wall-clock reading -> the instant it actually happened. */
-function betInstant(v) {
+export function betInstant(v) {
   if (!v) return null;
   const d = v instanceof Date ? v : new Date(v);
   if (Number.isNaN(d.getTime())) return null;

@@ -1,0 +1,363 @@
+import { coll } from './mongo.mjs';
+import { betsConfigured, betsDb } from './betsMongo.mjs';
+import { betInstant } from './bets.mjs';
+
+/**
+ * The bet ticker: the latest single bets across every brand, side by side with
+ * what the other books were offering on the same outcome.
+ *
+ * Deliberately NOT the per-fixture Bets tab turned sideways. That answers "who
+ * backed this game"; this answers "what is being backed right now, anywhere" —
+ * so it reads from both collections at once, spans all sports, and is ordered by
+ * when the bet was struck rather than by fixture.
+ *
+ * Singles only. A multi's price belongs to the combination, not to any one leg,
+ * so putting it in a column headed "price" beside a book's price on one outcome
+ * would invite a comparison that is not real.
+ */
+
+/**
+ * One sport vocabulary.
+ *
+ * A mapped bet takes OPTIC's slug ("amfootball"), an unmapped one keeps the
+ * brand's own word ("Gridiron"), and the filter chips listed both — "Basketball
+ * 32" beside "basketball 32" as if they were different sports.
+ */
+const SPORT_LABEL = {
+  soccer: 'Soccer', football: 'Soccer',
+  amfootball: 'American Football', gridiron: 'American Football',
+  americanfootball: 'American Football', nfl: 'American Football',
+  basketball: 'Basketball', baseball: 'Baseball', tennis: 'Tennis',
+  icehockey: 'Ice Hockey', 'ice hockey': 'Ice Hockey', hockey: 'Ice Hockey',
+  cricket: 'Cricket', mma: 'MMA', 'mixed martial arts': 'MMA', ufc: 'MMA',
+  boxing: 'Boxing', darts: 'Darts', golf: 'Golf',
+  rugbyleague: 'Rugby League', 'rugby league': 'Rugby League',
+  rugbyunion: 'Rugby Union', 'rugby union': 'Rugby Union',
+  aussierules: 'Aussie Rules', 'australian rules': 'Aussie Rules', afl: 'Aussie Rules',
+  volleyball: 'Volleyball', esports: 'Esports', snooker: 'Snooker',
+  handball: 'Handball', 'table tennis': 'Table Tennis', badminton: 'Badminton',
+};
+const sportLabel = (s) => {
+  if (!s) return null;
+  const k = String(s).toLowerCase().replace(/[^a-z ]/g, '').trim();
+  return SPORT_LABEL[k] ?? SPORT_LABEL[k.replace(/ /g, '')] ?? String(s);
+};
+
+/** Racing is a different product with a different board; this feed is sport. */
+const RACING = /racing|gallop|greyhound|harness|trot|thoroughbred/i;
+
+/** Words that mark a string as naming a market rather than a competition. */
+const MARKETY =
+  /\b(quarter|half|period|inning|set|game|total|over|under|handicap|line|spread|margin|score|winner|result|tri ?bet|double|alternate|player|points|goals|runs|first|last|anytime|odd|even|btts|draw)\b/i;
+
+/** How many bets the feed carries. The table is a glance, not an export. */
+const LIMIT = 150;
+
+/** Only look back this far — an empty feed beats a slow one. */
+const WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+
+const iso = (v) => (v instanceof Date ? v.toISOString() : v ?? null);
+const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/** Strip the HTML a couple of the feeds wrap their text in. */
+const text = (v) =>
+  v == null ? null : String(v).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() || null;
+
+/* ------------------------------------------------------------------ sources */
+
+/** Swiftbet singles. The leg carries the event; `selection_data` the market. */
+async function swiftSingles(db, since) {
+  const rows = await db
+    .collection('bets')
+    .find({ 'derived.is_racing': false, 'derived.type': 'SINGLE', bet_time: { $gte: since } })
+    .sort({ bet_time: -1 })
+    .limit(LIMIT)
+    .project({
+      _id: 0, bet_time: 1, odd: 1, bet_amount: 1, legs: 1, is_bonus: 1,
+      'derived.sport': 1, 'derived.market_raw': 1, 'derived.mt': 1,
+      'derived.legs_event_ids': 1, 'derived.minLegEventTime': 1,
+    })
+    .toArray();
+
+  return rows.map((b) => {
+    const legs = typeof b.legs === 'string' ? safeParse(b.legs) : b.legs ?? [];
+    const leg = legs[0] ?? {};
+    // The market lives in selection_data.market_name. `market_type` reads like
+    // a market and is not one — it calls a Draw No Bet "Match Result".
+    const sd = leg.selections?.[0]?.selection_data?.[0] ?? {};
+    return {
+      brand: 'swiftbet',
+      placedAt: iso(betInstant(b.bet_time)),
+      startsAt: iso(b.derived?.minLegEventTime ?? leg.event_time),
+      sport: sportLabel(b.derived?.sport),
+      tournament: text(leg.meeting_name),
+      event: text(leg.event_name),
+      market: text(sd.market_name ?? b.derived?.market_raw),
+      outcome: text(sd.name ?? leg.selections?.[0]?.name),
+      price: num(b.odd),
+      stake: num(b.bet_amount),
+      bonus: !!b.is_bonus,
+      eventId: (b.derived?.legs_event_ids ?? [])[0] ?? null,
+    };
+  });
+}
+
+/** Mybet and Multis — one collection, split on the licence it was struck under. */
+async function multiSingles(db, since) {
+  const rows = await db
+    .collection('multi_bets')
+    .find({
+      bet_type: { $not: /multi/i },
+      sport_name: { $not: RACING, $nin: [null, ''] },
+      transaction_date: { $gte: since },
+    })
+    .sort({ transaction_date: -1 })
+    .limit(LIMIT)
+    .project({
+      _id: 0, transaction_date: 1, price: 1, amount_bet: 1, bonus_bet: 1,
+      sport_name: 1, bet_type: 1, selections: 1, event_string: 1,
+      event_identifier: 1, transaction_licenseid: 1,
+    })
+    .toArray();
+
+  return rows.map((m) => {
+    /*
+     * The event and market are run together in one string:
+     *   "3rd Quarter - Tri Bet (5.5) - Los Angeles Lakers v Sacramento Kings"
+     * The fixture is the last " - " segment, because team names contain
+     * hyphens far less often than market names do; what precedes it is the
+     * market. Splitting the other way round put "3rd Quarter" in the event.
+     */
+    const parts = String(m.event_string ?? '').split(' - ');
+    const event = parts.length > 1 ? parts.pop().trim() : text(m.event_string);
+    // What precedes the fixture is sometimes the market ("3rd Quarter - Tri Bet
+    // (5.5)") and sometimes the competition ("WTA Beijing"). Carried as a
+    // candidate and decided once the fixture is known — its tournament settles
+    // which one this is.
+    const lead = parts.length ? parts.join(' - ').trim() : null;
+    return {
+      brand: m.transaction_licenseid === 'MultisComAu' ? 'multis' : 'mybet',
+      placedAt: iso(betInstant(m.transaction_date)),
+      startsAt: null,
+      sport: sportLabel(m.sport_name),
+      tournament: null,
+      event: text(event),
+      // `bet_type` is the market ("Win", "Handicap", "Total"). The leading
+      // segment is sometimes MORE specific ("3rd Quarter - Tri Bet (5.5)") and
+      // sometimes just the competition ("WTA Beijing", "Argentine Liga
+      // Nacional"), so it is only preferred when it actually reads like a
+      // market. Comparing it with the fixture's tournament instead was no good:
+      // OPTIC says "Argentina Lnb" where mybet says "Argentine Liga Nacional",
+      // which share no whole word.
+      market: MARKETY.test(lead ?? '') ? text(lead) : text(m.bet_type),
+      outcome: text(m.selections),
+      price: num(m.price),
+      stake: num(m.amount_bet),
+      bonus: num(m.bonus_bet) ? true : false,
+      eventId: m.event_identifier != null ? String(m.event_identifier) : null,
+    };
+  });
+}
+
+function safeParse(s) {
+  try {
+    const v = JSON.parse(s || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+/* ------------------------------------------------- the fixture, and the book */
+
+/**
+ * Resolve each bet's book event to an OPTIC fixture, for the columns the bet
+ * itself cannot supply — category, the canonical tournament, the real start —
+ * and to find the other books' prices.
+ *
+ * Unmapped bets are KEPT. A bet nobody has mapped is still a bet someone struck,
+ * and dropping it would quietly make the busiest competitions look idle.
+ */
+async function fixturesFor(bets) {
+  const ids = [...new Set(bets.map((b) => b.eventId).filter(Boolean))];
+  if (!ids.length) return { byEventId: new Map(), fixtures: new Map() };
+
+  const maps = await (await coll('eventMapping'))
+    .find({ gutsy_event_id: { $in: ids } })
+    .project({ _id: 0, gutsy_event_id: 1, optic_fixture_id: 1, confidence: 1 })
+    .toArray();
+  const byEventId = new Map();
+  for (const m of maps) {
+    if (!m.optic_fixture_id) continue;
+    const prev = byEventId.get(String(m.gutsy_event_id));
+    if (!prev || (m.confidence ?? 0) > (prev.confidence ?? 0)) byEventId.set(String(m.gutsy_event_id), m);
+  }
+
+  const fixtureIds = [...new Set([...byEventId.values()].map((m) => m.optic_fixture_id))];
+  const fixtures = new Map();
+  if (fixtureIds.length) {
+    for (const f of await (await coll('fixtures'))
+      .find({ fixture_id: { $in: fixtureIds } })
+      .project({
+        _id: 0, fixture_id: 1, sport: 1, category: 1, tournament: 1,
+        home_team: 1, away_team: 1, event_name: 1, scheduled_start: 1,
+      })
+      .toArray()) {
+      fixtures.set(f.fixture_id, f);
+    }
+  }
+  return { byEventId, fixtures };
+}
+
+/** Normalise for comparing a bet's outcome text against a price's selection. */
+const key = (s) =>
+  String(s ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+/**
+ * "Safiullin, Roman" and "Roman Safiullin" are the same person. Compare as word
+ * SETS, so surname-first ordering stops mattering.
+ *
+ * Scored BOTH ways, never against the shorter side. A subset test called
+ * "Los Angeles Lakers and Over +58.5" — one leg of a same-game multi — equal to
+ * "Los Angeles Lakers", and the row showed the moneyline prices beside a bet
+ * that was not the moneyline.
+ */
+function sameSelection(a, b) {
+  const A = new Set(key(a).split(' ').filter(Boolean));
+  const B = new Set(key(b).split(' ').filter(Boolean));
+  if (!A.size || !B.size) return false;
+  let hit = 0;
+  for (const t of A) if (B.has(t)) hit++;
+  return (2 * hit) / (A.size + B.size) >= 0.8;
+}
+
+/**
+ * The market ids a bet's market name might be asking about.
+ *
+ * Whole-name matches only, and nothing combined. A same-game multi reads
+ * "1st quarter winner / 1st quarter total points 58.5" and used to satisfy a
+ * loose /win/ test, so a parlay leg was priced against the full-match
+ * moneyline. A market this cannot name confidently gets no comparison, which is
+ * the honest answer — a blank column beats a wrong one.
+ */
+function marketIdsFor(name) {
+  const k = key(name);
+  if (!k) return [];
+  // Combined or period-scoped markets are not what this board prices here.
+  if (/\//.test(String(name ?? '')) || /\b(and|quarter|half|period|inning|set)\b/.test(k)) return [];
+  if (/^(head to head|match result|moneyline|money line|h2h|win|winner|match winner)$/.test(k)) {
+    return ['moneyline', 'moneyline_3way'];
+  }
+  if (/^(line|spread|handicap|point spread|match handicap)$/.test(k)) return ['spread'];
+  if (/^(total|totals|total points|total goals|total runs|over under|total match points)$/.test(k)) return ['total'];
+  return [];
+}
+
+/**
+ * What every book was offering on the same outcome.
+ *
+ * Only for markets this board actually prices — a comparison column that is
+ * blank because the market is exotic looks the same as one blank because the
+ * books disagree, and only one of those is interesting.
+ */
+async function pricesFor(bets, byEventId, fixtures) {
+  const wanted = new Map(); // fixture_id -> bets needing it
+  for (const b of bets) {
+    const m = b.eventId ? byEventId.get(String(b.eventId)) : null;
+    if (!m) continue;
+    if (!marketIdsFor(b.market).length) continue;
+    const list = wanted.get(m.optic_fixture_id) ?? [];
+    list.push(b);
+    wanted.set(m.optic_fixture_id, list);
+  }
+  if (!wanted.size) return;
+
+  const rows = await (await coll('odds'))
+    .find({ fixture_id: { $in: [...wanted.keys()] }, is_live: { $ne: true } })
+    .project({
+      _id: 0, fixture_id: 1, market_id: 1, selection: 1, line: 1,
+      sportsbook: 1, is_lay: 1, current_price: 1,
+    })
+    .toArray();
+
+  const byFixture = new Map();
+  for (const r of rows) {
+    const list = byFixture.get(r.fixture_id) ?? [];
+    list.push(r);
+    byFixture.set(r.fixture_id, list);
+  }
+
+  for (const [fixtureId, list] of wanted) {
+    const all = byFixture.get(fixtureId) ?? [];
+    for (const b of list) {
+      const ids = marketIdsFor(b.market);
+      const hits = all.filter(
+        (r) => !r.is_lay && ids.includes(r.market_id) && sameSelection(r.selection, b.outcome),
+      );
+      if (!hits.length) continue;
+      const best = new Map();
+      for (const r of hits) {
+        const p = num(r.current_price);
+        if (p == null) continue;
+        const prev = best.get(r.sportsbook);
+        if (prev == null || p > prev) best.set(r.sportsbook, p);
+      }
+      if (best.size) b.prices = Object.fromEntries([...best.entries()].sort());
+    }
+  }
+}
+
+/* -------------------------------------------------------------------- feed */
+
+export async function betTicker() {
+  if (!betsConfigured) return { configured: false, bets: [] };
+  const db = await betsDb();
+  if (!db) return { configured: false, bets: [] };
+
+  const since = new Date(Date.now() - WINDOW_MS);
+  const [swift, multi] = await Promise.all([
+    swiftSingles(db, since).catch(() => []),
+    multiSingles(db, since).catch(() => []),
+  ]);
+
+  const bets = [...swift, ...multi]
+    .filter((b) => b.placedAt)
+    .sort((a, b) => String(b.placedAt).localeCompare(String(a.placedAt)))
+    .slice(0, LIMIT);
+
+  const { byEventId, fixtures } = await fixturesFor(bets);
+  for (const b of bets) {
+    const m = b.eventId ? byEventId.get(String(b.eventId)) : null;
+    const f = m ? fixtures.get(m.optic_fixture_id) : null;
+    b.fixtureId = m?.optic_fixture_id ?? null;
+    if (f) {
+      // The fixture is the better source for these: one canonical spelling,
+      // and a category the bet never carries.
+      b.sport = sportLabel(f.sport) ?? b.sport;
+      b.category = f.category ?? null;
+      b.tournament = f.tournament ?? b.tournament;
+      /*
+       * Decide what that leading segment was. If it reads like the competition
+       * the fixture says this is, it was the tournament and the market is the
+       * bet type; otherwise it genuinely was a market and belongs in that
+       * column. "WTA Beijing" was showing up under Market until this.
+       */
+
+      b.event = f.event_name ?? (f.home_team && f.away_team ? `${f.home_team} v ${f.away_team}` : b.event);
+      b.startsAt = iso(f.scheduled_start) ?? b.startsAt;
+    } else {
+      b.category = null;
+    }
+  }
+  await pricesFor(bets, byEventId, fixtures).catch(() => {});
+
+  return {
+    configured: true,
+    bets: bets.map((b) => ({ ...b, prices: b.prices ?? null })),
+  };
+}

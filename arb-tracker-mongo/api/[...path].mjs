@@ -76,7 +76,7 @@ export default async function handler(req, res) {
      *   the board       120s   sixteen sports; status is still timely enough
      *   mapping, meta   300s   a 20-second read that barely moves
      */
-    const CHEAP_AND_LIVE = new Set(['/api/bets', '/api/pulse']);
+    const CHEAP_AND_LIVE = new Set(['/api/bets', '/api/ticker', '/api/pulse']);
     const PER_FIXTURE = new Set(['/api/odds', '/api/event/details']);
     const statusful = CHEAP_AND_LIVE.has(url.pathname);
     const perFixture = PER_FIXTURE.has(url.pathname);
