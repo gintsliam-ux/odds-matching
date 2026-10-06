@@ -60,13 +60,25 @@ export default async function handler(req, res) {
      * expensive, slow-moving reads keep the generous window that makes the
      * board affordable at all.
      */
-    const statusful = url.pathname === '/api/events' || url.pathname.startsWith('/api/events/');
+    /*
+     * Time-sensitive reads. Anything someone watches change while they sit on
+     * the page: fixture status, prices, and the bet feed — the scraper lands a
+     * batch every 40s or so, and the edge was serving bets nine minutes stale
+     * on a one-hour stale-while-revalidate.
+     *
+     * Everything else here is slow-moving and expensive — the mapping table is
+     * a 20-second read — so it keeps the long window that makes it affordable.
+     */
+    const LIVEISH = new Set(['/api/events', '/api/bets', '/api/odds', '/api/h2h', '/api/pulse']);
+    const statusful = LIVEISH.has(url.pathname) || url.pathname.startsWith('/api/events/');
     res.setHeader(
       'cache-control',
       out.status === 200 && !empty
         ? statusful
           ? 's-maxage=30, stale-while-revalidate=60'
-          : 's-maxage=300, stale-while-revalidate=3600'
+          // Still generous, but an hour of stale was long enough that a mapping
+        // applied on one page load was missing from the next.
+        : 's-maxage=300, stale-while-revalidate=600'
         : 'no-store',
     );
     res.status(out.status).json(out.body);
