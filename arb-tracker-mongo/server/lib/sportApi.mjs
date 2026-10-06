@@ -650,7 +650,12 @@ export async function apiFixtures(sport) {
 
 async function buildFixtures(sport, window) {
   const [closing, liveAll, liveActive] = await Promise.all([
-    cachedDrain(`odds:${sport}:false:${window.date_from}:${window.date_to}`, () =>
+    // SAME key apiOddsForSport uses. These two drain the identical request and
+    // deliberately share one cached result; giving this one a window-specific
+    // key split them in two, doubled the upstream work per sport, and the extra
+    // drains then failed — which `pricesFor` swallows, so the deployed ticker
+    // simply showed no comparison prices at all and said nothing was wrong.
+    cachedDrain(`odds:${sport}:false`, () =>
       drain('odds-api', { sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED, ...window }),
     ),
     // Enumeration needs the stale live rows too. A match that has just finished
@@ -658,7 +663,7 @@ async function buildFixtures(sport, window) {
     // is in neither of the other two queries, and fell off the board entirely
     // for the hour or so between the final whistle and settlement. Asking for
     // stale live rows is what covers that gap.
-    cachedDrain(`live-all:${sport}:${window.date_from}:${window.date_to}`, () =>
+    cachedDrain(`live-all:${sport}`, () =>
       drain('odds-api', {
         sport, live: 'true', include_stale: 'true', market: BOARD_MARKET, ...window,
       }),

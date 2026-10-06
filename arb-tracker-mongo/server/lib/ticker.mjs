@@ -781,9 +781,19 @@ async function pricesFor(bets, byEventId, fixtures) {
       .toArray();
   } else {
     const onFeed = new Set(wanted.keys());
+    // Reported, not swallowed. When these failed the feed answered 200 with
+    // every bet present and every comparison column blank, which reads as a
+    // quiet market rather than a broken fetch.
+    const failures = [];
     const perSport = await Promise.all(
-      apiSportsIn(bets).map((sport) => apiOddsForSport(sport).catch(() => [])),
+      apiSportsIn(bets).map((sport) =>
+        apiOddsForSport(sport).catch((e) => {
+          failures.push(`${sport}: ${String(e?.message ?? e).slice(0, 80)}`);
+          return [];
+        }),
+      ),
     );
+    if (failures.length) throw new Error(`odds drain failed — ${failures.join(' | ')}`);
     rows = perSport.flat().filter((r) => onFeed.has(r.fixture_id));
 
     /*
