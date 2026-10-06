@@ -17,6 +17,64 @@ import { betsConfigured, betsDb } from './betsMongo.mjs';
  * Mybet and Multis are the same collection, split on `transaction_licenseid`.
  */
 
+/**
+ * Bet timestamps are Sydney wall-clock with a `Z` stuck on the end.
+ *
+ * `gutsy.bets.bet_time` and `multi_bets.transaction_date` both store the local
+ * reading rather than the instant: at 11:57 AEDT the newest rows read
+ * `11:47:31Z` and `11:55:15Z`, while `multi_bets._synced_at` — written by the
+ * scraper itself — correctly read `00:56:20Z`. So the clock is right and the
+ * zone is a lie, and the browser then renders it in the viewer's zone and adds
+ * the eleven hours a second time: a bet struck at 10:40am displayed as 21:40.
+ *
+ * Reinterpreted here rather than shifted by a constant, because the offset is
+ * +11 in daylight saving and +10 outside it — a fixed subtraction would be an
+ * hour out for half the year, which is worse than being eleven hours out all of
+ * it, since nobody would notice.
+ *
+ * The right fix is upstream, in whatever writes these. This keeps the page
+ * honest until that happens; when it is fixed, these calls come out.
+ */
+const BET_TZ = 'Australia/Sydney';
+const TZ_PARTS = new Intl.DateTimeFormat('en-US', {
+  timeZone: BET_TZ, hour12: false,
+  year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit',
+});
+
+/**
+ * How far ahead of UTC the Sydney clock reads at a given instant.
+ *
+ * Computed on whole seconds and rounded to whole minutes, because
+ * `formatToParts` has no milliseconds: comparing a second-precision reading
+ * against a millisecond-precision instant folds the remainder into the offset,
+ * and applying that twice moved 11:55:15.483 to 00:55:16.449. Every real zone
+ * offset is a whole number of minutes.
+ */
+function tzOffsetMs(instantMs) {
+  const whole = Math.floor(instantMs / 1000) * 1000;
+  const p = Object.fromEntries(
+    TZ_PARTS.formatToParts(new Date(whole))
+      .filter((x) => x.type !== 'literal')
+      .map((x) => [x.type, Number(x.value)]),
+  );
+  const raw = Date.UTC(p.year, p.month - 1, p.day, p.hour % 24, p.minute, p.second) - whole;
+  return Math.round(raw / 60_000) * 60_000;
+}
+
+/** A stored wall-clock reading -> the instant it actually happened. */
+function betInstant(v) {
+  if (!v) return null;
+  const d = v instanceof Date ? v : new Date(v);
+  if (Number.isNaN(d.getTime())) return null;
+  const naive = d.getTime();
+  // Two passes so a timestamp inside a DST transition resolves to the offset
+  // that applies at the real instant, not the naive one.
+  let off = tzOffsetMs(naive);
+  off = tzOffsetMs(naive - off);
+  return new Date(naive - off);
+}
+
 /** Nothing before this is trusted — 2022 was anomalous and is ignored everywhere. */
 const BET_CUTOFF = new Date('2023-01-01T00:00:00.000Z');
 
@@ -131,7 +189,7 @@ async function swiftbetFor(db, gutsyEventId) {
     const { selection, market, legCount } = swiftSelection(b, gutsyEventId);
     return normalise({
       id: b.bet_id ?? String(b._id),
-      placedAt: iso(b.bet_time),
+      placedAt: iso(betInstant(b.bet_time)),
       // Never truncated: the whole point of showing a user id is being able to
       // go and look the account up.
       user: b.user_id ?? null,
@@ -192,7 +250,7 @@ async function multiBetsFor(db, eventId) {
     const e = em.get(r.transaction_id);
     const bet = normalise({
       id: String(r.transaction_id ?? r._id),
-      placedAt: iso(r.transaction_date),
+      placedAt: iso(betInstant(r.transaction_date)),
       user: r.user_accountID != null ? String(r.user_accountID) : null,
       stake: r.amount_bet,
       price: r.price,
