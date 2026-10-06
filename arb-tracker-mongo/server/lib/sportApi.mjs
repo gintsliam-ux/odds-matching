@@ -607,19 +607,63 @@ export async function apiOddsForFixture(fixtureId, sport) {
 }
 
 /** The fixtures the surface knows about for a sport, in board shape. */
+/**
+ * One fixture by id, outside the board's rolling window.
+ *
+ * `eventById` used to answer this by scanning the board, which meant a link to
+ * anything older than two days returned nothing and the page simply did not
+ * load — even though the fixture, and its prices, were still perfectly
+ * reachable. The id carries the date it happened on (20261002DB852AED), so the
+ * day it names is asked for directly.
+ *
+ * Fanned out across sports because the id does not say which one it is, and the
+ * surface is queried per sport. One day of one sport is a small ask, and the
+ * answer is cached, so this costs a single cold page load.
+ */
+export async function apiFixtureById(fixtureId, sports) {
+  const m = /^(\d{4})(\d{2})(\d{2})/.exec(String(fixtureId ?? ''));
+  if (!m) return null;
+  const day = `${m[1]}-${m[2]}-${m[3]}`;
+  const list = sports?.length ? sports : FALLBACK_SPORTS;
+
+  const found = await Promise.all(
+    list.map(async (sport) => {
+      const rows = await cachedDrain(`day:${sport}:${day}`, () =>
+        drain('odds-api', {
+          sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED,
+          date_from: day, date_to: day,
+        }),
+      ).catch(() => []);
+      return rows.some((r) => r.optic_fixture_id === fixtureId) ? sport : null;
+    }),
+  );
+  const sport = found.find(Boolean);
+  if (!sport) return null;
+  return (await apiFixturesForDay(sport, day)).find((f) => f.fixture_id === fixtureId) ?? null;
+}
+
+/** The board's fixture builder, pointed at one day instead of the window. */
+async function apiFixturesForDay(sport, day) {
+  return buildFixtures(sport, { date_from: day, date_to: day });
+}
+
 export async function apiFixtures(sport) {
+  return buildFixtures(sport, boardWindow());
+}
+
+async function buildFixtures(sport, window) {
   const [closing, liveAll, liveActive] = await Promise.all([
-    cachedDrain(`odds:${sport}:false`, () =>
-      drain('odds-api', { sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED, ...boardWindow() }),
+    cachedDrain(`odds:${sport}:false:${window.date_from}:${window.date_to}`, () =>
+      drain('odds-api', { sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED, ...window }),
     ),
     // Enumeration needs the stale live rows too. A match that has just finished
     // has no active price left, and is not yet settled into `odds_sp` — so it
     // is in neither of the other two queries, and fell off the board entirely
     // for the hour or so between the final whistle and settlement. Asking for
     // stale live rows is what covers that gap.
-    cachedDrain(`live-all:${sport}`, () =>
+    cachedDrain(`live-all:${sport}:${window.date_from}:${window.date_to}`, () =>
       drain('odds-api', {
-        sport, live: 'true', include_stale: 'true', market: BOARD_MARKET, ...boardWindow(),
+        sport, live: 'true', include_stale: 'true', market: BOARD_MARKET, ...window,
       }),
     ).catch(() => []),
     liveRows(sport),

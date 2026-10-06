@@ -2,7 +2,7 @@ import { coll } from './mongo.mjs';
 import { fixtureMapping } from './fixtureMapping.mjs';
 import { FIXTURE_PROJECTION, SKIP_SPORTS, toEvents } from './events.mjs';
 import { isApi } from './source.mjs';
-import { apiFixtures, apiOddsForFixture, apiOddsForSport, apiSports } from './sportApi.mjs';
+import { apiFixtureById, apiFixtures, apiOddsForFixture, apiOddsForSport, apiSports } from './sportApi.mjs';
 
 /** BSON Dates on the wire are ISO strings. */
 const iso = (v) => (v instanceof Date ? v.toISOString() : v ?? null);
@@ -145,9 +145,14 @@ export async function eventsForDay(dateStr) {
 export async function eventById(fixtureId) {
   if (!fixtureId) return null;
   if (isApi) {
-    // The API has no by-id lookup, so find it among the fixtures it lists.
     const all = await allEvents();
-    return all.find((e) => e.id === fixtureId) ?? null;
+    const onBoard = all.find((e) => e.id === fixtureId);
+    if (onBoard) return onBoard;
+    // Off the board, which for anything more than two days old is every link
+    // ever shared. The id names the day it happened on, so ask for that day
+    // rather than give up — this is exactly the case the function exists for.
+    const row = await apiFixtureById(fixtureId, [...new Set(all.map((e) => e.sport).filter(Boolean))]);
+    return row ? (await toEvents([row]))[0] ?? null : null;
   }
   const row = await (await coll('fixtures'))
     .findOne({ fixture_id: fixtureId }, { projection: FIXTURE_PROJECTION });
