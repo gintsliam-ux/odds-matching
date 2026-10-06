@@ -715,18 +715,38 @@ export function parseBetMarket(market, outcome) {
   // separately and neither is this bet, so there is nothing honest to show.
   if (/\//.test(m) || /\b(and|both teams)\b/.test(km)) return null;
 
+  /*
+   * Markets this board does not price. They have to be named, because several
+   * read enough like a moneyline to be matched as one and then compared
+   * against it: "Tri Bet (15.5)" is a three-way margin and was shown against
+   * the outright winner at 1.12 for a bet struck at 19.00, and "correct score"
+   * put Uruguay 6-1 at 30.00 beside a 1.038 match-winner price.
+   *
+   * Blank is the honest answer for these. A comparison against a market the
+   * bet was not struck in is worse than no comparison at all.
+   */
+  if (/\b(correct score|tri bet|winning margin|margin|scorer|anytime|to score|race to|odd\/even|odd or even)\b/.test(km)) {
+    return null;
+  }
+
   // Period scope. The surface carries these as a prefix on the market id, and
   // they used to be rejected outright — which threw away every first-half and
   // opening-set bet even though `1h_total` and `1s_total` were sitting there.
+  /*
+   * Each book writes the period its own way, and a phrasing that is not
+   * recognised is worse than one that is not handled: it silently becomes the
+   * FULL match. "half time result" was compared against the match winner, and
+   * "inning 1 Winner" against the result of the whole game.
+   */
   const period =
-    /\b(1st|first) half\b|\b1h\b/.test(km) ? '1h_'
-    : /\b(2nd|second) half\b/.test(km) ? '2h_'
-    : /\b(1st|first) quarter\b/.test(km) ? '1q_'
-    : /\b(2nd|second) quarter\b/.test(km) ? '2q_'
-    : /\b(3rd|third) quarter\b/.test(km) ? '3q_'
-    : /\b(4th|fourth) quarter\b/.test(km) ? '4q_'
-    : /\b(1st|first) set\b/.test(km) ? '1s_'
-    : /\b(1st|first) inn(ing)?\b/.test(km) ? '1inn_'
+    /\b(1st|first) half\b|\bhalf time\b|\bhalftime\b|\bht\b|\b1h\b/.test(km) ? '1h_'
+    : /\b(2nd|second) half\b|\b2h\b/.test(km) ? '2h_'
+    : /\b(1st|first) quarter\b|\bquarter 1\b|\b1q\b/.test(km) ? '1q_'
+    : /\b(2nd|second) quarter\b|\bquarter 2\b|\b2q\b/.test(km) ? '2q_'
+    : /\b(3rd|third) quarter\b|\bquarter 3\b|\b3q\b/.test(km) ? '3q_'
+    : /\b(4th|fourth) quarter\b|\bquarter 4\b|\b4q\b/.test(km) ? '4q_'
+    : /\b(1st|first) set\b|\bset 1\b|\b1s\b/.test(km) ? '1s_'
+    : /\b(1st|first) inn(ing)?s?\b|\binn(ing)?s? 1\b/.test(km) ? '1inn_'
     : '';
 
   // The line can be written on either side: "handicap -3.5" carries it in the
