@@ -287,6 +287,10 @@ async function fixturesFor(bets) {
     if (!prev || (m.confidence ?? 0) > (prev.confidence ?? 0)) byEventId.set(String(m.gutsy_event_id), m);
   }
 
+  // Bets on a market-specific mybet event are resolved through their base
+  // event before the fixture list is built — see resolveSatelliteEvents.
+  await resolveSatelliteEvents(bets, byEventId).catch(() => {});
+
   const fixtureIds = [...new Set([...byEventId.values()].map((m) => m.optic_fixture_id))];
   const fixtures = new Map();
   if (!fixtureIds.length) return { byEventId, fixtures };
@@ -337,6 +341,117 @@ const stripBonus = (v) => {
   return text(t.replace(BONUS_SUFFIX, ''));
 };
 const saysBonus = (v) => BONUS_SUFFIX.test(String(v ?? ''));
+
+/**
+ * mybet mints a SEPARATE event id for every market on a match, and only the
+ * base one carries a competition:
+ *
+ *   3806816  league "National Basketball Association"  description "NBA"
+ *   3817494  league "-"   "Alternate Total Over - Los Angeles Lakers v …"
+ *   3817308  league "-"   "1st Quarter - Line (1.5) - Los Angeles Lakers v …"
+ *
+ * Event mapping is driven by the competition, so the satellites are never
+ * resolved and every bet struck on one shows no sport, tournament or start —
+ * 29 of 36 unmapped bets on a typical feed, all of them on matches that ARE
+ * mapped under their base id.
+ *
+ * They are tied together by sport and suspension time, which siblings share
+ * exactly. The base event is the one whose league is a real competition rather
+ * than "-"; where several matches suspend at the same minute, the fixture's own
+ * teams settle which is which, since the satellite carries the match name and
+ * the base event does not.
+ */
+async function resolveSatelliteEvents(bets, byEventId) {
+  const orphans = bets.filter(
+    (b) => b.eventId && /^\d+$/.test(String(b.eventId)) && !byEventId.has(String(b.eventId)),
+  );
+  if (!orphans.length) return;
+
+  const db = await betsDb();
+  if (!db) return;
+
+  const ids = [...new Set(orphans.map((b) => Number(b.eventId)))];
+  const own = await db
+    .collection('mybet_events')
+    .find({ _id: { $in: ids } })
+    .project({ sport: 1, suspendAt: 1 })
+    .toArray();
+  if (!own.length) return;
+
+  const slotOf = new Map(own.map((e) => [Number(e._id), e]));
+  const slots = [...new Map(own.map((e) => [`${e.sport}|${e.suspendAt}`, e])).values()];
+
+  const siblings = await db
+    .collection('mybet_events')
+    .find({ $or: slots.map((e) => ({ sport: e.sport, suspendAt: e.suspendAt })) })
+    .project({ league: 1, sport: 1, suspendAt: 1 })
+    .toArray();
+
+  const real = (l) => l && String(l).trim() !== '-' && String(l).trim() !== '';
+  const basesBySlot = new Map();
+  for (const e of siblings) {
+    if (!real(e.league)) continue;
+    const k = `${e.sport}|${e.suspendAt}`;
+    basesBySlot.set(k, [...(basesBySlot.get(k) ?? []), String(e._id)]);
+  }
+  if (!basesBySlot.size) return;
+
+  const baseIds = [...new Set([...basesBySlot.values()].flat())];
+  const maps = await (await coll('eventMapping'))
+    .find({ gutsy_event_id: { $in: baseIds } })
+    .project({ _id: 0, gutsy_event_id: 1, optic_fixture_id: 1, confidence: 1 })
+    .toArray();
+  const mapOf = new Map(maps.filter((m) => m.optic_fixture_id).map((m) => [String(m.gutsy_event_id), m]));
+  if (!mapOf.size) return;
+
+  // One fixture lookup for every candidate, so the teams can be checked. The
+  // deployed instance has to do this too: without it an ambiguous slot — three
+  // NBA games tipping at the same minute — would be skipped rather than
+  // resolved, which is safe but needlessly empty.
+  const candidateFixtures = new Set([...mapOf.values()].map((m) => m.optic_fixture_id));
+  const teams = new Map();
+  if (mongoConfigured) {
+    for (const f of await (await coll('fixtures'))
+      .find({ fixture_id: { $in: [...candidateFixtures] } })
+      .project({ _id: 0, fixture_id: 1, home_team: 1, away_team: 1, event_name: 1 })
+      .toArray()) {
+      teams.set(f.fixture_id, f);
+    }
+  } else {
+    await Promise.all(
+      apiSportsIn(orphans).map(async (sport) => {
+        for (const f of await apiFixtures(sport).catch(() => [])) {
+          if (candidateFixtures.has(f.fixture_id)) teams.set(f.fixture_id, f);
+        }
+      }),
+    );
+  }
+
+  for (const b of orphans) {
+    const own = slotOf.get(Number(b.eventId));
+    if (!own) continue;
+    const cands = (basesBySlot.get(`${own.sport}|${own.suspendAt}`) ?? [])
+      .map((id) => mapOf.get(id))
+      .filter(Boolean);
+    if (!cands.length) continue;
+
+    let pick = cands[0];
+    if (cands.length > 1) {
+      // Several matches suspend at this minute: the teams decide.
+      const want = new Set(key(b.event).split(' ').filter((t) => t.length > 2));
+      pick = cands.find((m) => {
+        const f = teams.get(m.optic_fixture_id);
+        if (!f) return false;
+        const got = key(`${f.home_team ?? ''} ${f.away_team ?? ''} ${f.event_name ?? ''}`);
+        let hit = 0;
+        for (const t of want) if (got.includes(t)) hit++;
+        return want.size && hit / want.size >= 0.6;
+      });
+      if (!pick) continue;
+    }
+    byEventId.set(String(b.eventId), pick);
+  }
+}
 
 /** Normalise for comparing a bet's outcome text against a price's selection. */
 const key = (s) =>
