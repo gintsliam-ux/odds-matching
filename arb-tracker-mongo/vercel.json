@@ -5,8 +5,7 @@
   "outputDirectory": "dist",
   "functions": {
     "api/[...path].mjs": {
-      "maxDuration": 60,
-      "memory": 1024
+      "maxDuration": 300
     }
   },
   "rewrites": [

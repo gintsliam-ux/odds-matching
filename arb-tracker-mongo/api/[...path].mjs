@@ -1,4 +1,5 @@
 import { handleApi } from '../server/lib/routes.mjs';
+import { streamTicker } from '../server/lib/sse.mjs';
 
 /**
  * The Vercel host for the API.
@@ -21,6 +22,13 @@ import { handleApi } from '../server/lib/routes.mjs';
  */
 export default async function handler(req, res) {
   const url = new URL(req.url ?? '/', `https://${req.headers.host ?? 'localhost'}`);
+
+  // Streams its own response, so it bypasses the {status, body} path entirely.
+  // Capped just under the function's maxDuration: closing it ourselves is a
+  // clean end the client reconnects from, where being killed mid-write is not.
+  if (url.pathname === '/api/ticker/stream') {
+    return streamTicker(req, res, { maxMs: 290_000 });
+  }
 
   try {
     const out = await handleApi({
@@ -85,9 +93,11 @@ export default async function handler(req, res) {
       out.status === 200 && !empty
         ? statusful
           ? 's-maxage=30, stale-while-revalidate=60'
-          // Still generous, but an hour of stale was long enough that a mapping
-        // applied on one page load was missing from the next.
-        : 's-maxage=300, stale-while-revalidate=600'
+          : perFixture
+            ? 's-maxage=60, stale-while-revalidate=120'
+            // Still generous, but an hour of stale was long enough that a
+            // mapping applied on one page load was missing from the next.
+            : 's-maxage=300, stale-while-revalidate=600'
         : 'no-store',
     );
     res.status(out.status).json(out.body);

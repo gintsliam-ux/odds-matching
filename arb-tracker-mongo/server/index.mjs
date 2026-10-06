@@ -8,6 +8,7 @@ import { closeMongo } from './lib/mongo.mjs';
 import { closeBets } from './lib/betsMongo.mjs';
 import { describeSource } from './lib/source.mjs';
 import { handleApi, warmCaches } from './lib/routes.mjs';
+import { streamTicker } from './lib/sse.mjs';
 
 /**
  * The local / on-NAS host. Serves the same route table a Vercel function does
@@ -105,6 +106,12 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
   if (!url.pathname.startsWith('/api/')) return serveStatic(req, res, url.pathname);
+
+  // Streams its own response, so it cannot go through handleApi's {status, body}.
+  // No duration cap here: this host is long-lived, unlike the serverless one.
+  if (url.pathname === '/api/ticker/stream') {
+    return streamTicker(req, res, { maxMs: 2 ** 31 - 1 });
+  }
 
   try {
     const body = req.method === 'POST' ? await readBody(req) : null;

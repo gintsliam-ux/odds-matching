@@ -246,6 +246,8 @@ export const fetchEventDetails = (
 
 /** One single bet in the cross-sport feed, beside what the books were showing. */
 export interface TickerBet {
+  /** The bet document's own id — stable across a polled and a pushed copy. */
+  id: string;
   brand: 'swiftbet' | 'mybet' | 'multis';
   placedAt: string | null;
   startsAt: string | null;
@@ -270,6 +272,56 @@ export interface TickerFeed {
 }
 
 export const fetchTicker = (): Promise<TickerFeed> => apiGet<TickerFeed>('/api/ticker');
+
+/**
+ * Bets pushed as they are struck, off a Mongo change stream.
+ *
+ * `onBets` gets enriched rows, newest first — the same shape `/api/ticker`
+ * returns, because the server enriches both through one function.
+ *
+ * `onDown` fires when the stream cannot be used at all (no source, or the
+ * browser gave up reconnecting), so the caller can fall back to polling. It is
+ * NOT called for an ordinary reconnect: a serverless host closes the response
+ * when the function hits its duration cap, and EventSource reopens by itself.
+ */
+export function subscribeTicker(
+  onBets: (bets: TickerBet[]) => void,
+  onDown: () => void,
+  onOpen?: () => void,
+): () => void {
+  if (typeof EventSource === 'undefined') {
+    onDown();
+    return () => {};
+  }
+  const es = new EventSource(`${API}/api/ticker/stream`);
+  let closed = false;
+
+  es.addEventListener('open', () => onOpen?.());
+  es.addEventListener('bets', (ev) => {
+    try {
+      const bets = JSON.parse((ev as MessageEvent).data) as TickerBet[];
+      if (Array.isArray(bets) && bets.length) onBets(bets);
+    } catch {
+      // A malformed frame is not worth tearing the stream down for.
+    }
+  });
+  // The server says so explicitly when there is no source to watch; without
+  // this the browser would retry a stream that can never work.
+  es.addEventListener('fatal', () => {
+    closed = true;
+    es.close();
+    onDown();
+  });
+  es.addEventListener('error', () => {
+    if (closed) return;
+    if (es.readyState === EventSource.CLOSED) onDown();
+  });
+
+  return () => {
+    closed = true;
+    es.close();
+  };
+}
 
 /* -------------------------------------------------------------------- bets */
 

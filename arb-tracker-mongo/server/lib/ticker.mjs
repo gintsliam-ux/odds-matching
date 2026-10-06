@@ -65,6 +65,31 @@ const apiSportsIn = (bets) =>
 /** Racing is a different product with a different board; this feed is sport. */
 const RACING = /racing|gallop|greyhound|harness|trot|thoroughbred/i;
 
+/**
+ * What counts as a bet this feed shows. ONE definition, used by the batch query
+ * and by the change stream's server-side filter.
+ *
+ * It was briefly two. The stream re-stated the racing rule as
+ * `/^(horse|harness|greyhound)/` and the live feed filled with trifectas,
+ * because the sport actually reads "Racing - Gallops" and nothing anchored at
+ * the start of it matched.
+ */
+const SPORT_SINGLE = {
+  bets: { 'derived.is_racing': false, 'derived.type': 'SINGLE' },
+  multi_bets: { bet_type: { $not: /multi/i }, sport_name: { $not: RACING, $nin: [null, ''] } },
+};
+
+/**
+ * The same conditions re-keyed onto a change event, so Atlas applies them
+ * before anything crosses the wire. Racing is the bulk of the volume on both
+ * collections; filtering it here rather than in this process is the difference
+ * between receiving every bet struck and receiving the ones we display.
+ */
+export const streamMatch = (name) =>
+  Object.fromEntries(
+    Object.entries(SPORT_SINGLE[name]).map(([k, v]) => [`fullDocument.${k}`, v]),
+  );
+
 /** Words that mark a string as naming a market rather than a competition. */
 const MARKETY =
   /\b(quarter|half|period|inning|set|game|total|over|under|handicap|line|spread|margin|score|winner|result|tri ?bet|double|alternate|player|points|goals|runs|first|last|anytime|odd|even|btts|draw)\b/i;
@@ -88,96 +113,107 @@ const text = (v) =>
 async function swiftSingles(db, since) {
   const rows = await db
     .collection('bets')
-    .find({ 'derived.is_racing': false, 'derived.type': 'SINGLE', bet_time: { $gte: since } })
+    .find({ ...SPORT_SINGLE.bets, bet_time: { $gte: since } })
     .sort({ bet_time: -1 })
     .limit(LIMIT)
     .project({
-      _id: 0, bet_time: 1, odd: 1, bet_amount: 1, legs: 1, is_bonus: 1,
+      bet_time: 1, odd: 1, bet_amount: 1, legs: 1, is_bonus: 1,
       'derived.sport': 1, 'derived.market_raw': 1, 'derived.mt': 1,
       'derived.legs_event_ids': 1, 'derived.minLegEventTime': 1,
     })
     .toArray();
 
-  return rows.map((b) => {
-    const legs = typeof b.legs === 'string' ? safeParse(b.legs) : b.legs ?? [];
-    const leg = legs[0] ?? {};
-    // The market lives in selection_data.market_name. `market_type` reads like
-    // a market and is not one — it calls a Draw No Bet "Match Result".
-    const sd = leg.selections?.[0]?.selection_data?.[0] ?? {};
-    return {
-      brand: 'swiftbet',
-      placedAt: iso(betInstant(b.bet_time)),
-      startsAt: iso(b.derived?.minLegEventTime ?? leg.event_time),
-      sport: sportLabel(b.derived?.sport),
-      tournament: text(leg.meeting_name),
-      event: text(leg.event_name),
-      market: text(sd.market_name ?? b.derived?.market_raw),
-      outcome: text(sd.name ?? leg.selections?.[0]?.name),
-      price: num(b.odd),
-      stake: num(b.bet_amount),
-      bonus: !!b.is_bonus,
-      eventId: (b.derived?.legs_event_ids ?? [])[0] ?? null,
-    };
-  });
+  return rows.map(mapSwift);
 }
 
+/**
+ * One swiftbet document -> one ticker row.
+ *
+ * Exported because the live stream maps a changed document with exactly this
+ * function. A stream that derived its own fields would drift from the batch
+ * query the moment either changed, and the drift would show as a row that
+ * looks subtly different depending on whether it arrived pushed or polled.
+ */
+export function mapSwift(b) {
+  const legs = typeof b.legs === 'string' ? safeParse(b.legs) : b.legs ?? [];
+  const leg = legs[0] ?? {};
+  // The market lives in selection_data.market_name. `market_type` reads like
+  // a market and is not one — it calls a Draw No Bet "Match Result".
+  const sd = leg.selections?.[0]?.selection_data?.[0] ?? {};
+  return {
+    // The document's own id. A pushed row and a polled row describe the same
+    // bet, and without this the client cannot tell that and shows it twice.
+    id: String(b._id),
+    brand: 'swiftbet',
+    placedAt: iso(betInstant(b.bet_time)),
+    startsAt: iso(b.derived?.minLegEventTime ?? leg.event_time),
+    sport: sportLabel(b.derived?.sport),
+    tournament: text(leg.meeting_name),
+    event: text(leg.event_name),
+    market: text(sd.market_name ?? b.derived?.market_raw),
+    outcome: text(sd.name ?? leg.selections?.[0]?.name),
+    price: num(b.odd),
+    stake: num(b.bet_amount),
+    bonus: !!b.is_bonus,
+    eventId: (b.derived?.legs_event_ids ?? [])[0] ?? null,
+  };
+}
 /** Mybet and Multis — one collection, split on the licence it was struck under. */
 async function multiSingles(db, since) {
   const rows = await db
     .collection('multi_bets')
-    .find({
-      bet_type: { $not: /multi/i },
-      sport_name: { $not: RACING, $nin: [null, ''] },
-      transaction_date: { $gte: since },
-    })
+    .find({ ...SPORT_SINGLE.multi_bets, transaction_date: { $gte: since } })
     .sort({ transaction_date: -1 })
     .limit(LIMIT)
     .project({
-      _id: 0, transaction_date: 1, price: 1, amount_bet: 1, bonus_bet: 1,
+      transaction_date: 1, price: 1, amount_bet: 1, bonus_bet: 1,
       sport_name: 1, bet_type: 1, selections: 1, event_string: 1,
       event_identifier: 1, transaction_licenseid: 1,
     })
     .toArray();
 
-  return rows.map((m) => {
-    /*
-     * The event and market are run together in one string:
-     *   "3rd Quarter - Tri Bet (5.5) - Los Angeles Lakers v Sacramento Kings"
-     * The fixture is the last " - " segment, because team names contain
-     * hyphens far less often than market names do; what precedes it is the
-     * market. Splitting the other way round put "3rd Quarter" in the event.
-     */
-    const parts = String(m.event_string ?? '').split(' - ');
-    const event = parts.length > 1 ? parts.pop().trim() : text(m.event_string);
-    // What precedes the fixture is sometimes the market ("3rd Quarter - Tri Bet
-    // (5.5)") and sometimes the competition ("WTA Beijing"). Carried as a
-    // candidate and decided once the fixture is known — its tournament settles
-    // which one this is.
-    const lead = parts.length ? parts.join(' - ').trim() : null;
-    return {
-      brand: m.transaction_licenseid === 'MultisComAu' ? 'multis' : 'mybet',
-      placedAt: iso(betInstant(m.transaction_date)),
-      startsAt: null,
-      sport: sportLabel(m.sport_name),
-      tournament: null,
-      event: text(event),
-      // `bet_type` is the market ("Win", "Handicap", "Total"). The leading
-      // segment is sometimes MORE specific ("3rd Quarter - Tri Bet (5.5)") and
-      // sometimes just the competition ("WTA Beijing", "Argentine Liga
-      // Nacional"), so it is only preferred when it actually reads like a
-      // market. Comparing it with the fixture's tournament instead was no good:
-      // OPTIC says "Argentina Lnb" where mybet says "Argentine Liga Nacional",
-      // which share no whole word.
-      market: MARKETY.test(lead ?? '') ? text(lead) : text(m.bet_type),
-      outcome: text(m.selections),
-      price: num(m.price),
-      stake: num(m.amount_bet),
-      bonus: num(m.bonus_bet) ? true : false,
-      eventId: m.event_identifier != null ? String(m.event_identifier) : null,
-    };
-  });
+  return rows.map(mapMulti);
 }
 
+/** One multi_bets document -> one ticker row. Shared with the live stream. */
+export function mapMulti(m) {
+  /*
+   * The event and market are run together in one string:
+   *   "3rd Quarter - Tri Bet (5.5) - Los Angeles Lakers v Sacramento Kings"
+   * The fixture is the last " - " segment, because team names contain
+   * hyphens far less often than market names do; what precedes it is the
+   * market. Splitting the other way round put "3rd Quarter" in the event.
+   */
+  const parts = String(m.event_string ?? '').split(' - ');
+  const event = parts.length > 1 ? parts.pop().trim() : text(m.event_string);
+  // What precedes the fixture is sometimes the market ("3rd Quarter - Tri Bet
+  // (5.5)") and sometimes the competition ("WTA Beijing"). Carried as a
+  // candidate and decided once the fixture is known — its tournament settles
+  // which one this is.
+  const lead = parts.length ? parts.join(' - ').trim() : null;
+  return {
+    id: String(m._id),
+    brand: m.transaction_licenseid === 'MultisComAu' ? 'multis' : 'mybet',
+    placedAt: iso(betInstant(m.transaction_date)),
+    startsAt: null,
+    sport: sportLabel(m.sport_name),
+    tournament: null,
+    event: text(event),
+    // `bet_type` is the market ("Win", "Handicap", "Total"). The leading
+    // segment is sometimes MORE specific ("3rd Quarter - Tri Bet (5.5)") and
+    // sometimes just the competition ("WTA Beijing", "Argentine Liga
+    // Nacional"), so it is only preferred when it actually reads like a
+    // market. Comparing it with the fixture's tournament instead was no good:
+    // OPTIC says "Argentina Lnb" where mybet says "Argentine Liga Nacional",
+    // which share no whole word.
+    market: MARKETY.test(lead ?? '') ? text(lead) : text(m.bet_type),
+    outcome: text(m.selections),
+    price: num(m.price),
+    stake: num(m.amount_bet),
+    bonus: num(m.bonus_bet) ? true : false,
+    eventId: m.event_identifier != null ? String(m.event_identifier) : null,
+  };
+}
 function safeParse(s) {
   try {
     const v = JSON.parse(s || '[]');
@@ -376,6 +412,25 @@ export async function betTicker() {
     .sort((a, b) => String(b.placedAt).localeCompare(String(a.placedAt)))
     .slice(0, LIMIT);
 
+  const { bets: enriched, pricesError } = await enrich(bets);
+  return {
+    configured: true,
+    source: mongoConfigured ? 'mongo' : 'odds-surface',
+    ...(pricesError ? { pricesError } : {}),
+    bets: enriched,
+  };
+}
+
+/**
+ * Give raw rows their fixture, their canonical names and the other books'
+ * prices. Mutates and returns them.
+ *
+ * Separate from the query so a bet that arrives PUSHED goes through exactly the
+ * same enrichment as one that arrives in the batch — see tickerStream.mjs.
+ */
+export async function enrich(bets) {
+  if (!bets.length) return { bets: [], pricesError: null };
+
   const { byEventId, fixtures } = await fixturesFor(bets);
   for (const b of bets) {
     const m = b.eventId ? byEventId.get(String(b.eventId)) : null;
@@ -397,15 +452,10 @@ export async function betTicker() {
   // this step threw there, but the feed still answered 200 with a plausible
   // shape, so the failure read as "no comparison prices today" from the
   // outside. Anything that degrades the feed now says so in the payload.
-  const failed = await pricesFor(bets, byEventId, fixtures).then(
+  const pricesError = await pricesFor(bets, byEventId, fixtures).then(
     () => null,
     (e) => String(e?.message ?? e).slice(0, 200),
   );
 
-  return {
-    configured: true,
-    source: mongoConfigured ? 'mongo' : 'odds-surface',
-    ...(failed ? { pricesError: failed } : {}),
-    bets: bets.map((b) => ({ ...b, prices: b.prices ?? null })),
-  };
+  return { bets: bets.map((b) => ({ ...b, prices: b.prices ?? null })), pricesError };
 }

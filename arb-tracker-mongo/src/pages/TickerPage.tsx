@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Gift, Loader2, Radio } from 'lucide-react';
-import { fetchTicker, type TickerBet } from '../lib/db';
+import { fetchTicker, subscribeTicker, type TickerBet } from '../lib/db';
 import { BookmakerLogo } from '../components/BookmakerLogo';
 import { brandById, BOOKMAKERS } from '../lib/markets';
 import { eventSlug } from '../lib/routing';
@@ -29,16 +29,30 @@ const BRAND_LABEL: Record<string, string> = {
 const time = (v: string | null) =>
   v ? new Date(v).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '–';
 
+/**
+ * Always dated, never just a time.
+ *
+ * It used to drop the date for anything starting today, which read as a
+ * difference between the brands rather than between the fixtures: swiftbet
+ * carries its own event time and often has one days out, while mybet and
+ * multis only ever get a start from the mapped fixture — usually today's. The
+ * same column was showing "11 Oct, 08:00" on one row and "13:00" on the next.
+ */
 const startLabel = (v: string | null) => {
   if (!v) return '–';
   const d = new Date(v);
-  const today = new Date().toDateString() === d.toDateString();
-  return today
-    ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleString([], {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 };
 
 const fmt = (n: number | null | undefined) => (n != null ? n.toFixed(2) : '–');
+
+/** Matches the server's own cap, so the table holds what the feed holds. */
+const LIMIT = 150;
 
 /** Stakes are money, not odds: whole dollars unless the cents matter. */
 const money = (n: number | null | undefined) =>
@@ -66,9 +80,12 @@ export default function TickerPage() {
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [brand, setBrand] = useState<'all' | 'swiftbet' | 'mybet' | 'multis'>('all');
   const [sport, setSport] = useState<string>('all');
+  const [live, setLive] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    let poll: ReturnType<typeof setInterval> | null = null;
+
     const load = () =>
       fetchTicker()
         .then((d) => {
@@ -77,13 +94,53 @@ export default function TickerPage() {
           setState('ready');
         })
         .catch(() => !cancelled && setState('error'));
+
+    // Polling is the floor, not the plan: it covers the first paint and any
+    // stretch where the stream is not up. In place, with no loading toggle, so
+    // the table never flashes while someone is reading it.
+    const startPolling = () => {
+      if (!poll) poll = setInterval(load, 30_000);
+    };
+    const stopPolling = () => {
+      if (poll) clearInterval(poll);
+      poll = null;
+    };
+
     load();
-    // The feed is the point of the page, so it refreshes itself. In place, with
-    // no loading toggle, so the table never flashes while someone is reading it.
-    const id = setInterval(load, 30_000);
+
+    let opened = false;
+    const unsubscribe = subscribeTicker(
+      (incoming) => {
+        if (cancelled) return;
+        setBets((prev) => {
+          // Keyed on the document id, because a bet can arrive pushed and then
+          // again in a poll, and the two are the same bet.
+          const seen = new Set(incoming.map((b) => b.id));
+          return [...incoming, ...prev.filter((b) => !seen.has(b.id))].slice(0, LIMIT);
+        });
+        setState('ready');
+      },
+      () => {
+        if (cancelled) return;
+        setLive(false);
+        startPolling();
+      },
+      () => {
+        if (cancelled) return;
+        setLive(true);
+        stopPolling();
+        // A reopen means the previous connection ended — a serverless host
+        // closes it at the duration cap — so anything struck in the gap was
+        // never pushed. One refetch closes it.
+        if (opened) load();
+        opened = true;
+      },
+    );
+
     return () => {
       cancelled = true;
-      clearInterval(id);
+      stopPolling();
+      unsubscribe();
     };
   }, []);
 
@@ -120,11 +177,14 @@ export default function TickerPage() {
             <ArrowLeft size={12} /> Board
           </Link>
           <span className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-slate-100">
-            <Radio size={15} className="text-emerald-400" />
+            <Radio
+              size={15}
+              className={live ? 'animate-pulse text-emerald-400' : 'text-slate-600'}
+            />
             Ticker
           </span>
           <span className="text-xs text-slate-600">
-            Latest single bets, every brand, every sport
+            {live ? 'Live — bets appear as they are struck' : 'Latest single bets, every brand, every sport'}
           </span>
           {state === 'loading' && <Loader2 size={13} className="animate-spin text-slate-600" />}
         </div>
@@ -210,7 +270,7 @@ export default function TickerPage() {
               </tr>
             </thead>
             <tbody>
-              {shown.map((b, i) => {
+              {shown.map((b) => {
                 // The bet's own price, against the best of everyone else's, so a
                 // standout is visible without reading every column.
                 const others = b.prices ? Object.values(b.prices) : [];
@@ -218,7 +278,7 @@ export default function TickerPage() {
                 const beatsField = b.price != null && best != null && b.price > best;
                 return (
                   <tr
-                    key={`${b.brand}-${b.placedAt}-${i}`}
+                    key={b.id}
                     className="border-b border-surface-border/40 hover:bg-white/[0.02]"
                   >
                     <td className="px-3 py-1.5">
