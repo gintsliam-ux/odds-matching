@@ -263,6 +263,8 @@ export interface TickerBet {
   price: number | null;
   stake: number | null;
   bonus: boolean;
+  /** Struck but refused by the book. Shown, not hidden. */
+  rejected: boolean;
   fixtureId: string | null;
   /** Book -> best price on the same outcome; null when the market is one this
    *  board does not price, so a blank column is never mistaken for agreement. */

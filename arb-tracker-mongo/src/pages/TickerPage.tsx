@@ -54,6 +54,48 @@ const fmt = (n: number | null | undefined) => (n != null ? n.toFixed(2) : '–')
 /** Matches the server's own cap, so the table holds what the feed holds. */
 const LIMIT = 150;
 
+/** Lowercase inside a title, capitalised at the start of one. */
+const SMALL_WORDS = new Set(['and', 'or', 'the', 'a', 'an', 'of', 'to', 'in', 'on', 'at', 'for', 'vs', 'v', 'inc', 'by']);
+
+/** Already an abbreviation — "MLB", "K.", "2026" — so leave it alone. */
+const ALREADY_SHOUTING = /^[A-Z0-9.+\-/]{2,}$/;
+
+const capitalise = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
+
+const titleCase = (s: string) =>
+  s
+    .split(/\s+/)
+    .map((w, i) => {
+      if (ALREADY_SHOUTING.test(w)) return w;
+      const lower = w.toLowerCase();
+      if (i > 0 && SMALL_WORDS.has(lower)) return lower;
+      // Split on the slash too, or "half time/full time" keeps a lowercase
+      // "full" in the middle of an otherwise capitalised title.
+      return lower.split('/').map(capitalise).join('/');
+    })
+    .join(' ');
+
+/**
+ * How a market reads in the table.
+ *
+ * Each book writes the same market its own way — "head to head", "win match
+ * inc overtime" — so the common ones collapse to one short label, and the rest
+ * are title-cased rather than left in whatever case they arrived in.
+ *
+ * Alternate markets lose their detail deliberately: the line and the side are
+ * already in the Outcome column ("Total Over 22.5 games"), so repeating them
+ * here only costs width.
+ */
+function marketLabel(market: string | null): string {
+  if (!market) return '–';
+  const k = market.toLowerCase();
+  if (k.includes('alternate')) return k.includes('total') ? 'Alt Total' : 'Alt Line';
+  if (/win[- ]draw[- ]win/.test(k)) return 'W-D-W';
+  if (/^(head to head|h2h|moneyline|money line|match result)$/.test(k.trim())) return 'H2H';
+  if (/\bwin match inc overtime\b/.test(k)) return 'H2H';
+  return titleCase(market);
+}
+
 
 /** Stakes are money, not odds: whole dollars unless the cents matter. */
 const money = (n: number | null | undefined) =>
@@ -303,7 +345,7 @@ export default function TickerPage() {
             </span>
             <span className="tabular-nums text-slate-400">{time(latest.placedAt)}</span>
             <span className="text-slate-200">{latest.event ?? '–'}</span>
-            <span className="text-slate-500">{latest.market ?? '–'}</span>
+            <span className="text-slate-500" title={latest.market ?? ''}>{marketLabel(latest.market)}</span>
             <span className="font-medium text-slate-100">{latest.outcome ?? '–'}</span>
             <span className="inline-flex items-center gap-1 tabular-nums text-slate-300">
               {latest.bonus && <Gift size={11} className="text-amber-400" />}
@@ -358,9 +400,16 @@ export default function TickerPage() {
                 return (
                   <tr
                     key={b.id}
+                    // A refused bet is tinted rather than removed — it is worth
+                    // seeing that the book turned it down.
                     className={`border-b border-surface-border/40 hover:bg-white/[0.02] ${
-                      fresh.has(b.id) ? 'bg-emerald-500/[0.07]' : ''
+                      b.rejected
+                        ? 'bg-rose-500/[0.09]'
+                        : fresh.has(b.id)
+                          ? 'bg-emerald-500/[0.07]'
+                          : ''
                     }`}
+                    title={b.rejected ? 'Rejected by the book' : undefined}
                   >
                     <td className="whitespace-nowrap px-3 py-1.5">
                       <span className="inline-flex items-center gap-1">
@@ -399,7 +448,7 @@ export default function TickerPage() {
                       )}
                     </td>
                     <td className="max-w-[10rem] truncate px-2 py-1.5 text-slate-400" title={b.market ?? ''}>
-                      {b.market ?? '–'}
+                      {marketLabel(b.market)}
                     </td>
                     <td className="max-w-[14rem] truncate px-2 py-1.5 text-slate-200" title={b.outcome ?? ''}>
                       {b.outcome ?? '–'}

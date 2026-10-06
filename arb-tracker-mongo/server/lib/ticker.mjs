@@ -75,7 +75,13 @@ const RACING = /racing|gallop|greyhound|harness|trot|thoroughbred/i;
  * the start of it matched.
  */
 const SPORT_SINGLE = {
-  bets: { 'derived.is_racing': false, 'derived.type': 'SINGLE' },
+  bets: {
+    'derived.is_racing': false,
+    'derived.type': 'SINGLE',
+    // Swiftbet spells it in its own status rather than a bet type, but a
+    // cancelled bet is no more a bet here than on the other source.
+    bet_status: { $not: /^cancel/i },
+  },
   multi_bets: {
     // Multis are not singles; a cancellation is not a bet. See VOID_BET.
     bet_type: { $not: /multi|cancellation/i },
@@ -132,6 +138,7 @@ async function swiftSingles(db, since) {
     .limit(LIMIT)
     .project({
       bet_time: 1, odd: 1, bet_amount: 1, legs: 1, is_bonus: 1, bet_id: 1, user_id: 1,
+      bet_status: 1,
       'derived.sport': 1, 'derived.market_raw': 1, 'derived.mt': 1,
       'derived.legs_event_ids': 1, 'derived.minLegEventTime': 1,
     })
@@ -184,6 +191,9 @@ export function mapSwift(b) {
     outcome: stripBonus(sd.name ?? leg.selections?.[0]?.name),
     price: num(b.odd),
     stake: num(b.bet_amount),
+    // Struck but refused. Kept on the feed and marked, rather than dropped:
+    // a rejection is something you want to SEE happening.
+    rejected: /^rejected/i.test(String(b.bet_status ?? '')),
     bonus: !!b.is_bonus || saysBonus(sd.name ?? leg.selections?.[0]?.name),
     eventId: (b.derived?.legs_event_ids ?? [])[0] ?? null,
   };
@@ -196,7 +206,7 @@ async function multiSingles(db, since) {
     .sort({ transaction_date: -1 })
     .limit(LIMIT)
     .project({
-      transaction_date: 1, price: 1, amount_bet: 1, bonus_bet: 1,
+      transaction_date: 1, price: 1, amount_bet: 1, bonus_bet: 1, bet_status: 1,
       transaction_id: 1, user_accountID: 1,
       sport_name: 1, bet_type: 1, selections: 1, event_string: 1,
       event_identifier: 1, transaction_licenseid: 1,
@@ -246,6 +256,7 @@ export function mapMulti(m) {
     outcome: stripBonus(m.selections),
     price: num(m.price),
     stake: num(m.amount_bet),
+    rejected: /^rejected/i.test(String(m.bet_status ?? '')),
     bonus: num(m.bonus_bet) ? true : saysBonus(m.selections),
     eventId: m.event_identifier != null ? String(m.event_identifier) : null,
   };
