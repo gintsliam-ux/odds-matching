@@ -1,4 +1,5 @@
-import { coll } from './mongo.mjs';
+import { coll, mongoConfigured } from './mongo.mjs';
+import { apiFixtures, apiOddsForSport } from './sportApi.mjs';
 import { betsConfigured, betsDb } from './betsMongo.mjs';
 import { betInstant } from './bets.mjs';
 
@@ -42,6 +43,24 @@ const sportLabel = (s) => {
   const k = String(s).toLowerCase().replace(/[^a-z ]/g, '').trim();
   return SPORT_LABEL[k] ?? SPORT_LABEL[k.replace(/ /g, '')] ?? String(s);
 };
+
+/**
+ * Back from the display label to the slug the public odds surface uses.
+ *
+ * A deployed instance has no `fixtures` or `odds` to read: the Atlas mirror
+ * deliberately carries neither (they are large and change by the second), so
+ * `coll('odds')` there throws rather than quietly returning nothing. That
+ * surface is per-sport, which is why the join needs the sport back.
+ */
+const API_SPORT = {
+  Soccer: 'soccer', Tennis: 'tennis', Basketball: 'basketball', Baseball: 'baseball',
+  'Ice Hockey': 'icehockey', 'American Football': 'amfootball', 'Aussie Rules': 'aussierules',
+  'Rugby League': 'rugbyleague', 'Rugby Union': 'rugbyunion', Cricket: 'cricket',
+  MMA: 'mma', Boxing: 'boxing', Darts: 'darts', Esports: 'esports',
+  Volleyball: 'volleyball', Golf: 'golf',
+};
+const apiSportsIn = (bets) =>
+  [...new Set(bets.map((b) => API_SPORT[b.sport]).filter(Boolean))];
 
 /** Racing is a different product with a different board; this feed is sport. */
 const RACING = /racing|gallop|greyhound|harness|trot|thoroughbred/i;
@@ -195,7 +214,9 @@ async function fixturesFor(bets) {
 
   const fixtureIds = [...new Set([...byEventId.values()].map((m) => m.optic_fixture_id))];
   const fixtures = new Map();
-  if (fixtureIds.length) {
+  if (!fixtureIds.length) return { byEventId, fixtures };
+
+  if (mongoConfigured) {
     for (const f of await (await coll('fixtures'))
       .find({ fixture_id: { $in: fixtureIds } })
       .project({
@@ -205,7 +226,19 @@ async function fixturesFor(bets) {
       .toArray()) {
       fixtures.set(f.fixture_id, f);
     }
+    return { byEventId, fixtures };
   }
+
+  // One call per sport present, not one per fixture: 150 bets land on ~100
+  // fixtures, and 100 round trips is not something a 30-second feed can spend.
+  const want = new Set(fixtureIds);
+  await Promise.all(
+    apiSportsIn(bets).map(async (sport) => {
+      for (const f of await apiFixtures(sport).catch(() => [])) {
+        if (want.has(f.fixture_id)) fixtures.set(f.fixture_id, f);
+      }
+    }),
+  );
   return { byEventId, fixtures };
 }
 
@@ -277,13 +310,26 @@ async function pricesFor(bets, byEventId, fixtures) {
   }
   if (!wanted.size) return;
 
-  const rows = await (await coll('odds'))
-    .find({ fixture_id: { $in: [...wanted.keys()] }, is_live: { $ne: true } })
-    .project({
-      _id: 0, fixture_id: 1, market_id: 1, selection: 1, line: 1,
-      sportsbook: 1, is_lay: 1, current_price: 1,
-    })
-    .toArray();
+  let rows;
+  if (mongoConfigured) {
+    rows = await (await coll('odds'))
+      .find({ fixture_id: { $in: [...wanted.keys()] }, is_live: { $ne: true } })
+      .project({
+        _id: 0, fixture_id: 1, market_id: 1, selection: 1, line: 1,
+        sportsbook: 1, is_lay: 1, current_price: 1,
+      })
+      .toArray();
+  } else {
+    // The public surface is pre-match h2h only, so on a deployed instance the
+    // comparison columns fill for moneyline bets and stay blank for handicaps
+    // and totals. Blank is the honest answer there — inventing a column from a
+    // market we were not served would be worse than an empty one.
+    const want = new Set(wanted.keys());
+    const perSport = await Promise.all(
+      apiSportsIn(bets).map((sport) => apiOddsForSport(sport).catch(() => [])),
+    );
+    rows = perSport.flat().filter((r) => want.has(r.fixture_id));
+  }
 
   const byFixture = new Map();
   for (const r of rows) {
@@ -341,23 +387,25 @@ export async function betTicker() {
       b.sport = sportLabel(f.sport) ?? b.sport;
       b.category = f.category ?? null;
       b.tournament = f.tournament ?? b.tournament;
-      /*
-       * Decide what that leading segment was. If it reads like the competition
-       * the fixture says this is, it was the tournament and the market is the
-       * bet type; otherwise it genuinely was a market and belongs in that
-       * column. "WTA Beijing" was showing up under Market until this.
-       */
-
       b.event = f.event_name ?? (f.home_team && f.away_team ? `${f.home_team} v ${f.away_team}` : b.event);
       b.startsAt = iso(f.scheduled_start) ?? b.startsAt;
     } else {
       b.category = null;
     }
   }
-  await pricesFor(bets, byEventId, fixtures).catch(() => {});
+  // Reported, not swallowed. A deployed instance has no `odds` to read and
+  // this step threw there, but the feed still answered 200 with a plausible
+  // shape, so the failure read as "no comparison prices today" from the
+  // outside. Anything that degrades the feed now says so in the payload.
+  const failed = await pricesFor(bets, byEventId, fixtures).then(
+    () => null,
+    (e) => String(e?.message ?? e).slice(0, 200),
+  );
 
   return {
     configured: true,
+    source: mongoConfigured ? 'mongo' : 'odds-surface',
+    ...(failed ? { pricesError: failed } : {}),
     bets: bets.map((b) => ({ ...b, prices: b.prices ?? null })),
   };
 }
