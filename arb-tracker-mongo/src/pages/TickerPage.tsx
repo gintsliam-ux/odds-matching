@@ -86,7 +86,15 @@ const allMarketWords = (seg: string) =>
  * team totals at all, so the blank row of books only makes sense once the
  * column says which it was.
  */
+/** Long words with a settled short form. Applied last, to whatever survives. */
+const abbreviate = (s: string) =>
+  s.replace(/\bQuarters\b/g, 'Qtrs').replace(/\bQuarter\b/g, 'Qtr');
+
 function marketLabel(market: string | null): string {
+  return abbreviate(marketLabelFor(market));
+}
+
+function marketLabelFor(market: string | null): string {
   if (!market) return '–';
   const k = market.toLowerCase();
   if (k.includes('alternate')) {
