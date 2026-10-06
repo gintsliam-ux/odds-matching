@@ -1,7 +1,7 @@
 import { coll, mongoConfigured } from './mongo.mjs';
 import { apiFixtures, apiOddsForFixture, apiOddsForSport } from './sportApi.mjs';
 import { betsConfigured, betsDb } from './betsMongo.mjs';
-import { betInstant } from './bets.mjs';
+import { betInstant, COUNTER_ENTRY } from './bets.mjs';
 
 /**
  * The bet ticker: the latest single bets across every brand, side by side with
@@ -64,27 +64,6 @@ const apiSportsIn = (bets) =>
 
 /** Racing is a different product with a different board; this feed is sport. */
 const RACING = /racing|gallop|greyhound|harness|trot|thoroughbred/i;
-
-/**
- * Settlement and cancellation records, which are not bets.
- *
- * mybet and multis write the two halves of a settled bet as separate rows that
- * point at each other:
- *
- *   "Return @<br>Tkt  6488300"   the BET, staked $200, struck before the jump
- *   "Return of<br>Tkt: 6486431"  the RETURN, stake 0, written at settlement
- *
- * Both carry the same event, selection and price, so the return reads exactly
- * like a second bet — and its `transaction_date` is the settlement time, which
- * is why a quarter of this feed looked like bets struck on games already
- * finished. Dropping the counter-entries takes that from 278 rows to 0 while
- * leaving all 769 genuine bets in place: the real bet is still there under its
- * own ticket, at the time it was actually struck.
- *
- * Matched on the status rather than a zero stake, which does not separate them
- * — 65 counter-entries carry a non-zero amount and 13 real bets carry none.
- */
-const COUNTER_ENTRY = /^(Return of|Cancellation of)/;
 
 /**
  * What counts as a bet this feed shows. ONE definition, used by the batch query

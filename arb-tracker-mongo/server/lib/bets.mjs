@@ -128,6 +128,21 @@ function swiftSelection(bet, gutsyEventId) {
 }
 
 /**
+ * Settlement and cancellation records, which are not bets.
+ *
+ * mybet and multis write the two halves of a settled bet as separate rows that
+ * point at each other — "Return @<br>Tkt 6488300" is the bet, staked and struck
+ * before the jump; "Return of<br>Tkt: 6486431" is the return, stake 0, written
+ * at settlement. Both carry the same event, selection and price, so a return
+ * reads as a second identical bet and the fixture showed each settled bet
+ * twice.
+ *
+ * Matched on the status, not a zero stake, which does not separate them: 65
+ * counter-entries carry a non-zero amount and 13 real bets carry none.
+ */
+export const COUNTER_ENTRY = /^(Return of|Cancellation of)/;
+
+/**
  * Tidy a free-text field from either source. Swiftbet selections arrive padded
  * (" Kaleb Johnson Anytime "), and the Multis settlement status is stored as a
  * fragment of HTML ("Return of<br>Tkt: 6335418") — neither belongs on screen
@@ -294,7 +309,11 @@ async function multiBetsFor(db, eventId, fixtureId) {
   const eventIds = await siblingEventIds(db, numericId, fixtureId);
   const rows = await db
     .collection('multi_bets')
-    .find({ event_identifier: { $in: eventIds }, transaction_date: { $gte: BET_CUTOFF } })
+    .find({
+      event_identifier: { $in: eventIds },
+      transaction_date: { $gte: BET_CUTOFF },
+      bet_status: { $not: COUNTER_ENTRY },
+    })
     .sort({ transaction_date: -1 })
     .limit(MAX_PER_BRAND * 2)
     .toArray();
