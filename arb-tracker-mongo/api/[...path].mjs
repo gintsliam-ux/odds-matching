@@ -47,10 +47,26 @@ export default async function handler(req, res) {
       (Array.isArray(body) && body.length === 0) ||
       (typeof body === 'object' && !Array.isArray(body) && Object.keys(body).length === 0);
 
+    /*
+     * How long a stale answer may be served matters more for some routes.
+     *
+     * The board carries a STATUS per fixture, and that status changes the
+     * moment a game starts and again when it ends. A one-hour stale window let
+     * the edge keep serving a board computed before kickoff, so a game that had
+     * tipped off still read as upcoming — or, worse, as Final. Prices age
+     * gracefully; "Final" on a running game does not.
+     *
+     * So anything carrying fixture status revalidates quickly, and the
+     * expensive, slow-moving reads keep the generous window that makes the
+     * board affordable at all.
+     */
+    const statusful = url.pathname === '/api/events' || url.pathname.startsWith('/api/events/');
     res.setHeader(
       'cache-control',
       out.status === 200 && !empty
-        ? 's-maxage=300, stale-while-revalidate=3600'
+        ? statusful
+          ? 's-maxage=30, stale-while-revalidate=60'
+          : 's-maxage=300, stale-while-revalidate=3600'
         : 'no-store',
     );
     res.status(out.status).json(out.body);

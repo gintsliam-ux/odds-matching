@@ -266,6 +266,10 @@ export function boardWindow() {
  */
 const UNSETTLED = { flucs: 'true' };
 
+/** How long after a scheduled start a fixture is presumed in play rather than
+ *  finished, while waiting for a book to open its in-play market. */
+const KICKOFF_GRACE_MS = 15 * 60_000;
+
 /**
  * One page big enough to hold a windowed sport whole. The surface answers
  * `has_more: false` for every sport at this size, so `drain` almost never
@@ -483,7 +487,23 @@ function impliedStatus(row, now, liveIds) {
   // the client's mapStatus() quietly defaulted it. Now that `flucs=true` brings
   // unsettled fixtures through (see UNSETTLED), a future start is a fact worth
   // stating rather than something downstream has to infer from a null.
-  return start > now ? 'upcoming' : 'completed';
+  if (start > now) return 'upcoming';
+  /*
+   * A game that has just started is not finished.
+   *
+   * `liveIds` only holds fixtures a book is actively quoting in-play, and books
+   * open those markets a few minutes AFTER the off — so for that gap a fixture
+   * fell through to 'completed' and the board read "Final" on a game that had
+   * tipped off ninety seconds earlier. Milwaukee v Minnesota showed Final at
+   * 00:14 for a 00:00 start.
+   *
+   * Of the two possible errors here, calling a running game finished is much
+   * the worse: "Final" with no score is obviously broken, where a brief "live"
+   * on something postponed is merely early. So the first few minutes after a
+   * scheduled start resolve to live, and only after that does an unquoted
+   * fixture read as completed.
+   */
+  return now - start < KICKOFF_GRACE_MS ? 'live' : 'completed';
 }
 
 /**
