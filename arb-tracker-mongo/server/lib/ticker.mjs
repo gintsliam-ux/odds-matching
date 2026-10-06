@@ -703,7 +703,7 @@ function sameSelection(a, b) {
  * can be compared. Matching on names alone priced none of these: 14 totals and
  * 10 handicaps went bare because "Total Under 7.5 runs" is not "Under".
  */
-function parseBetMarket(market, outcome) {
+export function parseBetMarket(market, outcome) {
   const m = String(market ?? '');
   const o = String(outcome ?? '');
   const km = key(m);
@@ -808,7 +808,7 @@ function parseBetMarket(market, outcome) {
  * lines, and "San Jose Sharks +1.5 goals" (struck at 1.61) matched San Jose at
  * -1.5 and was shown against a field of 4.70.
  */
-const sameLine = (a, b) => a != null && b != null && Math.abs(a - b) < 0.01;
+export const sameLine = (a, b) => a != null && b != null && Math.abs(a - b) < 0.01;
 
 /**
  * The rows naming the thing backed.
@@ -817,7 +817,7 @@ const sameLine = (a, b) => a != null && b != null && Math.abs(a - b) < 0.01;
  * the fixture's selections — "Nacional" should find "Club Nacional" but must
  * not be allowed to choose between two clubs that both contain it.
  */
-function pickByName(rows, name) {
+export function pickByName(rows, name) {
   const strict = rows.filter((r) => sameSelection(r.selection, name));
   if (strict.length) return strict;
   const loose = rows.filter((r) => surnameSubset(r.selection, name));
@@ -910,17 +910,31 @@ async function pricesFor(bets, byEventId, fixtures) {
     for (const b of list) {
       const w = want.get(b);
       if (!w) continue;
-      const inMarket = all.filter((r) => !r.is_lay && w.marketIds.includes(r.market_id));
-      const hits =
-        w.kind === 'total'
-          // A total's outcome is a side, not a runner: match Over to Over at
-          // the same number, never by name.
-          ? inMarket.filter(
-              (r) => key(r.selection) === w.side && sameLine(r.line, w.line),
-            )
-          : w.kind === 'spread'
-            ? pickByName(inMarket, w.name).filter((r) => sameLine(r.line, w.line))
-            : pickByName(inMarket, w.name);
+      /*
+       * Market ids are tried IN ORDER, and the first that answers wins.
+       *
+       * A two-way moneyline and a three-way one are different markets: the
+       * draw absorbs probability, so the three-way is systematically longer —
+       * 1.833 against 1.952 on the same baseball team at the same book, and
+       * 149 of 162 pairs quoted in both differ by more than 2%. Searching them
+       * together and keeping the best per book meant the three-way price won
+       * almost every time, which flatters the field and makes the bet look
+       * worse than it was.
+       */
+      let hits = [];
+      for (const marketId of w.marketIds) {
+        const inMarket = all.filter((r) => !r.is_lay && r.market_id === marketId);
+        if (!inMarket.length) continue;
+        hits =
+          w.kind === 'total'
+            // A total's outcome is a side, not a runner: match Over to Over at
+            // the same number, never by name.
+            ? inMarket.filter((r) => key(r.selection) === w.side && sameLine(r.line, w.line))
+            : w.kind === 'spread'
+              ? pickByName(inMarket, w.name).filter((r) => sameLine(r.line, w.line))
+              : pickByName(inMarket, w.name);
+        if (hits.length) break;
+      }
       if (!hits.length) continue;
       const best = new Map();
       for (const r of hits) {
