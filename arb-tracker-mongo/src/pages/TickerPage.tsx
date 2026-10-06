@@ -54,17 +54,6 @@ const fmt = (n: number | null | undefined) => (n != null ? n.toFixed(2) : '–')
 /** Matches the server's own cap, so the table holds what the feed holds. */
 const LIMIT = 150;
 
-/**
- * A bet cannot be struck on a game that has already started, so when the
- * timestamp says otherwise it is not the placement time.
- *
- * It is a real pattern on mybet and multis, not a stray row: a quarter of them
- * land after the book's OWN betting suspension, clustered 1.5-3.5 hours past
- * the start — which is after full time, not during play. Flagged rather than
- * hidden, because the number shown is what the source holds.
- */
-const afterStart = (b: TickerBet) =>
-  !!b.placedAt && !!b.startsAt && b.placedAt > b.startsAt;
 
 /** Stakes are money, not odds: whole dollars unless the cents matter. */
 const money = (n: number | null | undefined) =>
@@ -386,16 +375,7 @@ export default function TickerPage() {
                         <IdChip value={b.betId} title="Bet" />
                       </span>
                     </td>
-                    <td
-                      className={`whitespace-nowrap px-2 py-1.5 tabular-nums ${
-                        afterStart(b) ? 'text-amber-400/90' : 'text-slate-300'
-                      }`}
-                      title={
-                        afterStart(b)
-                          ? 'Timestamped after this event started — the source records a later transaction, not the placement'
-                          : undefined
-                      }
-                    >
+                    <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-300">
                       {time(b.placedAt)}
                     </td>
                     <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-500">
