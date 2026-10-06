@@ -347,6 +347,9 @@ const SOCCER_MARKETS: MarketDef[] = [
   D('1h_spread', '1st Half — Handicap', 'spread'),
   D('1h_total', '1st Half — Total Goals', 'total'),
   D('1h_asian_total', '1st Half — Asian Total', 'total'),
+  D('1h_dnb', '1st Half — Draw No Bet', 'h2h'),
+  D('1h_double_chance', '1st Half — Double Chance', 'flat'),
+  D('1h_btts', '1st Half — Both Teams to Score', 'flat'),
 ];
 
 const GRIDIRON_MARKETS: MarketDef[] = [
@@ -361,6 +364,7 @@ const GRIDIRON_MARKETS: MarketDef[] = [
   D('1q_moneyline', '1st Quarter — Head to Head', 'h2h'),
   D('1q_spread', '1st Quarter — Line', 'spread'),
   D('1q_total', '1st Quarter — Total Points', 'total'),
+  D('1q_btts', '1st Quarter — Both Teams to Score', 'flat'),
 ];
 
 const BASKETBALL_MARKETS: MarketDef[] = GRIDIRON_MARKETS;
@@ -386,6 +390,10 @@ const HOCKEY_MARKETS: MarketDef[] = [
   D('1p_moneyline_3way', '1st Period — Head to Head — 3-Way', 'h2h'),
   D('1p_spread', '1st Period — Puck Line', 'spread'),
   D('1p_total', '1st Period — Total', 'total'),
+  D('btts', 'Both Teams to Score', 'flat'),
+  D('double_chance', 'Double Chance', 'flat'),
+  D('1p_btts', '1st Period — Both Teams to Score', 'flat'),
+  D('1p_double_chance', '1st Period — Double Chance', 'flat'),
 ];
 
 // Baseball prices a run line; its half markets are the first five innings and
@@ -401,6 +409,8 @@ const MLB_MARKETS: MarketDef[] = [
   D('1inn_moneyline', '1st Inning — Head to Head', 'h2h'),
   D('1inn_spread', '1st Inning — Run Line', 'spread'),
   D('1inn_total', '1st Inning — Total Runs', 'total'),
+  D('btts', 'Both Teams to Score', 'flat'),
+  D('double_chance', 'Double Chance', 'flat'),
 ];
 
 // Tennis handicaps come in two flavours (games and sets); the short-form market
@@ -421,6 +431,9 @@ const TENNIS_MARKETS: MarketDef[] = [
 const COMBAT_MARKETS: MarketDef[] = [
   D('moneyline', 'Winner', 'h2h'),
   D('total', 'Total Rounds', 'total'),
+  // A draw is rare but possible in both, and the feed prices it.
+  D('moneyline_3way', 'Winner — 3-Way', 'h2h'),
+  D('go_distance', 'Go the Distance', 'flat'),
 ];
 
 const DARTS_MARKETS: MarketDef[] = [
@@ -435,6 +448,10 @@ const CRICKET_MARKETS: MarketDef[] = [
   D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Handicap', 'spread'),
   D('total', 'Total Runs', 'total'),
+  // A first-class match can be drawn, so this is an ordinary cricket market —
+  // and on a Sheffield Shield fixture it is sometimes the only one priced, in
+  // which case leaving it out empties the page entirely.
+  D('dnb', 'Draw No Bet', 'h2h'),
 ];
 
 // Golf comes in two fixture shapes: a tournament (the `outright` field of
