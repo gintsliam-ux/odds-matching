@@ -65,6 +65,13 @@ const titleCase = (s: string) =>
     })
     .join(' ');
 
+/** Words that only describe the market itself, carrying no further detail. */
+const MARKET_VOCAB = /^(alternate|alt|total|totals|line|lines|over|under|handicap|spread|points?|goals?|runs?|games?|sets?)$/;
+
+/** A segment made of nothing but market words adds nothing once shortened. */
+const allMarketWords = (seg: string) =>
+  seg.split(/\s+/).filter(Boolean).every((w) => MARKET_VOCAB.test(w.toLowerCase()));
+
 /**
  * How a market reads in the table.
  *
@@ -72,14 +79,25 @@ const titleCase = (s: string) =>
  * inc overtime" — so the common ones collapse to one short label, and the rest
  * are title-cased rather than left in whatever case they arrived in.
  *
- * Alternate markets lose their detail deliberately: the line and the side are
- * already in the Outcome column ("Total Over 22.5 games"), so repeating them
- * here only costs width.
+ * Alternate markets shed their line and side, which the Outcome column already
+ * carries ("Total Over 22.5 games"), but keep anything that says WHOSE market
+ * it is. "Alternate Total Over - Denver Nuggets" is that team's total, not the
+ * match's — a different market, priced differently, and the surface carries no
+ * team totals at all, so the blank row of books only makes sense once the
+ * column says which it was.
  */
 function marketLabel(market: string | null): string {
   if (!market) return '–';
   const k = market.toLowerCase();
-  if (k.includes('alternate')) return k.includes('total') ? 'Alt Total' : 'Alt Line';
+  if (k.includes('alternate')) {
+    const base = k.includes('total') ? 'Alt Total' : 'Alt Line';
+    const rest = market
+      .split(/\s+-\s+/)
+      .map((seg) => seg.trim())
+      .filter((seg) => seg && !allMarketWords(seg))
+      .map(titleCase);
+    return [base, ...rest].join(' - ');
+  }
   if (/win[- ]draw[- ]win/.test(k)) return 'W-D-W';
   if (/^(head to head|h2h|moneyline|money line|match result)$/.test(k.trim())) return 'H2H';
   if (/\bwin match inc overtime\b/.test(k)) return 'H2H';
