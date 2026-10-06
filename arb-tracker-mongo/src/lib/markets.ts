@@ -249,6 +249,10 @@ export interface SelectionRow {
   bestBookId: string | null;
   bestPrice: number | null;
   bestDetail: PriceDetail | null;
+  /** True when no other book comes near the best — see the note by its
+   *  calculation. The price is still shown; it just isn't presented as the one
+   *  to take. */
+  bestUnconfirmed: boolean;
   /** True for both rows of the main line (spread/total ladders). */
   isMain?: boolean;
   /** True on the first row of each line pair, for a divider above it. */
@@ -584,7 +588,31 @@ function makeSelectionRow(
   for (const cell of prices) consider(cell);
   consider(betfairBack);
 
-  return { key, label, team, prices, betfairBack, betfairLay, bestBookId, bestPrice, bestDetail };
+  /*
+   * A best price nothing corroborates.
+   *
+   * On a tennis games handicap, tabtouch showed Aguilar Cardozo -6.5 at 2.08
+   * where Pinnacle had 1.694 and Sportsbet 1.671 — 23% clear of the field, and
+   * crowned BEST in green as the price to take. Whether that was a genuine
+   * off-market quote or a bad scrape is not something this side can tell, but
+   * either way one book alone, far above every other, is not a price to put a
+   * tick next to.
+   *
+   * Measured against the FIXED-ODDS field only, and never raised when the
+   * exchange is the best: Betfair standing clear of the books is ordinary on an
+   * outsider, not a reason to doubt it.
+   */
+  const CLEAR_OF_FIELD = 1.15;
+  const rivals = prices
+    .filter((c) => c.bookId !== bestBookId && !isSuspended(c) && c.price != null)
+    .map((c) => c.price as number);
+  const bestUnconfirmed =
+    bestPrice != null &&
+    bestBookId !== BETFAIR.id &&
+    rivals.length >= 2 &&
+    (bestPrice as number) > Math.max(...rivals) * CLEAR_OF_FIELD;
+
+  return { key, label, team, prices, betfairBack, betfairLay, bestBookId, bestPrice, bestDetail, bestUnconfirmed };
 }
 
 // How many lines to show either side of the main line.

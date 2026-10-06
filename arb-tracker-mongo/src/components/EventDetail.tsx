@@ -552,9 +552,22 @@ function MarketRows({
               )}
             >
               {row.bestPrice != null && bestBrand ? (
-                <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-500/15 px-2 py-0.5">
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 ${
+                    row.bestUnconfirmed ? 'bg-amber-500/15' : 'bg-emerald-500/15'
+                  }`}
+                  title={
+                    row.bestUnconfirmed
+                      ? 'No other book is near this price — unconfirmed, not necessarily takeable'
+                      : undefined
+                  }
+                >
                   <BookmakerLogo brand={bestBrand} size={16} />
-                  <span className="font-semibold tabular-nums text-emerald-300">
+                  <span
+                    className={`font-semibold tabular-nums ${
+                      row.bestUnconfirmed ? 'text-amber-300' : 'text-emerald-300'
+                    }`}
+                  >
                     {fmt(row.bestPrice)}
                   </span>
                 </span>
