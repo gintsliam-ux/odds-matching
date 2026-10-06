@@ -347,6 +347,27 @@ const key = (s) =>
  * "Los Angeles Lakers", and the row showed the moneyline prices beside a bet
  * that was not the moneyline.
  */
+/**
+ * Surnames only, initials dropped.
+ *
+ * Doubles are the case that forces it: a book writes "Krajicek, A/Mektic, N"
+ * where the surface writes "Austin Krajicek // Nikola Mektic". Every word that
+ * identifies the pair is shared, but the given names and initials drag the
+ * overlap score to 0.5 and the pair went unpriced.
+ *
+ * Used only as a fallback, and only when it picks out exactly ONE selection on
+ * the fixture — see pickByName. A containment test that is allowed to match two
+ * things is how a same-game-multi leg ended up priced against the moneyline.
+ */
+function surnameSubset(a, b) {
+  const A = new Set(key(a).split(' ').filter((t) => t.length > 1));
+  const B = new Set(key(b).split(' ').filter((t) => t.length > 1));
+  if (!A.size || !B.size) return false;
+  const [small, big] = A.size <= B.size ? [A, B] : [B, A];
+  for (const t of small) if (!big.has(t)) return false;
+  return true;
+}
+
 function sameSelection(a, b) {
   const A = new Set(key(a).split(' ').filter(Boolean));
   const B = new Set(key(b).split(' ').filter(Boolean));
@@ -365,17 +386,113 @@ function sameSelection(a, b) {
  * moneyline. A market this cannot name confidently gets no comparison, which is
  * the honest answer — a blank column beats a wrong one.
  */
-function marketIdsFor(name) {
-  const k = key(name);
-  if (!k) return [];
-  // Combined or period-scoped markets are not what this board prices here.
-  if (/\//.test(String(name ?? '')) || /\b(and|quarter|half|period|inning|set)\b/.test(k)) return [];
-  if (/^(head to head|match result|moneyline|money line|h2h|win|winner|match winner)$/.test(k)) {
-    return ['moneyline', 'moneyline_3way'];
+/**
+ * Read a bet's market and outcome into something the odds surface can be
+ * searched with: which market, at which period, on which side, at which line.
+ *
+ * The two vocabularies do not line up, and cannot be made to by comparing
+ * strings. A book writes the whole bet into one phrase —
+ *
+ *   "Total Under 7.5 runs"            "Ryan Seggerman -3.5 games"
+ *
+ * — where the surface splits it across three fields:
+ *
+ *   market_id "total"  selection "Under"          line 7.5
+ *   market_id "spread" selection "Ryan Seggerman" line -3.5
+ *
+ * so the side and the line have to be parsed out of the phrase before anything
+ * can be compared. Matching on names alone priced none of these: 14 totals and
+ * 10 handicaps went bare because "Total Under 7.5 runs" is not "Under".
+ */
+function parseBetMarket(market, outcome) {
+  const m = String(market ?? '');
+  const o = String(outcome ?? '');
+  const km = key(m);
+  const ko = key(o);
+  if (!km && !ko) return null;
+
+  // Two markets in one bet — "1st quarter winner / 1st quarter total points",
+  // "half time result and both teams to score". The surface prices each leg
+  // separately and neither is this bet, so there is nothing honest to show.
+  if (/\//.test(m) || /\b(and|both teams)\b/.test(km)) return null;
+
+  // Period scope. The surface carries these as a prefix on the market id, and
+  // they used to be rejected outright — which threw away every first-half and
+  // opening-set bet even though `1h_total` and `1s_total` were sitting there.
+  const period =
+    /\b(1st|first) half\b|\b1h\b/.test(km) ? '1h_'
+    : /\b(2nd|second) half\b/.test(km) ? '2h_'
+    : /\b(1st|first) quarter\b/.test(km) ? '1q_'
+    : /\b(2nd|second) quarter\b/.test(km) ? '2q_'
+    : /\b(3rd|third) quarter\b/.test(km) ? '3q_'
+    : /\b(4th|fourth) quarter\b/.test(km) ? '4q_'
+    : /\b(1st|first) set\b/.test(km) ? '1s_'
+    : /\b(1st|first) inn(ing)?\b/.test(km) ? '1inn_'
+    : '';
+
+  // The line can be written on either side: "handicap -3.5" carries it in the
+  // market, "Over +228.5" in the outcome. The outcome wins when both have one.
+  const numIn = (t) => {
+    const hit = String(t).match(/[-+]?\d+(?:\.\d+)?/g);
+    return hit ? Number(hit[hit.length - 1]) : null;
+  };
+  const line = numIn(o) ?? numIn(m);
+
+  const side = /\bunder\b/.test(ko) ? 'under' : /\bover\b/.test(ko) ? 'over' : null;
+
+  // A total is the only market whose outcome is a side rather than a runner.
+  if (side != null && line != null) {
+    return { kind: 'total', marketIds: [`${period}total`, `${period}team_total`], side, line };
   }
-  if (/^(line|spread|handicap|point spread|match handicap)$/.test(k)) return ['spread'];
-  if (/^(total|totals|total points|total goals|total runs|over under|total match points)$/.test(k)) return ['total'];
-  return [];
+
+  // Everything else is named: a team, a player, a pair. What separates a
+  // handicap from a moneyline is that the handicap carries a line.
+  const name = o
+    .replace(/[-+]?\d+(?:\.\d+)?/g, ' ')
+    .replace(/\b(points?|goals?|runs?|games?|sets?|yards?)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const handicap = /\b(handicap|line|spread|point spread)\b/.test(km) || (line != null && !/\btotal\b/.test(km));
+  if (handicap && line != null) {
+    return { kind: 'spread', marketIds: [`${period}spread`], name, line };
+  }
+
+  if (/\b(head to head|h2h|moneyline|money line|match result|result|win|winner|to win|draw)\b/.test(km)) {
+    return {
+      kind: 'moneyline',
+      marketIds: [`${period}moneyline`, `${period}moneyline_3way`],
+      name,
+      line: null,
+    };
+  }
+  return null;
+}
+
+/**
+ * The same line, sign included.
+ *
+ * Comparing magnitudes looked defensible — the favourite is stored at -3.5 and
+ * the dog at +3.5, so the sign seemed to belong to the selection rather than
+ * the number. It does not. Books quote the SAME team at both ends as alternate
+ * lines, and "San Jose Sharks +1.5 goals" (struck at 1.61) matched San Jose at
+ * -1.5 and was shown against a field of 4.70.
+ */
+const sameLine = (a, b) => a != null && b != null && Math.abs(a - b) < 0.01;
+
+/**
+ * The rows naming the thing backed.
+ *
+ * Tried strictly first. The loose pass only stands if it is UNAMBIGUOUS across
+ * the fixture's selections — "Nacional" should find "Club Nacional" but must
+ * not be allowed to choose between two clubs that both contain it.
+ */
+function pickByName(rows, name) {
+  const strict = rows.filter((r) => sameSelection(r.selection, name));
+  if (strict.length) return strict;
+  const loose = rows.filter((r) => surnameSubset(r.selection, name));
+  const distinct = new Set(loose.map((r) => key(r.selection)));
+  return distinct.size === 1 ? loose : [];
 }
 
 /**
@@ -387,10 +504,13 @@ function marketIdsFor(name) {
  */
 async function pricesFor(bets, byEventId, fixtures) {
   const wanted = new Map(); // fixture_id -> bets needing it
+  const want = new Map(); // bet -> what to look for
   for (const b of bets) {
     const m = b.eventId ? byEventId.get(String(b.eventId)) : null;
     if (!m) continue;
-    if (!marketIdsFor(b.market).length) continue;
+    const parsed = parseBetMarket(b.market, b.outcome);
+    if (!parsed) continue;
+    want.set(b, parsed);
     const list = wanted.get(m.optic_fixture_id) ?? [];
     list.push(b);
     wanted.set(m.optic_fixture_id, list);
@@ -428,10 +548,19 @@ async function pricesFor(bets, byEventId, fixtures) {
   for (const [fixtureId, list] of wanted) {
     const all = byFixture.get(fixtureId) ?? [];
     for (const b of list) {
-      const ids = marketIdsFor(b.market);
-      const hits = all.filter(
-        (r) => !r.is_lay && ids.includes(r.market_id) && sameSelection(r.selection, b.outcome),
-      );
+      const w = want.get(b);
+      if (!w) continue;
+      const inMarket = all.filter((r) => !r.is_lay && w.marketIds.includes(r.market_id));
+      const hits =
+        w.kind === 'total'
+          // A total's outcome is a side, not a runner: match Over to Over at
+          // the same number, never by name.
+          ? inMarket.filter(
+              (r) => key(r.selection) === w.side && sameLine(r.line, w.line),
+            )
+          : w.kind === 'spread'
+            ? pickByName(inMarket, w.name).filter((r) => sameLine(r.line, w.line))
+            : pickByName(inMarket, w.name);
       if (!hits.length) continue;
       const best = new Map();
       for (const r of hits) {
