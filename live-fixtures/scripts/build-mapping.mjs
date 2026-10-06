@@ -418,11 +418,17 @@ export function gradeKey(teamA, teamB, league) {
   // against mybet "Sydney FC U23" and "Brisbane Roar U23" — so an age number
   // and a word like Academy/Youth/Reserve collapse to ONE marker rather than
   // being compared to each other.
+  // "u21" and "under 21" are the same side. Matching only the abbreviation read
+  // OPTIC's "Liverpool Under 21" as a SENIOR team while mybet's "Liverpool U21"
+  // graded as youth, so the grades disagreed and the gate threw out a correct
+  // pair — the opposite of its job. It also left "Under 21" eligible to match a
+  // genuine senior fixture, which is the mix-up it exists to prevent.
+  const AGE_GROUP = /\b(?:u|under)\s?-?\s?(1[5-9]|2[0-3])\b/
   const isSecond = (v) => {
     const t = norm(v).trim()
-    return /\b(reserves?|ii|2)$/.test(t) || /\b(reserves?|academy|youth|dev)\b/.test(norm(v)) || /\bu\s?(1[5-9]|2[0-3])\b/.test(norm(v))
+    return /\b(reserves?|ii|2)$/.test(t) || /\b(reserves?|academy|youth|dev)\b/.test(norm(v)) || AGE_GROUP.test(norm(v))
   }
-  const second = isSecond(teamA) || isSecond(teamB) || /\b(reserves?|academy|youth)\b/.test(norm(league)) || /\bu\s?(1[5-9]|2[0-3])\b/.test(norm(league))
+  const second = isSecond(teamA) || isSecond(teamB) || /\b(reserves?|academy|youth)\b/.test(norm(league)) || AGE_GROUP.test(norm(league))
   return `${women ? 'w' : ''}|${second ? '2' : ''}`
 }
 
