@@ -628,6 +628,15 @@ const FORMAT_TOKEN = /^(t20|t10|odi|test|xi|100|fc|pfc|afc|sc|sv|cf|ac|cd|ud|gd|
 const WOMENS = /\b(women|womens|ladies|wfc|w)\b/;
 const sameGrade = (a, b) => WOMENS.test(key(a)) === WOMENS.test(key(b));
 
+/**
+ * The draw, however a book writes it.
+ *
+ * The surface calls it "Draw". Swiftbet writes "Drawn Match", which shares no
+ * whole word with it — "draw" and "drawn" are different tokens — so every draw
+ * bet went unpriced on a fixture that was quoting one.
+ */
+const DRAW = /^(drawn? ?(match|game)?|the draw|tie)$/;
+
 /** Normalise for comparing a bet's outcome text against a price's selection. */
 const key = (s) =>
   String(s ?? '')
@@ -668,8 +677,10 @@ function surnameSubset(a, b) {
 }
 
 function sameSelection(a, b) {
-  const A = new Set(key(a).split(' ').filter(Boolean));
-  const B = new Set(key(b).split(' ').filter(Boolean));
+  const ka = key(a); const kb = key(b);
+  if (DRAW.test(ka) && DRAW.test(kb)) return true;
+  const A = new Set(ka.split(' ').filter(Boolean));
+  const B = new Set(kb.split(' ').filter(Boolean));
   if (!A.size || !B.size) return false;
   let hit = 0;
   for (const t of A) if (B.has(t)) hit++;
@@ -786,7 +797,11 @@ export function parseBetMarket(market, outcome) {
   // Everything else is named: a team, a player, a pair. What separates a
   // handicap from a moneyline is that the handicap carries a line.
   const name = o
-    .replace(/[-+]?\d+(?:\.\d+)?/g, ' ')
+    // Only numbers standing on their own are the LINE. Stripping digits
+    // anywhere turned "Adelaide 36ers" into "Adelaide ers", which matched no
+    // selection on the fixture — and would do the same to the 76ers or
+    // Schalke 04.
+    .replace(/(^|\s)[-+]?\d+(?:\.\d+)?(?=\s|$)/g, ' ')
     .replace(/\b(points?|goals?|runs?|games?|sets?|yards?)\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
