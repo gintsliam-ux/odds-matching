@@ -161,7 +161,21 @@ export function mapSwift(b) {
     userId: text(b.user_id),
     brand: 'swiftbet',
     placedAt: iso(betInstant(b.bet_time)),
-    startsAt: iso(b.derived?.minLegEventTime ?? leg.event_time),
+    /*
+     * The LEG's time, not the derived one.
+     *
+     * `derived.minLegEventTime` is Sydney wall clock stamped with a Z, the same
+     * fault `bet_time` carries: across 300 swiftbet bets it sits exactly +11h
+     * from `leg.event_time` on 295 of them and +10h on three more, which is
+     * AEDT and then AEST. Preferring it put every swiftbet start eleven hours
+     * late, and sent the fixture fallback looking for a game in the wrong half
+     * of the next day.
+     *
+     * `leg.event_time` is already true UTC and agrees with the fixture to the
+     * minute. The derived value is only reached if the leg has none, and is
+     * converted on the way through.
+     */
+    startsAt: iso(leg.event_time) ?? iso(betInstant(b.derived?.minLegEventTime)),
     sport: sportLabel(b.derived?.sport),
     tournament: text(leg.meeting_name),
     event: text(leg.event_name),
@@ -275,7 +289,10 @@ async function fixturesFor(bets) {
 
   const fixtureIds = [...new Set([...byEventId.values()].map((m) => m.optic_fixture_id))];
   const fixtures = new Map();
-  if (!fixtureIds.length) return { byEventId, fixtures };
+  if (!fixtureIds.length) {
+    await resolveByNameAndStart(bets, byEventId, fixtures).catch((e) => console.error('[ticker] name-fallback failed:', e));
+    return { byEventId, fixtures };
+  }
 
   if (mongoConfigured) {
     for (const f of await (await coll('fixtures'))
@@ -287,6 +304,7 @@ async function fixturesFor(bets) {
       .toArray()) {
       fixtures.set(f.fixture_id, f);
     }
+    await resolveByNameAndStart(bets, byEventId, fixtures).catch((e) => console.error('[ticker] name-fallback failed:', e));
     return { byEventId, fixtures };
   }
 
@@ -300,6 +318,7 @@ async function fixturesFor(bets) {
       }
     }),
   );
+  await resolveByNameAndStart(bets, byEventId, fixtures).catch((e) => console.error('[ticker] name-fallback failed:', e));
   return { byEventId, fixtures };
 }
 
@@ -487,6 +506,79 @@ async function resolveSatelliteEvents(bets, byEventId) {
       if (!pick) continue;
     }
     byEventId.set(String(b.eventId), pick);
+  }
+}
+
+/**
+ * Last resort: find the fixture by what the bet itself says.
+ *
+ * Event mapping is driven by `gutsy.events`, and that collection holds finished
+ * matches and outrights — of 25,075 rows only 136 are unfinished, and those are
+ * all season futures. So a bet struck on a fixture several days out has no
+ * event to map THROUGH, however well the matcher is working: the NFL game on
+ * the 11th is simply not in there yet.
+ *
+ * The bet does not need it. A swiftbet leg carries the fixture's name and its
+ * start time, and the start is exact rather than approximate, so a fixture at
+ * the same minute whose teams agree is the fixture. Both are required: a name
+ * alone would match the same teams in a different week, and a time alone would
+ * match every other game in the slot.
+ *
+ * This resolves the display only. The mapping tables are the matcher's to
+ * write, and the real repair is upstream — `gutsy.events` should carry upcoming
+ * fixtures, and then nothing here would be reached.
+ */
+async function resolveByNameAndStart(bets, byEventId, fixtures) {
+  const orphans = bets.filter(
+    (b) => b.event && b.startsAt && !(b.eventId && byEventId.has(String(b.eventId))),
+  );
+  if (!orphans.length) return;
+
+  const WINDOW_MIN = 90;
+  const starts = orphans.map((b) => new Date(b.startsAt).getTime()).filter(Number.isFinite);
+  if (!starts.length) return;
+  const lo = new Date(Math.min(...starts) - WINDOW_MIN * 60_000);
+  const hi = new Date(Math.max(...starts) + WINDOW_MIN * 60_000);
+
+  let candidates = [];
+  if (mongoConfigured) {
+    candidates = await (await coll('fixtures'))
+      .find({ scheduled_start: { $gte: lo, $lte: hi } })
+      .project({ _id: 0, fixture_id: 1, sport: 1, category: 1, tournament: 1,
+                 home_team: 1, away_team: 1, event_name: 1, scheduled_start: 1 })
+      .limit(4000)
+      .toArray()
+      .catch(() => []);
+  } else {
+    const perSport = await Promise.all(
+      apiSportsIn(orphans).map((sport) => apiFixtures(sport).catch(() => [])),
+    );
+    candidates = perSport.flat().filter((f) => {
+      const t = new Date(f.scheduled_start).getTime();
+      return t >= lo.getTime() && t <= hi.getTime();
+    });
+  }
+  if (!candidates.length) return;
+
+  for (const b of orphans) {
+    const want = new Set(key(b.event).split(' ').filter((t) => t.length > 2));
+    if (want.size < 2) continue;
+    const at = new Date(b.startsAt).getTime();
+    const hits = candidates.filter((f) => {
+      if (Math.abs(new Date(f.scheduled_start).getTime() - at) > WINDOW_MIN * 60_000) return false;
+      if (b.sport && sportLabel(f.sport) && sportLabel(f.sport) !== b.sport) return false;
+      const got = key(`${f.home_team ?? ''} ${f.away_team ?? ''} ${f.event_name ?? ''}`);
+      let hit = 0;
+      for (const t of want) if (got.includes(t)) hit++;
+      return hit / want.size >= 0.8;
+    });
+    // Only when it is unambiguous — two fixtures answering to the same teams at
+    // the same minute means we do not actually know which was backed.
+    if (hits.length !== 1) continue;
+    const f = hits[0];
+    byEventId.set(String(b.eventId ?? `name:${b.id}`), { optic_fixture_id: f.fixture_id, confidence: 0 });
+    b.eventId = b.eventId ?? `name:${b.id}`;
+    fixtures.set(f.fixture_id, f);
   }
 }
 
