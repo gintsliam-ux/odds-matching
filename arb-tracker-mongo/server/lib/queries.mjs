@@ -151,7 +151,12 @@ export async function eventById(fixtureId) {
     // Off the board, which for anything more than two days old is every link
     // ever shared. The id names the day it happened on, so ask for that day
     // rather than give up — this is exactly the case the function exists for.
-    const row = await apiFixtureById(fixtureId, [...new Set(all.map((e) => e.sport).filter(Boolean))]);
+    // The surface's own sport slugs, not the board's display labels. Handing it
+    // `e.sport` ("Basketball") instead of "basketball" found the fixture — the
+    // surface is forgiving about case — but stamped the label onto the fixture
+    // as its sport, so the page then asked for odds with `sport=Basketball` and
+    // got nothing back.
+    const row = await apiFixtureById(fixtureId, await apiSports().catch(() => []));
     return row ? (await toEvents([row]))[0] ?? null : null;
   }
   const row = await (await coll('fixtures'))

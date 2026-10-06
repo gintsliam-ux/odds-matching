@@ -120,7 +120,11 @@ const ROUTES = {
     const id = url.searchParams.get('fixtureId') ?? '';
     // The API source needs the sport to know which pivot to pull.
     const sport = url.searchParams.get('sport') ?? '';
-    return cached(`odds:${id}`, TTL.odds, () => oddsForFixture(id, sport));
+    // The sport belongs in the key. Without it the first caller's sport answered
+    // for every later one, so a request that would have returned nothing was
+    // served a warm, correct result instead — which is exactly what hid the
+    // capitalisation bug above until the network tab showed the real URL.
+    return cached(`odds:${id}:${sport}`, TTL.odds, () => oddsForFixture(id, sport));
   },
 
   // The ticker asks about the whole board at once. A POST carries the id list
