@@ -245,7 +245,10 @@ export function mapMulti(m) {
     // market. Comparing it with the fixture's tournament instead was no good:
     // OPTIC says "Argentina Lnb" where mybet says "Argentine Liga Nacional",
     // which share no whole word.
-    market: MARKETY.test(lead ?? '') ? text(lead) : text(m.bet_type),
+    // Decided later, once the event says whether this segment is a market or a
+    // competition — see classifyLeadSegments.
+    market: text(m.bet_type),
+    leadSegment: text(lead),
     outcome: stripBonus(m.selections),
     price: num(m.price),
     stake: num(m.amount_bet),
@@ -341,6 +344,61 @@ const stripBonus = (v) => {
   return text(t.replace(BONUS_SUFFIX, ''));
 };
 const saysBonus = (v) => BONUS_SUFFIX.test(String(v ?? ''));
+
+/**
+ * Decide what the leading segment of a mybet slip actually is.
+ *
+ * The slip runs the whole bet into one string and the first part is sometimes
+ * the market and sometimes the competition:
+ *
+ *   "Hi Bat India - India vs West Indies"            market
+ *   "English EFL Trophy - Doncaster vs Liverpool U21" competition
+ *
+ * The event itself settles it, and settles it exactly. mybet gives the match a
+ * BASE event carrying the real league, and every other market on that match a
+ * satellite whose league is "-" and whose description leads with the market.
+ * So a segment on a base event is the competition; a segment on a satellite is
+ * the market.
+ *
+ * This replaces guessing from vocabulary. A word list scored "3rd Quarter -
+ * Tri Bet (5.5)" as a market and "Argentine Liga Nacional" as a competition
+ * correctly, but had no opinion worth trusting about "Hi Bat India" — it read
+ * as neither and the bet showed its market as plain "Win".
+ *
+ * The base event's league is also the tournament, which is worth having on a
+ * bet whose event never got mapped: the competition is known even when the
+ * fixture is not.
+ */
+async function classifyLeadSegments(bets) {
+  const ids = [...new Set(
+    bets.filter((b) => b.leadSegment !== undefined)
+        .map((b) => Number(b.eventId))
+        .filter((n) => Number.isFinite(n)),
+  )];
+  if (!ids.length) return;
+  const db = await betsDb();
+  if (!db) return;
+
+  const evs = await db.collection('mybet_events')
+    .find({ _id: { $in: ids } })
+    .project({ league: 1 })
+    .toArray()
+    .catch(() => []);
+  const leagueOf = new Map(evs.map((e) => [Number(e._id), e.league]));
+  const real = (l) => l && String(l).trim() !== '-' && String(l).trim() !== '';
+
+  for (const b of bets) {
+    if (b.leadSegment === undefined) continue;
+    const league = leagueOf.get(Number(b.eventId));
+    if (real(league)) {
+      // Base event: the segment was the competition, so the market is the bet
+      // type, and the league is a tournament we can show even unmapped.
+      b.tournament = b.tournament ?? text(league);
+    } else if (b.leadSegment) {
+      b.market = b.leadSegment;
+    }
+  }
+}
 
 /**
  * mybet mints a SEPARATE event id for every market on a match, and only the
@@ -736,6 +794,7 @@ export async function betTicker() {
     .sort((a, b) => String(b.placedAt).localeCompare(String(a.placedAt)))
     .slice(0, LIMIT);
 
+  await classifyLeadSegments(bets).catch(() => {});
   const { bets: enriched, pricesError } = await enrich(bets);
   return {
     configured: true,
@@ -781,5 +840,8 @@ export async function enrich(bets) {
     (e) => String(e?.message ?? e).slice(0, 200),
   );
 
-  return { bets: bets.map((b) => ({ ...b, prices: b.prices ?? null })), pricesError };
+  return {
+    bets: bets.map(({ leadSegment, ...b }) => ({ ...b, prices: b.prices ?? null })),
+    pricesError,
+  };
 }
