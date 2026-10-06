@@ -7,6 +7,7 @@ import { brandById, BOOKMAKERS } from '../lib/markets';
 import { eventSlug } from '../lib/routing';
 import { BRAND_LABEL, BRAND_TONE } from '../lib/brands';
 import { marketLabel } from '../lib/marketLabel';
+import { bookmakerUrl } from '../lib/bookmakerUrl';
 
 /**
  * The bet ticker: every brand's single bets, newest first, across all sports.
@@ -375,13 +376,30 @@ export default function TickerPage() {
                   >
                     <td className="whitespace-nowrap px-3 py-1.5">
                       <span className="inline-flex items-center gap-1">
-                        <span
-                          className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                        {(() => {
+                          // The badge opens the book's own page for this event
+                          // where we can build the URL, and is inert where we
+                          // cannot — see bookmakerUrl.
+                          const href = bookmakerUrl(b.brand, b.sport, b.eventId);
+                          const tone = `rounded px-1.5 py-0.5 text-[10px] font-medium ${
                             BRAND_TONE[b.brand] ?? 'bg-white/10 text-slate-300'
-                          }`}
-                        >
-                          {BRAND_LABEL[b.brand] ?? b.brand}
-                        </span>
+                          }`;
+                          const label = BRAND_LABEL[b.brand] ?? b.brand;
+                          return href ? (
+                            <a
+                              href={href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              title={`Open on ${label}`}
+                              className={`${tone} transition hover:brightness-125`}
+                            >
+                              {label}
+                            </a>
+                          ) : (
+                            <span className={tone}>{label}</span>
+                          );
+                        })()}
                         <IdChip value={b.userId} title="User" />
                         <IdChip value={b.betId} title="Bet" />
                       </span>

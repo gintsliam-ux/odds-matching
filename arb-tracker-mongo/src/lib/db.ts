@@ -266,6 +266,8 @@ export interface TickerBet {
   /** Struck but refused by the book. Shown, not hidden. */
   rejected: boolean;
   fixtureId: string | null;
+  /** The book's own event id, for linking back to their page. */
+  eventId: string | null;
   /** Book -> best price on the same outcome; null when the market is one this
    *  board does not price, so a blank column is never mistaken for agreement. */
   prices: Record<string, number> | null;
