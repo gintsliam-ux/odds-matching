@@ -86,7 +86,35 @@ const fileNameOf = (url) => {
   try { return decodeURIComponent(String(url).split('?')[0].split('/').pop() || ''); }
   catch { return String(url); }
 };
-const rejected = (url) => REJECT.test(fileNameOf(url));
+/* What a crest is, and what it is not.
+   
+   The filename saying "logo" / "crest" / "escudo" OVERRIDES everything else,
+   because a club's own name routinely contains the words a place list bans:
+   Crystal Palace, Newcastle Knights, Stade Toulousain, University College
+   Dublin, Victoriano Arenas. Matching those on the whole filename condemned
+   125 perfectly good crests.
+
+   After that override the decisive rule is the picture's own shape: a .jpg
+   whose name does not say logo is a photograph — of a town square, a
+   cathedral, or the wrong person entirely. "Dijon" took a photo of the Puits
+   de Moise and "Limoges" the town centre this way.
+
+   Nothing beats a wrong mark: initials assert nothing false. */
+const LOGO_WORD = /logo|crest|badge|escudo|emblem|shield|scudetto|logotipo|wappen|stemma/i;
+/* Only shapes that never appear in a club's own name. `stade`, `arena`,
+   `palace`, `castle`, `university` and `square` are deliberately absent. */
+const NOT_A_CREST =
+  /flag_of|coat_of_arms|map_of|locator|seal_of|orthographic|_map[._]|town[_ ]hall|city[_ ]hall|rathaus|ayuntamiento|centre-ville|skyline|_cbd|aerial|panorama|montage|nightlife|_views?[._]|stadium|estadio|est[aá]dio|stadion/i;
+const fileOf = (url) => {
+  try { return decodeURIComponent(String(url).split('?')[0].split('/').pop() || ''); }
+  catch { return String(url); }
+};
+const badImage = (url) => {
+  const f = fileOf(url);
+  if (LOGO_WORD.test(f)) return false;
+  return NOT_A_CREST.test(f) || /\.jpe?g$/i.test(f);
+};
+const rejected = (url) => badImage(url);
 function normaliseThumb(url) {
   if (!url) return url;
   return url.replace(/\?utm_[^]*$/, '').replace(/\/(\d{1,3})px-/, (m, w) => (Number(w) < 160 ? '/160px-' : m));
