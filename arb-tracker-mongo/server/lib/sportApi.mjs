@@ -365,19 +365,35 @@ function explode(row, { live }) {
 
     const mid = marketId(row.sports_market_type);
     /*
-     * On a handicap the pivot's `line` belongs to oc1, and oc2 takes its
-     * opposite. Copying it to both sides gave Zverev -1.5 AND Djokovic -1.5 —
-     * two favourites in one market, where the real pairing is -1.5 against
-     * +1.5. The Mongo path has always stored the two sides with opposite lines
-     * ("Browns +0.5" beside "Steelers -0.5"), so this is the adapter catching
-     * up with the convention rather than inventing one.
+     * The handicap each side is actually getting, taken from the row rather
+     * than inferred.
      *
-     * Totals are the exception and must NOT be flipped: Over 2.5 and Under 2.5
-     * share the same number, and negating it would invent an "Under -2.5".
+     * This used to derive oc2's line by negating oc1's, on the understanding
+     * that `line` belonged to oc1. It did not, reliably: the pivot returned
+     * the same pair in both orientations, so the same team came back at the
+     * same line with two incompatible prices — Saints +16.5 at 1.081 from one
+     * row and at 6.75 from the other, when 6.75 is the price for Saints -16.5.
+     * Half of every alternate-line ladder read backwards as a result, and a
+     * handicap bet was compared against the opposite side of its own market.
+     *
+     * `oc1_line` / `oc2_line` now say outright what each outcome's line is, so
+     * nothing is inferred. The negation survives only as a fallback for a row
+     * that predates them, which is safe now that `line` is guaranteed to be
+     * oc1's.
+     *
+     * Totals never had a side to get wrong: Over 2.5 and Under 2.5 share the
+     * one number, and negating it would invent an "Under -2.5".
      */
     const handicap = /spread/.test(mid);
+    const ownLine = num(row[`oc${rec.outcome}_line`]);
     const line =
-      row.line == null ? null : handicap && rec.outcome === 2 ? -row.line : row.line;
+      ownLine != null
+        ? ownLine
+        : row.line == null
+          ? null
+          : handicap && rec.outcome === 2
+            ? -row.line
+            : row.line;
 
     out.push({
       market_id: mid,
