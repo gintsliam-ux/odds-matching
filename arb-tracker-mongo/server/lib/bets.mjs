@@ -235,6 +235,21 @@ async function swiftbetFor(db, gutsyEventId) {
   });
 }
 
+/**
+ * The market a slip names: everything before the match in its event string.
+ *
+ * Only on a satellite event. On the base event that leading segment is the
+ * competition ("NBA - Los Angeles Lakers v Sacramento Kings"), and calling that
+ * the market would be worse than the generic bet type it replaces.
+ */
+function marketFromSlip(row, satellites) {
+  if (!satellites?.has(Number(row.event_identifier))) return null;
+  const parts = String(row.event_string ?? '').split(' - ');
+  if (parts.length < 2) return null;
+  parts.pop();                                   // the match itself
+  return parts.join(' - ').trim() || null;
+}
+
 /** The match a slip names: the last " - " segment of its event string. */
 const matchName = (v) => {
   const parts = String(v ?? '').split(' - ');
@@ -268,7 +283,7 @@ async function siblingEventIds(db, baseId, fixtureId) {
   const base = await db.collection('mybet_events')
     .findOne({ _id: baseId }, { projection: { sport: 1, suspendAt: 1 } })
     .catch(() => null);
-  if (!base?.suspendAt) return [baseId];
+  if (!base?.suspendAt) return { ids: [baseId], satellites: new Set() };
 
   const slot = await db.collection('mybet_events')
     .find({ sport: base.sport, suspendAt: base.suspendAt })
@@ -279,16 +294,16 @@ async function siblingEventIds(db, baseId, fixtureId) {
   const satellites = slot.filter(
     (e) => Number(e._id) !== baseId && (!e.league || String(e.league).trim() === '-'),
   );
-  if (!satellites.length) return [baseId];
+  if (!satellites.length) return { ids: [baseId], satellites: new Set() };
 
   const fixture = await eventById(fixtureId).catch(() => null);
-  if (!fixture) return [baseId];
+  if (!fixture) return { ids: [baseId], satellites: new Set() };
   const want = new Set(
     matchName(`${fixture.home?.name ?? fixture.home ?? ''} ${fixture.away?.name ?? fixture.away ?? ''} ${fixture.name ?? ''}`)
       .split(' ')
       .filter((t) => t.length > 2),
   );
-  if (!want.size) return [baseId];
+  if (!want.size) return { ids: [baseId], satellites: new Set() };
 
   const mine = satellites.filter((e) => {
     const got = matchName(e.description);
@@ -297,7 +312,7 @@ async function siblingEventIds(db, baseId, fixtureId) {
     for (const t of want) if (got.includes(t)) hit++;
     return hit / want.size >= 0.6;
   });
-  return [baseId, ...mine.map((e) => Number(e._id))];
+  return { ids: [baseId, ...mine.map((e) => Number(e._id))], satellites: new Set(mine.map((e) => Number(e._id))) };
 }
 
 /**
@@ -315,7 +330,7 @@ async function multiBetsFor(db, eventId, fixtureId) {
   // their events only in leg description strings and cannot be joined here.
   if (!Number.isFinite(numericId) || numericId === 0) return { mybet: [], multis: [] };
 
-  const eventIds = await siblingEventIds(db, numericId, fixtureId);
+  const { ids: eventIds, satellites } = await siblingEventIds(db, numericId, fixtureId);
   const rows = await db
     .collection('multi_bets')
     .find({
@@ -351,7 +366,17 @@ async function multiBetsFor(db, eventId, fixtureId) {
       stake: r.amount_bet,
       price: r.price,
       selection: r.selections ?? null,
-      market: r.bet_type ?? null,
+      /*
+       * What the bet is actually ON.
+       *
+       * `bet_type` alone called every mybet total a "Win": the slip runs the
+       * market into `event_string` ("Alternate Total Over - Charlotte Hornets -
+       * Charlotte Hornets v Brooklyn Nets") and leaves bet_type generic. The
+       * leading segment is the market when the event is one of mybet's
+       * market-specific satellites, and the competition when it is the base
+       * event — same rule the ticker uses, see classifyLeadSegments.
+       */
+      market: marketFromSlip(r, satellites) ?? r.bet_type ?? null,
       betType: r.transaction_multid > 0 ? 'Multi' : r.sgm_flag ? 'SGM' : 'Single',
       legCount: Array.isArray(r.legs) && r.legs.length ? r.legs.length : null,
       // A non-zero bonus_bet is what marks a bonus stake here, not a flag.

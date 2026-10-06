@@ -3,6 +3,7 @@ import { Receipt } from 'lucide-react';
 import { fetchBets, type Bet, type BrandBets, type FixtureBets } from '../lib/db';
 import { PanelNotice, SubTabs } from './EventTabs';
 import { BRAND_TONE } from '../lib/brands';
+import { marketLabel } from '../lib/marketLabel';
 
 export type { BetBrand } from '../lib/brands';
 import type { BetBrand } from '../lib/brands';
@@ -52,7 +53,7 @@ function BetRow({ bet }: { bet: Bet }) {
         </div>
         {bet.market && (
           <div className="truncate text-[11px] text-slate-500" title={bet.market}>
-            {bet.market}
+            {marketLabel(bet.market)}
           </div>
         )}
       </td>
