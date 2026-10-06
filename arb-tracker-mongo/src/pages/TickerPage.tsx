@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Loader2, Radio } from 'lucide-react';
+import { ArrowLeft, Gift, Loader2, Radio } from 'lucide-react';
 import { fetchTicker, type TickerBet } from '../lib/db';
 import { BookmakerLogo } from '../components/BookmakerLogo';
 import { brandById, BOOKMAKERS } from '../lib/markets';
@@ -39,6 +39,13 @@ const startLabel = (v: string | null) => {
 };
 
 const fmt = (n: number | null | undefined) => (n != null ? n.toFixed(2) : '–');
+
+/** Stakes are money, not odds: whole dollars unless the cents matter. */
+const money = (n: number | null | undefined) =>
+  n == null ? '–' : `$${n.toLocaleString(undefined, {
+    minimumFractionDigits: Number.isInteger(n) ? 0 : 2,
+    maximumFractionDigits: 2,
+  })}`;
 
 /**
  * The book columns, in the board's own order so the eye carries across from one
@@ -186,9 +193,10 @@ export default function TickerPage() {
                 <th className="px-2 py-2 text-left font-medium">Event</th>
                 <th className="px-2 py-2 text-left font-medium">Market</th>
                 <th className="px-2 py-2 text-left font-medium">Outcome</th>
-                <th className="border-l border-surface-border px-2 py-2 text-center font-medium">
-                  Price
+                <th className="border-l border-surface-border px-2 py-2 text-right font-medium">
+                  Stake
                 </th>
+                <th className="px-2 py-2 text-center font-medium">Price</th>
                 {columns.map((id) => {
                   const brandInfo = brandById(id);
                   return (
@@ -221,9 +229,6 @@ export default function TickerPage() {
                       >
                         {BRAND_LABEL[b.brand] ?? b.brand}
                       </span>
-                      {b.bonus && (
-                        <span className="ml-1 text-[9px] uppercase text-amber-400/80">bonus</span>
-                      )}
                     </td>
                     <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-300">
                       {time(b.placedAt)}
@@ -254,8 +259,18 @@ export default function TickerPage() {
                     <td className="max-w-[14rem] truncate px-2 py-1.5 text-slate-200" title={b.outcome ?? ''}>
                       {b.outcome ?? '–'}
                     </td>
+                    <td className="whitespace-nowrap border-l border-surface-border px-2 py-1.5 text-right tabular-nums text-slate-300">
+                      <span className="inline-flex items-center justify-end gap-1">
+                        {b.bonus && (
+                          <span title="Bonus bet" aria-label="Bonus bet" className="flex">
+                            <Gift size={11} className="shrink-0 text-amber-400" />
+                          </span>
+                        )}
+                        {money(b.stake)}
+                      </span>
+                    </td>
                     <td
-                      className={`border-l border-surface-border px-2 py-1.5 text-center font-semibold tabular-nums ${
+                      className={`px-2 py-1.5 text-center font-semibold tabular-nums ${
                         beatsField ? 'text-amber-300' : 'text-slate-100'
                       }`}
                       title={beatsField ? 'Longer than any book we hold on this outcome' : undefined}
