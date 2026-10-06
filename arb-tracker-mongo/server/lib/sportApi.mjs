@@ -610,41 +610,38 @@ export async function apiOddsForFixture(fixtureId, sport) {
 /**
  * One fixture by id, outside the board's rolling window.
  *
- * `eventById` used to answer this by scanning the board, which meant a link to
- * anything older than two days returned nothing and the page simply did not
- * load — even though the fixture, and its prices, were still perfectly
- * reachable. The id carries the date it happened on (20261002DB852AED), so the
- * day it names is asked for directly.
+ * Asked for BY ID rather than by date or by market, because neither narrowing
+ * holds across the whole archive:
  *
- * Fanned out across sports because the id does not say which one it is, and the
- * surface is queried per sport. One day of one sport is a small ask, and the
- * answer is cached, so this costs a single cold page load.
+ *   a third of fixture ids carry no date — 53,442 of 167,493 look like
+ *   "afc_-_champions_league:0AB36224A28A" — so deriving the day from the id
+ *   worked for the dated two thirds and silently returned nothing for the rest.
+ *
+ *   filtering to head-to-head loses any fixture that never had one. Darts,
+ *   volleyball and rugby union fixtures exist with no h2h market at all, and
+ *   their pages would not open while their odds sat there.
+ *
+ * Fanned out across sports because the id does not say which one it is. One
+ * fixture per call is a small ask and the answer is cached, so it costs a
+ * single cold page load.
  */
 export async function apiFixtureById(fixtureId, sports) {
-  const m = /^(\d{4})(\d{2})(\d{2})/.exec(String(fixtureId ?? ''));
-  if (!m) return null;
-  const day = `${m[1]}-${m[2]}-${m[3]}`;
+  if (!fixtureId) return null;
   const list = sports?.length ? sports : FALLBACK_SPORTS;
 
-  const found = await Promise.all(
+  const hits = await Promise.all(
     list.map(async (sport) => {
-      const rows = await cachedDrain(`day:${sport}:${day}`, () =>
+      const rows = await cachedDrain(`fx-by-id:${sport}:${fixtureId}`, () =>
         drain('odds-api', {
-          sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED,
-          date_from: day, date_to: day,
-        }),
+          sport, fixture_id: fixtureId, include_stale: 'true', ...UNSETTLED,
+        }, { maxPages: 1 }),
       ).catch(() => []);
-      return rows.some((r) => r.optic_fixture_id === fixtureId) ? sport : null;
+      const row = rows.find((r) => r.optic_fixture_id === fixtureId);
+      return row ? { row, sport } : null;
     }),
   );
-  const sport = found.find(Boolean);
-  if (!sport) return null;
-  return (await apiFixturesForDay(sport, day)).find((f) => f.fixture_id === fixtureId) ?? null;
-}
-
-/** The board's fixture builder, pointed at one day instead of the window. */
-async function apiFixturesForDay(sport, day) {
-  return buildFixtures(sport, { date_from: day, date_to: day });
+  const hit = hits.find(Boolean);
+  return hit ? fixtureFromPivot(hit.row, hit.sport, Date.now(), new Set()) : null;
 }
 
 export async function apiFixtures(sport) {
@@ -677,11 +674,18 @@ async function buildFixtures(sport, window) {
   const rows = [...liveAll, ...closing];
   for (const r of rows) {
     if (!r.optic_fixture_id || byId.has(r.optic_fixture_id)) continue;
-    const status = impliedStatus(r, now, liveIds);
-    // A score on an unplayed fixture is left over from some other meeting;
-    // only show one once the thing has actually started.
-    const played = status === 'completed' || status === 'live';
-    byId.set(r.optic_fixture_id, {
+    byId.set(r.optic_fixture_id, fixtureFromPivot(r, sport, now, liveIds));
+  }
+  return [...byId.values()];
+}
+
+/** One pivot row as a fixture record. Shared with the by-id lookup. */
+function fixtureFromPivot(r, sport, now, liveIds) {
+  const status = impliedStatus(r, now, liveIds);
+  // A score on an unplayed fixture is left over from some other meeting;
+  // only show one once the thing has actually started.
+  const played = status === 'completed' || status === 'live';
+  return {
       fixture_id: r.optic_fixture_id,
       sport,
       category: r.category ?? null,
@@ -700,9 +704,7 @@ async function buildFixtures(sport, window) {
       scores: played ? { home: r.home_score ?? null, away: r.away_score ?? null } : null,
       in_play_data: null,
       has_odds: true,
-    });
-  }
-  return [...byId.values()];
+  };
 }
 
 /** Is the surface reachable and answering? */
