@@ -1,5 +1,6 @@
 import { coll } from './mongo.mjs';
 import { betsConfigured, betsDb } from './betsMongo.mjs';
+import { eventById } from './queries.mjs';
 
 /**
  * Bets placed on one fixture, by brand.
@@ -210,6 +211,71 @@ async function swiftbetFor(db, gutsyEventId) {
   });
 }
 
+/** The match a slip names: the last " - " segment of its event string. */
+const matchName = (v) => {
+  const parts = String(v ?? '').split(' - ');
+  const last = parts.length > 1 ? parts[parts.length - 1] : v;
+  return String(last ?? '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '')
+    .replace(/[^a-z0-9]+/g, ' ').replace(/\bvs\b/g, 'v').trim();
+};
+
+/**
+ * Every mybet event id that is this same match.
+ *
+ * mybet mints a separate event id per MARKET — one for the match, then one
+ * each for "Alternate Total Over", "1st Quarter - Line (1.5)", "First Set
+ * Winner" and so on. Only the first carries a competition, so only the first is
+ * ever mapped to a fixture, and asking for that id alone finds the bets struck
+ * on the head-to-head and none of the rest. On this tennis fixture that was
+ * every mybet and multis bet on the page.
+ *
+ * Siblings share a sport and a suspension time exactly, which is what gathers
+ * them. But a slot can hold two different matches — twelve events at 05:45
+ * covering both an ATP Shanghai tie and a WTA Suzhou one — so the fixture's own
+ * name decides which belong here.
+ *
+ * Matched against each satellite's DESCRIPTION, which is where mybet writes the
+ * match ("First Set Winner - Rigele Te vs Ilia Simakin"). Reading it off a bet
+ * on the base event instead looked tidier and does not work: on this very
+ * fixture every mybet bet sits on a satellite, so there was no bet on the base
+ * event to learn the name from and nothing was gathered at all.
+ */
+async function siblingEventIds(db, baseId, fixtureId) {
+  const base = await db.collection('mybet_events')
+    .findOne({ _id: baseId }, { projection: { sport: 1, suspendAt: 1 } })
+    .catch(() => null);
+  if (!base?.suspendAt) return [baseId];
+
+  const slot = await db.collection('mybet_events')
+    .find({ sport: base.sport, suspendAt: base.suspendAt })
+    .project({ _id: 1, description: 1, league: 1 })
+    .limit(300)
+    .toArray()
+    .catch(() => []);
+  const satellites = slot.filter(
+    (e) => Number(e._id) !== baseId && (!e.league || String(e.league).trim() === '-'),
+  );
+  if (!satellites.length) return [baseId];
+
+  const fixture = await eventById(fixtureId).catch(() => null);
+  if (!fixture) return [baseId];
+  const want = new Set(
+    matchName(`${fixture.home?.name ?? fixture.home ?? ''} ${fixture.away?.name ?? fixture.away ?? ''} ${fixture.name ?? ''}`)
+      .split(' ')
+      .filter((t) => t.length > 2),
+  );
+  if (!want.size) return [baseId];
+
+  const mine = satellites.filter((e) => {
+    const got = matchName(e.description);
+    if (!got) return false;
+    let hit = 0;
+    for (const t of want) if (got.includes(t)) hit++;
+    return hit / want.size >= 0.6;
+  });
+  return [baseId, ...mine.map((e) => Number(e._id))];
+}
+
 /**
  * Mybet and Multis: gutsy.multi_bets, split on the licence.
  *
@@ -219,15 +285,16 @@ async function swiftbetFor(db, gutsyEventId) {
  * and had to be bounded to a date window around the jump; it no longer is, so
  * a bet placed months early is found like any other.
  */
-async function multiBetsFor(db, eventId) {
+async function multiBetsFor(db, eventId, fixtureId) {
   const numericId = Number(eventId);
   // 0 is the sentinel multi-leg bets carry instead of an event id; they name
   // their events only in leg description strings and cannot be joined here.
   if (!Number.isFinite(numericId) || numericId === 0) return { mybet: [], multis: [] };
 
+  const eventIds = await siblingEventIds(db, numericId, fixtureId);
   const rows = await db
     .collection('multi_bets')
-    .find({ event_identifier: numericId, transaction_date: { $gte: BET_CUTOFF } })
+    .find({ event_identifier: { $in: eventIds }, transaction_date: { $gte: BET_CUTOFF } })
     .sort({ transaction_date: -1 })
     .limit(MAX_PER_BRAND * 2)
     .toArray();
@@ -303,7 +370,7 @@ export async function betsForFixture(fixtureId) {
   }
   if (mapping.mybet?.gutsy_event_id) {
     jobs.push(
-      multiBetsFor(db, mapping.mybet.gutsy_event_id).then(({ mybet, multis }) => {
+      multiBetsFor(db, mapping.mybet.gutsy_event_id, fixtureId).then(({ mybet, multis }) => {
         result.mybet = { bets: mybet, reason: mybet.length ? null : 'none' };
         result.multis = { bets: multis, reason: multis.length ? null : 'none' };
       }),
