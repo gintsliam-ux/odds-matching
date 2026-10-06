@@ -155,6 +155,40 @@ async function playerCountry(name, hint) {
 
 const flagUrl = (iso) => `https://flagcdn.com/w160/${iso.toLowerCase()}.png`;
 
+/* A national team IS its country, so the flag is the right badge — Honduras v
+   Jamaica had no crest for either side and rendered as two sets of initials.
+   The map comes from ICU rather than a hand-written list, plus the spellings
+   the feeds actually use and the home nations, which flagcdn serves as
+   gb-eng / gb-sct / gb-wls / gb-nir. */
+const COUNTRY_CODE = (() => {
+  const dn = new Intl.DisplayNames(['en'], { type: 'region' });
+  const m = new Map();
+  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  for (const a of A) for (const b of A) {
+    const code = a + b;
+    let name;
+    try { name = dn.of(code); } catch { continue; }
+    if (!name || name === code) continue;
+    m.set(name.toLowerCase(), code.toLowerCase());
+  }
+  for (const [alias, code] of Object.entries({
+    usa: 'us', 'united states of america': 'us', 'south korea': 'kr', 'north korea': 'kp',
+    'republic of ireland': 'ie', ireland: 'ie', 'czech republic': 'cz', czechia: 'cz',
+    'ivory coast': 'ci', 'cape verde': 'cv', 'east timor': 'tl', swaziland: 'sz',
+    'bosnia and herzegovina': 'ba', bosnia: 'ba', macedonia: 'mk', 'north macedonia': 'mk',
+    england: 'gb-eng', scotland: 'gb-sct', wales: 'gb-wls', 'northern ireland': 'gb-nir',
+    uae: 'ae', 'united arab emirates': 'ae', russia: 'ru', iran: 'ir', syria: 'sy',
+    tanzania: 'tz', laos: 'la', moldova: 'md', brunei: 'bn', palestine: 'ps',
+    'hong kong': 'hk', 'chinese taipei': 'tw', taiwan: 'tw', curacao: 'cw',
+    kosovo: 'xk', turkiye: 'tr', turkey: 'tr',
+  })) m.set(alias, code);
+  return m;
+})();
+
+/* Whole-name match only. "Club America" is a Mexico City club, not Mexico. */
+const countryOfTeamName = (name) => COUNTRY_CODE.get(String(name || '').trim().toLowerCase()) ?? null;
+
+
 /* ----------------------------------------------------------------------- run */
 async function pool(items, n, fn) {
   let i = 0;
@@ -205,6 +239,27 @@ async function main() {
                merged: swum.merged + r.merged };
     }
     console.log(`  done — ${swum.updated} updated, ${swum.inserted} new, ${swum.merged} merged into an existing key`);
+  }
+
+  /* National teams: give them their flag. Only where there is no crest to
+     override, and only on an exact whole-name match. upsertEntities fills a
+     null country and never replaces one, so a real badge found later wins. */
+  const flags = [];
+  for (const e of cached.values()) {
+    if (!TEAM_SPORTS[e.sport] || (only.length && !only.includes(e.sport))) continue;
+    if (e.logo_url || e.country) continue;
+    const iso = countryOfTeamName(e.name);
+    if (iso) flags.push({ sport: e.sport, name: e.name, entity_type: 'team', country: iso,
+                          country_src: 'name-is-country' });
+  }
+  if (flags.length) {
+    console.log(`\nflagging ${flags.length} national teams…`);
+    let n = { inserted: 0, updated: 0, merged: 0 };
+    for (let i = 0; i < flags.length; i += 40) {
+      const r = await upsertEntities(flags.slice(i, i + 40));
+      n = { inserted: n.inserted + r.inserted, updated: n.updated + r.updated, merged: n.merged + r.merged };
+    }
+    console.log(`  done — ${n.updated} updated, ${n.inserted} new`);
   }
 
   const todo = [];

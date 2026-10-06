@@ -61,16 +61,25 @@ export default async function handler(req, res) {
      * board affordable at all.
      */
     /*
-     * Time-sensitive reads. Anything someone watches change while they sit on
-     * the page: fixture status, prices, and the bet feed — the scraper lands a
-     * batch every 40s or so, and the edge was serving bets nine minutes stale
-     * on a one-hour stale-while-revalidate.
+     * Freshness has to be paid for, and the board is expensive.
      *
-     * Everything else here is slow-moving and expensive — the mapping table is
-     * a 20-second read — so it keeps the long window that makes it affordable.
+     * /api/events drains SIXTEEN sports upstream. Putting it on a 30s window
+     * forced that work on almost every request, the big sports (soccer alone is
+     * 11s and 1,099 rows) started timing out, and allEvents drops a sport that
+     * fails — so the board fell from 1,883 events to 83, losing soccer, tennis,
+     * basketball and ice hockey entirely. A fixture vanishing from the board is
+     * also what blanks an open event page, which is how it was first noticed.
+     *
+     * So the window is matched to what each route costs:
+     *   bets, pulse      30s   cheap, and genuinely watched changing
+     *   odds, details    60s   one fixture, half a second
+     *   the board       120s   sixteen sports; status is still timely enough
+     *   mapping, meta   300s   a 20-second read that barely moves
      */
-    const LIVEISH = new Set(['/api/events', '/api/bets', '/api/odds', '/api/h2h', '/api/pulse']);
-    const statusful = LIVEISH.has(url.pathname) || url.pathname.startsWith('/api/events/');
+    const CHEAP_AND_LIVE = new Set(['/api/bets', '/api/pulse']);
+    const PER_FIXTURE = new Set(['/api/odds', '/api/event/details']);
+    const statusful = CHEAP_AND_LIVE.has(url.pathname);
+    const perFixture = PER_FIXTURE.has(url.pathname);
     res.setHeader(
       'cache-control',
       out.status === 200 && !empty
