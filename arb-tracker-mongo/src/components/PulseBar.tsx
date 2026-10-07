@@ -61,8 +61,16 @@ const BAR =
 const SLOT = 'flex min-w-[132px] flex-1 items-center justify-center gap-1.5 px-3 py-1.5';
 const DIVIDER = 'border-l border-surface-border';
 
-/** The five feeds, in the order fetchPulse returns them. */
-const SLOT_LABELS = ['Optic', 'TAB', 'Pinnacle', 'Live', 'Scores'];
+/**
+ * The feeds that are always reported, in the order fetchPulse returns them.
+ *
+ * Scores is deliberately NOT here. It only exists once the store stamps score
+ * changes, so on a deployed instance it never arrives — and a skeleton that
+ * names a feed the bar then cannot show reads as a dead source rather than as
+ * one slot fewer. Better for the bar to gain a slot than to promise one it
+ * does not have.
+ */
+const SLOT_LABELS = ['Optic', 'TAB', 'Pinnacle', 'Live'];
 
 export function PulseBar({ pulses, now }: { pulses: Pulse[]; now: number }) {
   // Hold the bar's height and its five slots while the first read is in
@@ -106,7 +114,7 @@ export function PulseBar({ pulses, now }: { pulses: Pulse[]; now: number }) {
               {lv === 'ok' && (
                 <span
                   className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-70 ${DOT[lv]}`}
-                  // Offset each ring so the five read as separate heartbeats
+                  // Offset each ring so they read as separate heartbeats
                   // rather than one strobe across the top of the page.
                   style={{ animationDelay: `${i * 180}ms` }}
                 />
