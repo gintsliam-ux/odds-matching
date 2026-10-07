@@ -37,6 +37,27 @@ export default function LoginPage() {
     }
   };
 
+  /*
+   * Enter submits, explicitly.
+   *
+   * A form with a submit button is supposed to do this on its own, and the
+   * markup here is the ordinary shape, so this should be redundant. It is here
+   * because the behaviour was reported missing and implicit submission has a
+   * surprising number of ways to not happen — a password manager swallowing
+   * the key, an extension, a browser that does not treat the field as part of
+   * the form. Asking the form to submit outright depends on none of that.
+   *
+   * `preventDefault` first, so where implicit submission DOES fire this does
+   * not post twice. `busy` in submit() guards the rest.
+   */
+  const onKeyDown = (e: React.KeyboardEvent<HTMLFormElement>) => {
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    const el = e.target as HTMLElement;
+    if (el.tagName !== 'INPUT') return;
+    e.preventDefault();
+    e.currentTarget.requestSubmit();
+  };
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-surface px-4">
       <div className="w-full max-w-sm">
@@ -52,7 +73,7 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <form onSubmit={submit} className="space-y-3 rounded-xl border border-surface-border bg-surface-raised/60 p-5">
+        <form onSubmit={submit} onKeyDown={onKeyDown} className="space-y-3 rounded-xl border border-surface-border bg-surface-raised/60 p-5">
           <label className="block">
             <span className="mb-1 block text-[11px] uppercase tracking-wide text-slate-500">Username</span>
             <input
