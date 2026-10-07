@@ -28,6 +28,30 @@ const TEAM_SAMPLE = 400;
 
 const PROVIDERS = ['swift', 'mybet'];
 
+/**
+ * Phase timings, reported on the payload.
+ *
+ * This endpoint is the slowest on the site and its cost is all in production,
+ * where the candidate feeds are remote. Same reasoning as ticker.mjs: the
+ * breakdown has to come back with the data.
+ */
+const timed = async (into, name, fn) => {
+  const t0 = Date.now();
+  try {
+    return await fn();
+  } finally {
+    if (into) into[name] = Date.now() - t0;
+  }
+};
+const timedSync = (into, name, fn) => {
+  const t0 = Date.now();
+  try {
+    return fn();
+  } finally {
+    if (into) into[name] = Date.now() - t0;
+  }
+};
+
 /* ------------------------------------------------------------ candidates */
 
 /** Swiftbet competitions, with the teams seen in each. */
@@ -223,16 +247,23 @@ export async function tournamentMapping() {
   const db = await betsDb();
   if (!db) return { configured: false, providers: {}, leagues: [] };
 
-  const [leagues, existing, swift, mybet, health] = await Promise.all([
-    opticLeagues(),
-    (await coll('competitionMapping')).find({}).toArray(),
-    swiftCandidates(db),
-    mybetCandidates(db),
-    // Built hourly rather than derived here: it needs `fixtures`, which a
-    // deployed instance does not carry. Missing is fine — the page just shows
-    // no health, rather than failing.
-    (await coll('leagueHealth')).find({}).toArray().catch(() => []),
-  ]);
+  const timings = {};
+  const [leagues, existing, swift, mybet, health] = await timed(timings, 'fetch', () =>
+    Promise.all([
+      timed(timings, 'opticLeagues', () => opticLeagues()),
+      timed(timings, 'competitionMapping', async () =>
+        (await coll('competitionMapping')).find({}).toArray(),
+      ),
+      timed(timings, 'swiftCandidates', () => swiftCandidates(db)),
+      timed(timings, 'mybetCandidates', () => mybetCandidates(db)),
+      // Built hourly rather than derived here: it needs `fixtures`, which a
+      // deployed instance does not carry. Missing is fine — the page just shows
+      // no health, rather than failing.
+      timed(timings, 'leagueHealth', async () =>
+        (await coll('leagueHealth')).find({}).toArray().catch(() => []),
+      ),
+    ]),
+  );
   const healthBy = new Map((health ?? []).map((h) => [h._id, h]));
 
   const candidates = { swift, mybet };
@@ -259,7 +290,7 @@ export async function tournamentMapping() {
 
   const rowsByProvider = { swift: [], mybet: [] };
 
-  const leagueRows = leagues.map((l) => {
+  const leagueRows = timedSync(timings, 'score', () => leagues.map((l) => {
     const h = healthBy.get(l.opticLeague);
     const row = { ...l, teams: undefined, providers: {} };
     for (const p of PROVIDERS) {
@@ -325,10 +356,12 @@ export async function tournamentMapping() {
       };
     }
     return row;
-  });
+  }));
 
   // Two leagues claiming one competition means at most one is right.
-  for (const p of PROVIDERS) demoteCollisions(rowsByProvider[p]);
+  timedSync(timings, 'collisions', () => {
+    for (const p of PROVIDERS) demoteCollisions(rowsByProvider[p]);
+  });
 
   const counts = {};
   for (const p of PROVIDERS) {
@@ -345,6 +378,7 @@ export async function tournamentMapping() {
 
   return {
     configured: true,
+    timings,
     thresholds: { auto: AUTO_THRESHOLD, suggest: SUGGEST_THRESHOLD },
     providers: counts,
     // The full competition list per provider, for the picker behind "Edit".
