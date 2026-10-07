@@ -118,6 +118,23 @@ const MARKETY =
  */
 const FULL_FIXTURE_CAP = 25;
 
+/**
+ * Phase timings, reported on the payload.
+ *
+ * The cold path is the whole performance story here -- warm calls answer in
+ * 0.4s, a cold instance took 30s -- and it only exists in production, where
+ * the odds API is reachable. So the breakdown has to come back with the data
+ * rather than from a local profile.
+ */
+const timed = async (into, name, fn) => {
+  const t0 = Date.now();
+  try {
+    return await fn();
+  } finally {
+    if (into) into[name] = Date.now() - t0;
+  }
+};
+
 /** How many bets the feed carries. The table is a glance, not an export. */
 const LIMIT = 150;
 
@@ -867,7 +884,7 @@ export function pickByName(rows, name) {
  * blank because the market is exotic looks the same as one blank because the
  * books disagree, and only one of those is interesting.
  */
-async function pricesFor(bets, byEventId, fixtures) {
+async function pricesFor(bets, byEventId, fixtures, timings) {
   const wanted = new Map(); // fixture_id -> bets needing it
   const want = new Map(); // bet -> what to look for
   for (const b of bets) {
@@ -897,14 +914,14 @@ async function pricesFor(bets, byEventId, fixtures) {
     // every bet present and every comparison column blank, which reads as a
     // quiet market rather than a broken fetch.
     const failures = [];
-    const perSport = await Promise.all(
+    const perSport = await timed(timings, 'oddsPerSport', () => Promise.all(
       apiSportsIn(bets).map((sport) =>
         apiOddsForSport(sport).catch((e) => {
           failures.push(`${sport}: ${String(e?.message ?? e).slice(0, 80)}`);
           return [];
         }),
       ),
-    );
+    ));
     if (failures.length) throw new Error(`odds drain failed — ${failures.join(' | ')}`);
     rows = perSport.flat().filter((r) => onFeed.has(r.fixture_id));
 
@@ -924,7 +941,7 @@ async function pricesFor(bets, byEventId, fixtures) {
       .map(([fixtureId]) => fixtureId)
       .slice(0, FULL_FIXTURE_CAP);
 
-    const extra = await Promise.all(
+    const extra = await timed(timings, 'oddsPerFixture', () => Promise.all(
       needFull.map((fixtureId) => {
         const sport = fixtures.get(fixtureId)?.sport;
         // Current prices only — the comparison columns never show history.
@@ -932,7 +949,8 @@ async function pricesFor(bets, byEventId, fixtures) {
           ? apiOddsForFixture(fixtureId, sport, { history: false }).catch(() => [])
           : Promise.resolve([]);
       }),
-    );
+    ));
+    if (timings) timings.fullFixtures = needFull.length;
     rows = [...rows, ...extra.flat()];
   }
 
@@ -993,23 +1011,29 @@ export async function betTicker() {
   const db = await betsDb();
   if (!db) return { configured: false, bets: [] };
 
+  const timings = {};
   const since = new Date(Date.now() - WINDOW_MS);
-  const [swift, multi] = await Promise.all([
-    swiftSingles(db, since).catch(() => []),
-    multiSingles(db, since).catch(() => []),
-  ]);
+  const [swift, multi] = await timed(timings, 'query', () =>
+    Promise.all([
+      swiftSingles(db, since).catch(() => []),
+      multiSingles(db, since).catch(() => []),
+    ]),
+  );
 
   const bets = [...swift, ...multi]
     .filter((b) => b.placedAt)
     .sort((a, b) => String(b.placedAt).localeCompare(String(a.placedAt)))
     .slice(0, LIMIT);
 
-  await classifyLeadSegments(bets).catch(() => {});
-  const { bets: enriched, pricesError } = await enrich(bets);
+  await timed(timings, 'segments', () => classifyLeadSegments(bets).catch(() => {}));
+  const { bets: enriched, pricesError } = await timed(timings, 'enrich', () =>
+    enrich(bets, timings),
+  );
   return {
     configured: true,
     source: mongoConfigured ? 'mongo' : 'odds-surface',
     ...(pricesError ? { pricesError } : {}),
+    timings,
     bets: enriched,
   };
 }
@@ -1021,10 +1045,10 @@ export async function betTicker() {
  * Separate from the query so a bet that arrives PUSHED goes through exactly the
  * same enrichment as one that arrives in the batch — see tickerStream.mjs.
  */
-export async function enrich(bets) {
+export async function enrich(bets, timings) {
   if (!bets.length) return { bets: [], pricesError: null };
 
-  const { byEventId, fixtures } = await fixturesFor(bets);
+  const { byEventId, fixtures } = await timed(timings, 'fixtures', () => fixturesFor(bets));
   for (const b of bets) {
     const m = b.eventId ? byEventId.get(String(b.eventId)) : null;
     const f = m ? fixtures.get(m.optic_fixture_id) : null;
@@ -1045,9 +1069,11 @@ export async function enrich(bets) {
   // this step threw there, but the feed still answered 200 with a plausible
   // shape, so the failure read as "no comparison prices today" from the
   // outside. Anything that degrades the feed now says so in the payload.
-  const pricesError = await pricesFor(bets, byEventId, fixtures).then(
-    () => null,
-    (e) => String(e?.message ?? e).slice(0, 200),
+  const pricesError = await timed(timings, 'prices', () =>
+    pricesFor(bets, byEventId, fixtures, timings).then(
+      () => null,
+      (e) => String(e?.message ?? e).slice(0, 200),
+    ),
   );
 
   return {
