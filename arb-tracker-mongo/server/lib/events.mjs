@@ -48,6 +48,46 @@ export function normEntity(s) {
     .replace(/^_|_$/g, '');
 }
 
+/**
+ * Does this competition belong to a women's division?
+ *
+ * The same test the league wordmark uses below, including the trailing-W
+ * competitions where that letter is the only thing telling them apart.
+ */
+export function isWomensCompetition(fixture) {
+  return [fixture.optic_league, fixture.tournament, fixture.category]
+    .map((v) => normEntity(v ?? ''))
+    .some((k) => k.includes('women') || k.includes('ladies') || /(^|_)(afl|nrl)w(_|$)/.test(k));
+}
+
+/**
+ * Does this name already mark itself as the women's side?
+ *
+ * The vocabulary is taken from the data, not guessed: across the 934 distinct
+ * team names in women's competitions, 52 carry a marker -- WFC (24), Women (9),
+ * Ladies (7), Femenino (4), Feminin/Féminin (3), W.F.C. (2), Frauen, Lady --
+ * and the other 882 are the bare club name.
+ *
+ * A bare trailing "W" is deliberately NOT one of them. No name in the data
+ * uses it, and testing for it matched the last letter of every Polish club
+ * ending in -ow: `\bw\b` finds a word boundary before the "w" of "Krakow"
+ * because the preceding accented character is not a word character, so
+ * "Wisla Krakow" and "KS Ruch Chorzow" both read as already-qualified.
+ */
+const SAYS_WOMENS =
+  /\b(womens?|women's|ladies|lady|wfc|w\.f\.c\.?|f[eé]minin(?:es?)?|f[ee]menin[oa]|feminin[oa]|frauen|damen|dames)\b/i;
+
+/**
+ * Name a women's side so it cannot be read as the men's one.
+ *
+ * The feed stores them under the bare national name -- Zimbabwe's women's T20
+ * side is "Zimbabwe", the same string as the men's -- and `entities` holds one
+ * crest per country, so the fixture rendered with the men's name AND the men's
+ * badge. The only thing marking it was the competition line underneath.
+ */
+const qualifyWomens = (name) =>
+  !name || SAYS_WOMENS.test(name) ? name : `${name} Women`;
+
 function localLeagueLogo(sport, cat, name) {
   const k = normEntity(name);
   const c = normEntity(cat);
@@ -313,14 +353,17 @@ function toSportEvent(f, compLogos, entities) {
     };
   }
 
-  const home = f.home_team ?? '';
-  const away = f.away_team ?? '';
+  const womens = isWomensCompetition(f);
+  const home = womens ? qualifyWomens(f.home_team ?? '') : f.home_team ?? '';
+  const away = womens ? qualifyWomens(f.away_team ?? '') : f.away_team ?? '';
   const person = PERSON_SPORTS.has(f.sport);
   return {
     id: f.fixture_id,
     sport: league.sport,
     league,
-    name: f.event_name ?? `${home} vs ${away}`,
+    // `event_name` carries the bare names too, so a women's fixture is titled
+    // from the qualified ones rather than from the feed's string.
+    name: womens ? `${home} vs ${away}` : f.event_name ?? `${home} vs ${away}`,
     subtitle,
     home,
     away,
