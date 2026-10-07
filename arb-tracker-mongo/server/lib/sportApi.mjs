@@ -305,6 +305,11 @@ const FIXTURE_COLS = new Set([
   'category', 'tournament', 'location', 'home_team', 'away_team', 'event_name',
   'home_score', 'away_score', 'sports_market_type', 'market_display_name',
   'line', 'pair_key',
+  // In-play, added so a deployed instance can say where a live game is up to
+  // rather than only "LIVE". Fixture-level facts repeated on every row of a
+  // fixture, exactly as the scoreline already was.
+  'period_number', 'period', 'clock', 'is_clock_stopped',
+  'home_period_scores', 'away_period_scores',
 ]);
 
 /**
@@ -717,6 +722,19 @@ async function buildFixtures(sport, window) {
   return [...byId.values()];
 }
 
+/**
+ * `[17, 14, 10, 14]` -> `{ period_1: 17, period_2: 14, … }`, the shape the
+ * board's period breakdown reads. Index 0 is period 1.
+ */
+function periodsFrom(scores) {
+  if (!Array.isArray(scores)) return {};
+  const out = {};
+  scores.forEach((v, i) => {
+    if (typeof v === 'number' && Number.isFinite(v)) out[`period_${i + 1}`] = v;
+  });
+  return out;
+}
+
 /** One pivot row as a fixture record. Shared with the by-id lookup. */
 function fixtureFromPivot(r, sport, now, liveIds) {
   const status = impliedStatus(r, now, liveIds);
@@ -739,8 +757,31 @@ function fixtureFromPivot(r, sport, now, liveIds) {
       status,
       end_date: null,
       current_round: null,
-      scores: played ? { home: r.home_score ?? null, away: r.away_score ?? null } : null,
-      in_play_data: null,
+      scores: played
+        ? {
+            home: { total: r.home_score ?? null, periods: periodsFrom(r.home_period_scores) },
+            away: { total: r.away_score ?? null, periods: periodsFrom(r.away_period_scores) },
+          }
+        : null,
+      /*
+       * Null when nothing is in play, matching the fixtures store rather than
+       * an object of nulls -- `period == null` is what the badge reads as
+       * "LIVE", and that should mean "not in play", not "in play, unknown".
+       *
+       * `clock` is passed through exactly as the surface sends it: MM:SS for
+       * the countdown sports, a bare minute count for soccer. The label does
+       * that formatting, and a clock is never synthesised when the feed omits
+       * one -- eight of 29 live fixtures run without one.
+       */
+      in_play_data:
+        r.period_number != null || r.period != null || r.clock != null || r.is_clock_stopped != null
+          ? {
+              period_number: r.period_number ?? null,
+              period: r.period ?? null,
+              clock: r.clock ?? null,
+              is_clock_stopped: r.is_clock_stopped ?? false,
+            }
+          : null,
       has_odds: true,
   };
 }
