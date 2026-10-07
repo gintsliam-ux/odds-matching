@@ -22,7 +22,7 @@ import { closeBets } from './betsMongo.mjs';
 import { cached, invalidate } from './cache.mjs';
 import { fetchPulse } from './pulse.mjs';
 import {
-  allEvents, eventById, eventDetails, eventsForDay, h2hPrices, oddsForFixture, searchEvents,
+  cachedBoard, eventById, eventDetails, eventsForDay, h2hPrices, oddsForFixture, searchEvents,
 } from './queries.mjs';
 import {
   authenticate, cookieHeader, createUser, deleteUser, listUsers, sessionFromCookies,
@@ -63,7 +63,7 @@ async function meta() {
 }
 
 const ROUTES = {
-  'GET /api/events': () => cached('board', TTL.board, allEvents),
+  'GET /api/events': () => cachedBoard(),
 
   'GET /api/events/day': (url) => {
     const date = url.searchParams.get('date') ?? '';
@@ -137,7 +137,7 @@ const ROUTES = {
   // no ids means "whatever is on the board", which the CDN can cache like any
   // other read. POST stays for callers that want a specific subset.
   'GET /api/h2h': async () => {
-    const board = await cached('board', TTL.board, allEvents);
+    const board = await cachedBoard();
     return h2hPrices(board.filter((e) => !e.outright).map((e) => e.id));
   },
 
@@ -164,7 +164,7 @@ const ROUTES = {
 export function warmCaches() {
   const tick = async () => {
     try {
-      await cached('board', TTL.board, allEvents);
+      await cachedBoard();
       if (isMongo) await cached('pulse', TTL.pulse, fetchPulse);
     } catch (err) {
       console.warn('[warm] refresh failed:', err instanceof Error ? err.message : err);

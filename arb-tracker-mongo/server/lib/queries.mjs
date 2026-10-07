@@ -1,3 +1,4 @@
+import { cached } from './cache.mjs';
 import { coll } from './mongo.mjs';
 import { fixtureMapping } from './fixtureMapping.mjs';
 import { FIXTURE_PROJECTION, SKIP_SPORTS, toEvents } from './events.mjs';
@@ -118,6 +119,18 @@ export async function allEvents() {
   return toEvents(await fixturesInWindow(new Date(Date.now() - WINDOW_MS)));
 }
 
+/**
+ * How long a computed board stays good for, and the ONE cache it lives in.
+ *
+ * Everything that needs the board goes through here -- the board route, the
+ * single-event lookup, the day view, search. They used to call allEvents()
+ * directly, so opening an event re-derived all sixteen sports' worth of
+ * fixtures from scratch: 2.6s on every click through to a match, paid again
+ * for every event id because the per-event cache key could not help.
+ */
+export const BOARD_TTL_MS = 45_000;
+export const cachedBoard = () => cached('board', BOARD_TTL_MS, allEvents);
+
 /** Fixtures for one local calendar day (YYYY-MM-DD), for browsing past dates. */
 export async function eventsForDay(dateStr) {
   const start = new Date(`${dateStr}T00:00:00`);
@@ -126,7 +139,7 @@ export async function eventsForDay(dateStr) {
     // The surface publishes a rolling window only; a day inside it can be
     // filtered out of the board, and one outside it simply is not available.
     const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-    const all = await allEvents();
+    const all = await cachedBoard();
     return all.filter((e) => {
       const t = new Date(e.startsAt).getTime();
       return t >= start.getTime() && t < end.getTime();
@@ -145,7 +158,7 @@ export async function eventsForDay(dateStr) {
 export async function eventById(fixtureId) {
   if (!fixtureId) return null;
   if (isApi) {
-    const all = await allEvents();
+    const all = await cachedBoard();
     const onBoard = all.find((e) => e.id === fixtureId);
     if (onBoard) return onBoard;
     // Off the board, which for anything more than two days old is every link
@@ -226,7 +239,7 @@ export async function searchEvents(query) {
   if (isApi) {
     // No search endpoint upstream; filter the window the surface publishes.
     const re = new RegExp(escapeRe(term), 'i');
-    const all = await allEvents();
+    const all = await cachedBoard();
     return all.filter((e) => re.test(`${e.name} ${e.home} ${e.away}`)).slice(0, SEARCH_LIMIT);
   }
   const re = new RegExp(escapeRe(term), 'i');
