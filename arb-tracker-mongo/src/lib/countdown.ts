@@ -99,7 +99,17 @@ export function livePositionLabel(event: SportEvent): string {
     const half = abbr ? abbr.charAt(0).toUpperCase() + abbr.slice(1).toLowerCase() : '';
     return half ? `${half} ${period}` : `${period}`;
   }
-  return `${PERIOD_PREFIX[sport] ?? 'P'}${period}`;
+  /*
+   * The time on the clock, where the feed gives one: "Q4 13:36", not "Q4".
+   *
+   * It is the same `clock` the detail panel has always shown, and this label
+   * dropped it -- so the list said only how far through a game was, never how
+   * much of it was left. The feed omits it at a break (soccer reads period
+   * "HALF" with no clock) and for some fixtures entirely, which is what the
+   * guard is for.
+   */
+  const period_ = `${PERIOD_PREFIX[sport] ?? 'P'}${period}`;
+  return clock ? `${period_} ${clock}` : period_;
 }
 
 export const TONE_CLASSES: Record<CountdownTone, string> = {
