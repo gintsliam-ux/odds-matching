@@ -46,6 +46,22 @@ const fmt = (n: number | null | undefined) => (n != null ? n.toFixed(2) : '–')
 /** Matches the server's own cap, so the table holds what the feed holds. */
 const LIMIT = 150;
 
+/**
+ * How long ago, short enough to sit in a header.
+ *
+ * "never" rather than a dash when it has not happened: on a quiet night the
+ * stream can be perfectly healthy with nothing yet pushed, and that is worth
+ * saying plainly rather than leaving blank for the reader to interpret.
+ */
+function ago(at: number | null): string {
+  if (at == null) return 'never';
+  const s = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (s < 5) return 'just now';
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  return `${Math.floor(s / 3600)}h ago`;
+}
+
 /** Stakes are money, not odds: whole dollars unless the cents matter. */
 const money = (n: number | null | undefined) =>
   n == null ? '–' : `$${n.toLocaleString(undefined, {
@@ -123,6 +139,18 @@ export default function TickerPage() {
   // newest-first already, so without this a bet landing at the top is
   // indistinguishable from the one it pushed down.
   const [fresh, setFresh] = useState<Set<string>>(new Set());
+  // When the feed last did each of its two things. Worth showing side by side:
+  // a long gap since a push is normal on a quiet night, but a long gap while
+  // bets are visibly arriving means the stream has gone and nobody noticed.
+  const [lastPush, setLastPush] = useState<number | null>(null);
+  const [lastPoll, setLastPoll] = useState<number | null>(null);
+  // Re-renders the two relative times once a second. Nothing else depends on
+  // it, so it costs one render of the header row.
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -133,6 +161,7 @@ export default function TickerPage() {
         .then((d) => {
           if (cancelled) return;
           setBets(d.bets ?? []);
+          setLastPoll(Date.now());
           setState('ready');
         })
         .catch(() => !cancelled && setState('error'));
@@ -160,6 +189,7 @@ export default function TickerPage() {
           const seen = new Set(incoming.map((b) => b.id));
           return [...incoming, ...prev.filter((b) => !seen.has(b.id))].slice(0, LIMIT);
         });
+        setLastPush(Date.now());
         const ids = incoming.map((b) => b.id);
         setFresh((prev) => new Set([...prev, ...ids]));
         setTimeout(() => {
@@ -241,6 +271,15 @@ export default function TickerPage() {
           </span>
           <span className="text-xs text-slate-600">
             {live ? 'Live — bets appear as they are struck' : 'Latest single bets, every brand, every sport'}
+          </span>
+          <span className="flex items-center gap-2 text-[11px] tabular-nums text-slate-600">
+            <span title={lastPush ? new Date(lastPush).toLocaleString() : 'nothing pushed this session'}>
+              pushed <span className="text-slate-400">{ago(lastPush)}</span>
+            </span>
+            <span className="text-slate-700">·</span>
+            <span title={lastPoll ? new Date(lastPoll).toLocaleString() : 'not polled yet'}>
+              polled <span className="text-slate-400">{ago(lastPoll)}</span>
+            </span>
           </span>
           {state === 'loading' && <Loader2 size={13} className="animate-spin text-slate-600" />}
         </div>
