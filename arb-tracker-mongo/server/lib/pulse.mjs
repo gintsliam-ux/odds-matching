@@ -58,8 +58,20 @@ const PULSE_SPORTS = ['soccer', 'tennis', 'basketball', 'baseball', 'icehockey',
 async function apiPulse() {
   const now = Date.now();
   // Both already cached for the board, so the bar costs nothing extra.
-  const [rows, fixtures] = await Promise.all([
+  const [rows, liveRows, fixtures] = await Promise.all([
     Promise.all(PULSE_SPORTS.map((s) => apiOddsForSport(s).catch(() => []))).then((r) => r.flat()),
+    /*
+     * The live feed, for the live dot's own age.
+     *
+     * The closing drain cannot answer it. For a game in play the newest
+     * `current_at` it holds is whenever that book last moved a PRE-MATCH
+     * price, which read as 29 minutes old on a bar sitting next to a running
+     * game. The live rows move constantly, and share their cache entry with
+     * the board's own fixture build, so this costs nothing.
+     */
+    Promise.all(PULSE_SPORTS.map((s) => apiOddsForSport(s, { live: true }).catch(() => []))).then(
+      (r) => r.flat(),
+    ),
     Promise.all(PULSE_SPORTS.map((s) => apiFixtures(s).catch(() => []))).then((r) => r.flat()),
   ]);
 
@@ -85,15 +97,18 @@ async function apiPulse() {
   const inPlay = new Set(fixtures.filter((f) => f.is_live).map((f) => f.fixture_id));
 
   const bookAt = new Map();
-  let liveAt = null;
   for (const r of rows) {
+    if (!scope.has(r.fixture_id)) continue;
     const at = r.current_at ? new Date(r.current_at).getTime() : null;
     if (!at) continue;
-    if (scope.has(r.fixture_id)) {
-      const prev = bookAt.get(r.sportsbook);
-      if (!prev || at > prev) bookAt.set(r.sportsbook, at);
-    }
-    if (inPlay.has(r.fixture_id) && (!liveAt || at > liveAt)) liveAt = at;
+    const prev = bookAt.get(r.sportsbook);
+    if (!prev || at > prev) bookAt.set(r.sportsbook, at);
+  }
+
+  let liveAt = null;
+  for (const r of liveRows) {
+    const at = r.current_at ? new Date(r.current_at).getTime() : null;
+    if (at && (!liveAt || at > liveAt)) liveAt = at;
   }
   const stamp = (ms) => (ms ? new Date(ms).toISOString() : null);
 

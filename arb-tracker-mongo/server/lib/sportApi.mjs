@@ -701,7 +701,11 @@ async function buildFixtures(sport, window) {
     // is in neither of the other two queries, and fell off the board entirely
     // for the hour or so between the final whistle and settlement. Asking for
     // stale live rows is what covers that gap.
-    cachedDrain(`live-all:${sport}`, () =>
+    // SAME key apiOddsForSport({ live: true }) uses, for the same reason the
+    // closing drain above shares one: the request is byte-identical, and two
+    // keys over one request is two drains. The pulse bar reads these rows for
+    // the live heartbeat and must not pay for a second copy of them.
+    cachedDrain(`odds:${sport}:true`, () =>
       drain('odds-api', {
         sport, live: 'true', include_stale: 'true', market: BOARD_MARKET, ...window,
       }),
