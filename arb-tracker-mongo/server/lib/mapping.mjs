@@ -277,18 +277,16 @@ export async function tournamentMapping() {
   if (!db) return { configured: false, providers: {}, leagues: [] };
 
   const timings = {};
-  // One read of the precomputed lists, or the two live aggregations if the job
-  // has not produced them yet.
-  const stored = await timed(timings, 'storedCandidates', () => candidatesFromStore());
-  timings.candidateSource = stored ? 'precomputed' : 'live';
-  const [leagues, existing, swift, mybet, health] = await timed(timings, 'fetch', () =>
+  // Every read together, the precomputed candidate lists included — waiting on
+  // those first and only then starting the rest cost their full 3.9s on top
+  // rather than inside the 3.0s the others take.
+  const [stored, leagues, existing, health] = await timed(timings, 'fetch', () =>
     Promise.all([
+      timed(timings, 'storedCandidates', () => candidatesFromStore()),
       timed(timings, 'opticLeagues', () => opticLeagues()),
       timed(timings, 'competitionMapping', async () =>
         (await coll('competitionMapping')).find({}).toArray(),
       ),
-      stored ? stored.swift : timed(timings, 'swiftCandidates', () => swiftCandidates(db)),
-      stored ? stored.mybet : timed(timings, 'mybetCandidates', () => mybetCandidates(db)),
       // Built hourly rather than derived here: it needs `fixtures`, which a
       // deployed instance does not carry. Missing is fine — the page just shows
       // no health, rather than failing.
@@ -297,6 +295,14 @@ export async function tournamentMapping() {
       ),
     ]),
   );
+  // Only when the hourly job has never produced them.
+  timings.candidateSource = stored ? 'precomputed' : 'live';
+  const [swift, mybet] = stored
+    ? [stored.swift, stored.mybet]
+    : await Promise.all([
+        timed(timings, 'swiftCandidates', () => swiftCandidates(db)),
+        timed(timings, 'mybetCandidates', () => mybetCandidates(db)),
+      ]);
   const healthBy = new Map((health ?? []).map((h) => [h._id, h]));
 
   const candidates = { swift, mybet };
