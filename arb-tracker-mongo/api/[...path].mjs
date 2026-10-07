@@ -139,7 +139,14 @@ export default async function handler(req, res) {
       'cache-control',
       out.status === 200 && !empty
         ? AUTH_CONFIGURED
-          ? `private, max-age=${fresh}`
+          /*
+           * `private` stops the shared cache storing a signed-in response, but
+           * dropping stale-while-revalidate with it was a mistake: the CDN used
+           * to hand over a stale copy instantly and refresh behind, and without
+           * it every expiry makes someone wait on a cold origin. The browser
+           * honours SWR too, so the gate costs nothing here.
+           */
+          ? `private, max-age=${fresh}, stale-while-revalidate=${stale}`
           : `s-maxage=${fresh}, stale-while-revalidate=${stale}`
         : 'no-store',
     );

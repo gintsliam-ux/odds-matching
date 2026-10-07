@@ -563,26 +563,43 @@ async function liveRows(sport) {
  * showed stale in-play numbers and no history for exactly the six books the
  * live feed covers, while the four it does not were correct.
  */
-export async function apiOddsForFixture(fixtureId, sport) {
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.history] Fetch the full price history. True for the
+ *   event page, which draws it. False for callers that only want the current
+ *   price — see the note on `flucs` below.
+ */
+export async function apiOddsForFixture(fixtureId, sport, { history = true } = {}) {
   if (!sport) return [];
   const one = (extra) =>
-    cachedDrain(`fx:${fixtureId}:${extra.live ?? '0'}`, () =>
+    cachedDrain(`fx:${fixtureId}:${extra.live ?? '0'}:${history ? 'h' : 'l'}`, () =>
       drain('odds-api', {
         sport,
         fixture_id: fixtureId,
         include_stale: 'true',
-        // The event page is the one place the full price history is worth
-        // paying for: open, the 6h->10m ladder, close, and per-book status.
-        flucs: 'true',
+        /*
+         * The event page is the one place the full price history is worth
+         * paying for: open, the 6h->10m ladder, close, and per-book status.
+         *
+         * The ticker is not that place. It asks for up to 25 fixtures at once
+         * to fill its comparison columns and uses only `current_price`, so
+         * paying for every fixture's whole history there cost about 30s on a
+         * cold instance for data that was thrown away.
+         */
+        ...(history ? { flucs: 'true' } : {}),
         ...extra,
       }),
     ).catch(() => []);
 
   // No live pivot. This site shows pre-match prices only, so the in-play feed
   // is not a source here at all — see the merge note below.
+  // The settled-price call only feeds the history view; skip it when the
+  // caller is not drawing one.
   const [closing, sp] = await Promise.all([
     one({}),
-    call('odds-sp-api', { fixture_id: fixtureId }).then((b) => b.data ?? []).catch(() => []),
+    history
+      ? call('odds-sp-api', { fixture_id: fixtureId }).then((b) => b.data ?? []).catch(() => [])
+      : Promise.resolve([]),
   ]);
 
   const explodeAll = (pivotRows, isLive) => {

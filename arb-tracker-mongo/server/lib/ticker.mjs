@@ -927,7 +927,10 @@ async function pricesFor(bets, byEventId, fixtures) {
     const extra = await Promise.all(
       needFull.map((fixtureId) => {
         const sport = fixtures.get(fixtureId)?.sport;
-        return sport ? apiOddsForFixture(fixtureId, sport).catch(() => []) : Promise.resolve([]);
+        // Current prices only — the comparison columns never show history.
+        return sport
+          ? apiOddsForFixture(fixtureId, sport, { history: false }).catch(() => [])
+          : Promise.resolve([]);
       }),
     );
     rows = [...rows, ...extra.flat()];
