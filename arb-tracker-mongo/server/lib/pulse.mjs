@@ -38,12 +38,14 @@ const iso = (v) => (v instanceof Date ? v.toISOString() : v ?? null);
  * heartbeat. It reuses the drains the board has already cached, so the bar costs
  * nothing extra.
  *
- * Two entries are still left out rather than faked. The surface now carries the
- * in-play state, so the COUNTS either would need are available -- but neither
- * has a timestamp, and this bar shows an age rather than a status word. `optic`
- * is a fixture-table write time; `scores` needs the moment a score last
- * changed. Giving either the quoting heartbeat would paint a dot that is green
- * whenever prices move, which is the one thing it must not say.
+ * Both of the entries this could not reproduce now have a real timestamp on the
+ * pivot: `fixture_updated_at` for the Optic dot, `score_updated_at` for Scores.
+ * Neither is derived from price movement, which is what kept them out before --
+ * a Scores dot aged off the quoting heartbeat would go green exactly when
+ * scores had stopped arriving and prices had not.
+ *
+ * `score_updated_at` is null until the store starts stamping it, so the Scores
+ * dot appears on its own once that lands rather than sitting grey until then.
  */
 /**
  * Sports sampled for the heartbeat, rather than all sixteen.
@@ -96,6 +98,18 @@ async function apiPulse() {
    */
   const inPlay = new Set(fixtures.filter((f) => f.is_live).map((f) => f.fixture_id));
 
+  const max = (pick) => {
+    let best = null;
+    for (const f of fixtures) {
+      const v = pick(f);
+      const t = v ? new Date(v).getTime() : null;
+      if (t && Number.isFinite(t) && (!best || t > best)) best = t;
+    }
+    return best;
+  };
+  const opticAt = max((f) => f.updated_at);
+  const scoreAt = max((f) => f.score_updated_at);
+
   const bookAt = new Map();
   for (const r of rows) {
     if (!scope.has(r.fixture_id)) continue;
@@ -112,7 +126,11 @@ async function apiPulse() {
   }
   const stamp = (ms) => (ms ? new Date(ms).toISOString() : null);
 
+  // Same order the Mongo path returns, so the two bars read alike.
+  const scored = fixtures.filter((f) => f.is_live && f.score_updated_at).length;
+
   return [
+    { key: 'optic', label: 'Optic', at: stamp(opticAt), warn: 10, stale: 30 },
     ...WATCHED_BOOKS.map((b) => ({
       key: b.key,
       label: b.label,
@@ -135,6 +153,22 @@ async function apiPulse() {
       warn: 5,
       stale: 15,
     },
+    // Only once the store stamps score changes. Until then the column is null
+    // for every fixture and a dot would be permanently grey, which reads as
+    // broken rather than as not-yet-available.
+    ...(scoreAt
+      ? [
+          {
+            key: 'scores',
+            label: 'Scores',
+            at: stamp(scoreAt),
+            detail: inPlay.size ? `${scored}/${inPlay.size}` : undefined,
+            idle: inPlay.size === 0,
+            warn: 10,
+            stale: 30,
+          },
+        ]
+      : []),
   ];
 }
 

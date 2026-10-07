@@ -310,6 +310,10 @@ const FIXTURE_COLS = new Set([
   // fixture, exactly as the scoreline already was.
   'period_number', 'period', 'clock', 'is_clock_stopped',
   'home_period_scores', 'away_period_scores',
+  // `actual_start` is the real jump. `scheduled_start` is Optic's not-before
+  // slot, which tennis never replaces, so a match already in play can carry a
+  // start time hours away. The two write timestamps feed the status bar.
+  'actual_start', 'fixture_updated_at', 'score_updated_at',
 ]);
 
 /**
@@ -329,7 +333,7 @@ const PRICE_FIELDS = new Set([
   'odds', 'open', '6h', '3h', '1h', '30m', '10m', 'close', 'current', 'at', 'status', 'fair',
 ]);
 
-function explode(row, { live }) {
+function explode(row, { live, unsettled }) {
   const out = [];
   const byOutcome = new Map();
 
@@ -365,7 +369,17 @@ function explode(row, { live }) {
      * So the fallback now needs the book to have actually stopped: an explicit
      * `closed` status, or the plain shape's absence of any status at all.
      */
-    const settled = !live && rec.status !== 'active' && rec.status !== 'suspended';
+    /*
+     * `unsettled` disables the fallback entirely.
+     *
+     * It infers "this must be the close" from the plain shape having no status
+     * column, which held while the plain shape only carried settled fixtures.
+     * `include_unsettled=true` returns that same column-less shape for games
+     * that have not kicked off, so without this the current price would be
+     * stamped as a closing price on every upcoming fixture.
+     */
+    const settled =
+      !unsettled && !live && rec.status !== 'active' && rec.status !== 'suspended';
     const closePrice = num(rec.close) ?? (settled ? price : null);
 
     const mid = marketId(row.sports_market_type);
@@ -576,31 +590,27 @@ async function liveRows(sport) {
  */
 /**
  * @param {object} [opts]
- * @param {boolean} [opts.settledPrices] Fetch the settled (SP) prices too.
- *   True for the event page, which draws them. False for the ticker, which
- *   reads only `current_price`.
+ * @param {boolean} [opts.currentOnly] Current prices only -- no ladder, no
+ *   settled prices. For the ticker's comparison columns, which read
+ *   `current_price` and nothing else. The event page leaves it false and gets
+ *   the full history it draws.
  */
-export async function apiOddsForFixture(fixtureId, sport, { settledPrices = true } = {}) {
+export async function apiOddsForFixture(fixtureId, sport, { currentOnly = false } = {}) {
   if (!sport) return [];
   const one = (extra) =>
-    cachedDrain(`fx:${fixtureId}:${extra.live ?? '0'}`, () =>
+    cachedDrain(`fx:${fixtureId}:${extra.live ?? '0'}:${currentOnly ? 'c' : 'h'}`, () =>
       drain('odds-api', {
         sport,
         fixture_id: fixtureId,
         include_stale: 'true',
         /*
-         * NOT optional, and not only about history.
-         *
-         * `flucs` is also the switch that brings UNSETTLED fixtures onto this
-         * drain -- see UNSETTLED and the note on apiOddsForSport. Dropping it
-         * to save the ladder on the ticker's comparison fetch silently emptied
-         * every upcoming fixture, which is most of them: the feed went from
-         * about 120 bets priced to 50, and the columns simply read blank.
-         *
-         * So the ladder is paid for. Only the separate settled-price call
-         * below is skippable.
+         * `flucs` used to be the ONLY way to see an upcoming fixture here, so
+         * dropping it to avoid buying the ladder silently emptied every one of
+         * them -- bets priced fell from 96 of 150 to 50 and the columns read
+         * blank. `include_unsettled` now does that job on its own, so the two
+         * can finally be asked for separately.
          */
-        flucs: 'true',
+        ...(currentOnly ? { include_unsettled: 'true' } : { flucs: 'true' }),
         ...extra,
       }),
     ).catch(() => []);
@@ -609,16 +619,16 @@ export async function apiOddsForFixture(fixtureId, sport, { settledPrices = true
   // is not a source here at all — see the merge note below.
   const [closing, sp] = await Promise.all([
     one({}),
-    settledPrices
-      ? call('odds-sp-api', { fixture_id: fixtureId }).then((b) => b.data ?? []).catch(() => [])
-      : Promise.resolve([]),
+    currentOnly
+      ? Promise.resolve([])
+      : call('odds-sp-api', { fixture_id: fixtureId }).then((b) => b.data ?? []).catch(() => []),
   ]);
 
   const explodeAll = (pivotRows, isLive) => {
     const out = [];
     for (const r of pivotRows) {
       if (r.optic_fixture_id !== fixtureId) continue;
-      for (const row of explode(r, { live: isLive })) {
+      for (const row of explode(r, { live: isLive, unsettled: currentOnly })) {
         row.fixture_id = fixtureId;
         out.push(row);
       }
@@ -763,7 +773,7 @@ function fixtureFromPivot(r, sport, now, liveIds) {
       home_team: r.home_team ?? null,
       away_team: r.away_team ?? null,
       scheduled_start: r.commence_time ?? null,
-      actual_start: null,
+      actual_start: r.actual_start ?? null,
       is_live: status === 'live',
       status,
       end_date: null,
@@ -793,6 +803,11 @@ function fixtureFromPivot(r, sport, now, liveIds) {
               is_clock_stopped: r.is_clock_stopped ?? false,
             }
           : null,
+      // For the status bar: the fixture row's own write time, and the moment a
+      // score last changed. The latter is null until the store stamps it, and
+      // is never derived from price movement — see pulse.mjs.
+      updated_at: r.fixture_updated_at ?? null,
+      score_updated_at: r.score_updated_at ?? null,
       has_odds: true,
   };
 }

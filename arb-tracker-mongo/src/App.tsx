@@ -436,8 +436,12 @@ export default function App() {
       const sa = STATUS_ORDER[effectiveStatus(a, now)];
       const sb = STATUS_ORDER[effectiveStatus(b, now)];
       if (sa !== sb) return sa - sb;
-      const ta = new Date(a.startsAt).getTime();
-      const tb = new Date(b.startsAt).getTime();
+      // `actualStart` where there is one: scheduled_start is Optic's
+      // not-before slot and tennis never replaces it, so a match already in
+      // play can carry a start time hours out and sorted among the live rows as
+      // though it had not begun.
+      const ta = new Date(a.actualStart ?? a.startsAt).getTime();
+      const tb = new Date(b.actualStart ?? b.startsAt).getTime();
       return searchActive && sa >= STATUS_ORDER.final ? tb - ta : ta - tb;
     });
     // Whatever is open stays in the rail even when the filters exclude it —
