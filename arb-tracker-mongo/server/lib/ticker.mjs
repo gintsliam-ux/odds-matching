@@ -116,7 +116,16 @@ const MARKETY =
  * one call per fixture — but it is the one cost here that grows with the feed,
  * so it is bounded rather than trusted to stay small.
  */
-const FULL_FIXTURE_CAP = 25;
+/*
+ * Per-fixture top-ups per feed read.
+ *
+ * Raised from 25 because the cap was already saturated before period
+ * moneylines and btts started asking for one, and a bet that loses its
+ * comparison to a queue is indistinguishable from one the surface cannot
+ * price. They run concurrently, so the wall cost is upstream concurrency
+ * rather than the sum: 25 of them measured 1.5s.
+ */
+const FULL_FIXTURE_CAP = 40;
 
 /**
  * Phase timings, reported on the payload.
@@ -760,10 +769,23 @@ export function parseBetMarket(market, outcome) {
   const ko = key(o);
   if (!km && !ko) return null;
 
+  /*
+   * Both-teams-to-score, on its own, IS a market the surface prices — `btts`,
+   * and its selections are literally "Yes" and "No".
+   *
+   * It was being thrown out twice over: once by the combo guard below, for
+   * containing "both teams", and again by the non-priceable list, for
+   * containing "to score". Six bets on a typical feed, every one of them
+   * matchable. A COMBINED bet still has to go: "half time result and both
+   * teams to score" reads "Mexico and Yes" on the outcome, so requiring the
+   * outcome to be nothing but yes/no is what separates them.
+   */
+  const btts = /\bboth teams to score\b/.test(km) && /^(yes|no)$/.test(ko);
+
   // Two markets in one bet — "1st quarter winner / 1st quarter total points",
   // "half time result and both teams to score". The surface prices each leg
   // separately and neither is this bet, so there is nothing honest to show.
-  if (/\//.test(m) || /\b(and|both teams)\b/.test(km)) return null;
+  if (!btts && (/\//.test(m) || /\b(and|both teams)\b/.test(km))) return null;
 
   /*
    * Markets this board does not price. They have to be named, because several
@@ -775,7 +797,7 @@ export function parseBetMarket(market, outcome) {
    * Blank is the honest answer for these. A comparison against a market the
    * bet was not struck in is worse than no comparison at all.
    */
-  if (/\b(correct score|tri bet|winning margin|margin|scorer|anytime|to score|race to|odd\/even|odd or even)\b/.test(km)) {
+  if (!btts && /\b(correct score|tri bet|winning margin|margin|scorer|anytime|to score|race to|odd\/even|odd or even)\b/.test(km)) {
     return null;
   }
 
@@ -798,6 +820,11 @@ export function parseBetMarket(market, outcome) {
     : /\b(1st|first) set\b|\bset 1\b|\b1s\b/.test(km) ? '1s_'
     : /\b(1st|first) inn(ing)?s?\b|\binn(ing)?s? 1\b/.test(km) ? '1inn_'
     : '';
+
+  // Named here rather than above, because a half-time BTTS is `1h_btts`.
+  if (btts) {
+    return { kind: 'btts', marketIds: [`${period}btts`], name: o.trim(), line: null };
+  }
 
   // The line can be written on either side: "handicap -3.5" carries it in the
   // market, "Over +228.5" in the outcome. The outcome wins when both have one.
@@ -824,8 +851,19 @@ export function parseBetMarket(market, outcome) {
      */
     const qualifier = km
       .replace(PERIOD_WORDS, ' ')
+      /*
+       * `2way` and `inc ot` describe the market's SHAPE, not whose total it
+       * is. Left in, they read as a team name and sent the bet looking for a
+       * team total: "set 1 total games 2way 9.5" and "goals 5.5 (inc ot)" both
+       * priced nothing, though 1s_total at 9.5 and total at 5.5 were sitting
+       * there. "Norway" survives, because \bway\b does not match inside it.
+       */
       .replace(/\b(total|totals|over|under|alternate|alt|line|lines|points?|goals?|runs?|games?|sets?|score|match|the)\b/g, ' ')
-      .replace(/[-+]?\d+(?:\.\d+)?/g, ' ')
+      .replace(/\b(2way|3way|way|inc|incl|including|ot|overtime|reg|regulation)\b/g, ' ')
+      // Standalone numbers only — the same rule `name` below already uses.
+      // Stripping digits anywhere made "Adelaide 36ers" into "adelaide ers",
+      // which would match no team total if the surface ever carried one.
+      .replace(/(^|\s)[-+]?\d+(?:\.\d+)?(?=\s|$)/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
     return qualifier
@@ -958,8 +996,21 @@ async function pricesFor(bets, byEventId, fixtures, timings) {
      * is exactly what opening the event page does. Capped, because the cost is
      * per fixture and this endpoint answers on a 30-second cache.
      */
+    /*
+     * A PERIOD-scoped moneyline is not on that drain either.
+     *
+     * It asks for `market=h2h`, which returns the FULL-MATCH moneyline only.
+     * So `1s_moneyline`, `1h_moneyline` and the rest found no rows and priced
+     * nothing -- while `kind === 'moneyline'` told this filter the fixture was
+     * already covered and it never asked for the whole thing. A first-set
+     * winner whose selection was sitting right there in `1s_moneyline` is
+     * exactly the bet that went blank.
+     */
+    const onH2hDrain = (w) =>
+      w?.kind === 'moneyline' &&
+      (w.marketIds ?? []).every((id) => id === 'moneyline' || id === 'moneyline_3way');
     const needFull = [...wanted.entries()]
-      .filter(([, list]) => list.some((b) => want.get(b)?.kind !== 'moneyline'))
+      .filter(([, list]) => list.some((b) => !onH2hDrain(want.get(b))))
       .map(([fixtureId]) => fixtureId)
       .slice(0, FULL_FIXTURE_CAP);
 
