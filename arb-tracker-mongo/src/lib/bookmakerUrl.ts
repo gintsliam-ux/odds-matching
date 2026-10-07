@@ -33,8 +33,23 @@ const MYBET_SPORT_CODE: Record<string, string> = {
 const HOST: Record<string, string> = {
   mybet: 'www.mybet.com.au',
   multis: 'www.multis.com.au',
-  // swiftbet: its URL shape is not known yet.
 };
+
+/*
+ * Swiftbet is a different, simpler shape — no sport segment at all:
+ *
+ *   https://swiftbet.com.au/sports/event/131d2cb3-d10e-583b-9ae5-9966db03f490
+ *
+ * and that id is exactly the one its bets already carry, so every sport works
+ * without a code table. The two are kept apart rather than generalised: a
+ * single template with an optional segment would read as though the sport code
+ * were incidental to mybet, when it is the part that needs confirming per
+ * sport.
+ */
+const swiftbetUrl = (eventId: string) => `https://swiftbet.com.au/sports/event/${eventId}`;
+
+/** A swiftbet event id — a UUID, where mybet's are numeric. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The book's page for this event, or null when we cannot build one honestly. */
 export function bookmakerUrl(
@@ -42,8 +57,11 @@ export function bookmakerUrl(
   sport: string | null,
   eventId: string | null,
 ): string | null {
+  if (!eventId) return null;
+  if (brand === 'swiftbet') return UUID.test(eventId) ? swiftbetUrl(eventId) : null;
+
   const host = HOST[brand];
-  if (!host || !eventId) return null;
+  if (!host) return null;
   // mybet mints numeric event ids; anything else is not one of theirs.
   if (!/^\d+$/.test(eventId)) return null;
   const code = sport ? MYBET_SPORT_CODE[sport] : null;

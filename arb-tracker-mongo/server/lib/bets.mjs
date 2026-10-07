@@ -218,6 +218,9 @@ async function swiftbetFor(db, gutsyEventId) {
   return rows.map((b) => {
     const { selection, market, legCount } = swiftSelection(b, gutsyEventId);
     return normalise({
+      // The book's own event id — swiftbet's URL takes it directly.
+      eventId: gutsyEventId,
+      sport: null,
       id: b.bet_id ?? String(b._id),
       placedAt: iso(betInstant(b.bet_time)),
       // Never truncated: the whole point of showing a user id is being able to
