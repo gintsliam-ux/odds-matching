@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, Link2, Radio } from 'lucide-react';
+import { Activity, Link2, LogOut, Radio, Users as UsersIcon } from 'lucide-react';
 import { Link, Outlet, useMatch, useNavigate } from 'react-router-dom';
 import { Header } from './components/Header';
 import { FilterBar } from './components/FilterBar';
@@ -20,9 +20,51 @@ import {
 } from './lib/db';
 import { effectiveStatus } from './lib/countdown';
 import { useCapabilities } from './lib/capabilitiesContext';
+import { useAuth } from './lib/useAuth';
 import { eventPath } from './lib/routing';
 import type { EventStatus, SportEvent } from './lib/types';
 import type { LayoutContext } from './EventView';
+
+/**
+ * Who is signed in, pinned to the very bottom of the rail.
+ *
+ * Users sits here rather than in the nav above because it is administration,
+ * not part of the desk — and it only appears for the admins who can use it.
+ */
+function SignedInAs() {
+  const { user, signOut } = useAuth();
+  if (!user) return null;
+  return (
+    <div className="shrink-0 border-t border-surface-border p-2">
+      {user.role === 'admin' && (
+        <Link
+          to="/users"
+          className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
+        >
+          <UsersIcon size={14} />
+          Users
+        </Link>
+      )}
+      <div className="flex items-center gap-2 px-2.5 py-2">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-[11px] font-semibold uppercase text-emerald-300">
+          {user.username.slice(0, 1)}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] text-slate-200">{user.username}</span>
+          <span className="block text-[10px] uppercase tracking-wide text-slate-600">{user.role}</span>
+        </span>
+        <button
+          type="button"
+          onClick={signOut}
+          title="Sign out"
+          className="shrink-0 rounded-md p-1.5 text-slate-600 transition hover:bg-white/5 hover:text-slate-300"
+        >
+          <LogOut size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
 
 const STATUS_ORDER: Record<EventStatus, number> = {
   live: 0,
@@ -633,6 +675,7 @@ export default function App() {
               </Link>
             </div>
           )}
+          <SignedInAs />
         </aside>
 
         {/* Main: routed event detail — pinned info bar + scrolling grid */}

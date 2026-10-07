@@ -9,6 +9,7 @@ import { closeBets } from './lib/betsMongo.mjs';
 import { describeSource } from './lib/source.mjs';
 import { handleApi, warmCaches } from './lib/routes.mjs';
 import { streamTicker } from './lib/sse.mjs';
+import { sessionFromCookies } from './lib/auth.mjs';
 
 /**
  * The local / on-NAS host. Serves the same route table a Vercel function does
@@ -20,10 +21,11 @@ const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const DIST = join(ROOT, 'dist');
 const PORT = Number(process.env.PORT || 5174);
 
-const json = (res, body, status = 200) => {
+const json = (res, body, status = 200, headers = {}) => {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
+    ...headers,
   });
   res.end(JSON.stringify(body));
 };
@@ -110,6 +112,9 @@ const server = createServer(async (req, res) => {
   // Streams its own response, so it cannot go through handleApi's {status, body}.
   // No duration cap here: this host is long-lived, unlike the serverless one.
   if (url.pathname === '/api/ticker/stream') {
+    if (process.env.AUTH_SECRET && !sessionFromCookies(req.headers.cookie)) {
+      return json(res, { error: 'not signed in' }, 401);
+    }
     return streamTicker(req, res, { maxMs: 2 ** 31 - 1 });
   }
 
@@ -120,8 +125,9 @@ const server = createServer(async (req, res) => {
       pathname: url.pathname,
       searchParams: url.searchParams,
       body,
+      cookies: req.headers.cookie,
     });
-    json(res, out.body, out.status);
+    json(res, out.body, out.status, out.headers ?? {});
   } catch (err) {
     // The board is read-only, so a failure here is always a data or query
     // problem; log it in full and hand the client something short to render.

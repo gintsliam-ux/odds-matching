@@ -24,6 +24,10 @@ import { fetchPulse } from './pulse.mjs';
 import {
   allEvents, eventById, eventDetails, eventsForDay, h2hPrices, oddsForFixture, searchEvents,
 } from './queries.mjs';
+import {
+  authenticate, cookieHeader, createUser, deleteUser, listUsers, sessionFromCookies,
+  signSession, updateUser,
+} from './auth.mjs';
 
 /* --------------------------------------------------------------- caching */
 
@@ -225,15 +229,89 @@ const MONGO_ONLY = {
 };
 
 /**
- * Run one request against the table. Returns `{ status, body }` so each host
- * only has to deal with its own transport.
+ * Everything behind a sign-in, with the two exceptions that cannot be.
+ *
+ * `/api/auth` is how you sign in, and `/api/capabilities` is what the shell
+ * reads before it knows who you are. Everything else is the desk's own data.
  */
-export async function handleApi({ method, pathname, searchParams, body }) {
-  const key = `${method} ${pathname.replace(/\/$/, '') || '/'}`;
+const PUBLIC = new Set(['/api/auth', '/api/capabilities']);
+
+/** Auth is on when there is a secret to sign with. */
+const AUTH_CONFIGURED = Boolean(process.env.AUTH_SECRET);
+
+/* ------------------------------------------------------------- auth routes */
+
+async function authRoute(method, searchParams, body, cookies) {
+  if (method === 'GET') {
+    const me = sessionFromCookies(cookies);
+    if (!me) return { status: 401, body: { error: 'not signed in' } };
+    // Slide the window forward, so a desk in use never expires — only a real
+    // absence long enough to outrun the cookie's life signs you out.
+    return { status: 200, body: { user: me }, headers: { 'set-cookie': cookieHeader(signSession(me)) } };
+  }
+  if (method !== 'POST') return { status: 405, body: { error: 'GET or POST only' } };
+
+  const b = body ?? {};
+  if (b.action === 'logout') {
+    return { status: 200, body: { ok: true }, headers: { 'set-cookie': cookieHeader(null) } };
+  }
+  if (!b.username || !b.password) {
+    return { status: 400, body: { error: 'username and password required' } };
+  }
+  const user = await authenticate(b.username, b.password);
+  // Deliberately vague — do not say which half was wrong.
+  if (!user) return { status: 401, body: { error: 'Incorrect username or password' } };
+  return { status: 200, body: { user }, headers: { 'set-cookie': cookieHeader(signSession(user)) } };
+}
+
+async function usersRoute(method, body, me) {
+  if (me.role !== 'admin') return { status: 403, body: { error: 'admins only' } };
+  try {
+    if (method === 'GET') return { status: 200, body: { users: await listUsers() } };
+    if (method === 'POST') {
+      return { status: 200, body: { user: await createUser(body?.username, body?.password, body?.role) } };
+    }
+    if (method === 'PATCH') {
+      const { id, ...patch } = body ?? {};
+      return { status: 200, body: { user: await updateUser(id, patch) } };
+    }
+    if (method === 'DELETE') {
+      await deleteUser(body?.id, me.id);
+      return { status: 200, body: { ok: true } };
+    }
+  } catch (e) {
+    return { status: 400, body: { error: String(e?.message ?? e) } };
+  }
+  return { status: 405, body: { error: 'unsupported method' } };
+}
+
+/**
+ * Run one request against the table. Returns `{ status, body, headers? }` so
+ * each host only has to deal with its own transport.
+ */
+export async function handleApi({ method, pathname, searchParams, body, cookies }) {
+  const path = pathname.replace(/\/$/, '') || '/';
+  const key = `${method} ${path}`;
 
   if (key === 'GET /api/capabilities') {
-    return { status: 200, body: CAPABILITIES };
+    return { status: 200, body: { ...CAPABILITIES, auth: AUTH_CONFIGURED } };
   }
+
+  /*
+   * Fail CLOSED when there is no secret. Serving the desk's data because a
+   * config value went missing is the one outcome worth refusing outright, and
+   * a 503 that says why is findable where a silently public site is not.
+   */
+  if (!AUTH_CONFIGURED && !PUBLIC.has(path)) {
+    return { status: 503, body: { error: 'auth is not configured on this instance (AUTH_SECRET is unset)' } };
+  }
+
+  if (path === '/api/auth') return authRoute(method, searchParams, body, cookies);
+
+  const me = AUTH_CONFIGURED ? sessionFromCookies(cookies) : null;
+  if (AUTH_CONFIGURED && !me) return { status: 401, body: { error: 'not signed in' } };
+
+  if (path === '/api/users') return usersRoute(method, body, me);
 
   const handler = ROUTES[key];
   if (!handler) return { status: 404, body: { error: 'not found' } };
