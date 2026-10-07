@@ -1,6 +1,6 @@
 import { coll } from './mongo.mjs';
 import { isApi } from './source.mjs';
-import { apiOddsForSport, apiSports } from './sportApi.mjs';
+import { apiFixtures, apiOddsForSport } from './sportApi.mjs';
 
 /**
  * Feed freshness for the status bar: how long ago each source last moved.
@@ -38,9 +38,12 @@ const iso = (v) => (v instanceof Date ? v.toISOString() : v ?? null);
  * heartbeat. It reuses the drains the board has already cached, so the bar costs
  * nothing extra.
  *
- * Two entries cannot be reproduced and are left out rather than faked: `optic`
- * is a fixture-table write time with no counterpart here, and `scores` needs a
- * score-change timestamp the surface does not publish.
+ * Two entries are still left out rather than faked. The surface now carries the
+ * in-play state, so the COUNTS either would need are available -- but neither
+ * has a timestamp, and this bar shows an age rather than a status word. `optic`
+ * is a fixture-table write time; `scores` needs the moment a score last
+ * changed. Giving either the quoting heartbeat would paint a dot that is green
+ * whenever prices move, which is the one thing it must not say.
  */
 /**
  * Sports sampled for the heartbeat, rather than all sixteen.
@@ -53,22 +56,44 @@ const iso = (v) => (v instanceof Date ? v.toISOString() : v ?? null);
 const PULSE_SPORTS = ['soccer', 'tennis', 'basketball', 'baseball', 'icehockey', 'amfootball'];
 
 async function apiPulse() {
-  const rows = (
-    await Promise.all(PULSE_SPORTS.map((s) => apiOddsForSport(s).catch(() => [])))
-  ).flat();
+  const now = Date.now();
+  // Both already cached for the board, so the bar costs nothing extra.
+  const [rows, fixtures] = await Promise.all([
+    Promise.all(PULSE_SPORTS.map((s) => apiOddsForSport(s).catch(() => []))).then((r) => r.flat()),
+    Promise.all(PULSE_SPORTS.map((s) => apiFixtures(s).catch(() => []))).then((r) => r.flat()),
+  ]);
+
+  // The same window the Mongo path scopes to: the games the books should be
+  // pricing right now. Scoping matters for the book dots -- unscoped, "when did
+  // TAB last move" is answered by any one of thousands of rows and can never go
+  // amber.
+  const scope = new Set(
+    fixtures
+      .filter((f) => {
+        const t = f.scheduled_start ? new Date(f.scheduled_start).getTime() : NaN;
+        return Number.isFinite(t) && t >= now - SCOPE_BACK_MS && t <= now + SCOPE_FWD_MS;
+      })
+      .map((f) => f.fixture_id),
+  );
+  /*
+   * In play as the surface now reports it, not "has an active price".
+   *
+   * The latter counted every fixture anyone was quoting -- 1,219 of them,
+   * against the 37 actually being played -- so the number beside the dot
+   * disagreed with the same dot locally by a factor of thirty.
+   */
+  const inPlay = new Set(fixtures.filter((f) => f.is_live).map((f) => f.fixture_id));
 
   const bookAt = new Map();
   let liveAt = null;
-  const liveFixtures = new Set();
   for (const r of rows) {
     const at = r.current_at ? new Date(r.current_at).getTime() : null;
     if (!at) continue;
-    const prev = bookAt.get(r.sportsbook);
-    if (!prev || at > prev) bookAt.set(r.sportsbook, at);
-    if (r.status === 'active') {
-      if (!liveAt || at > liveAt) liveAt = at;
-      if (r.fixture_id) liveFixtures.add(r.fixture_id);
+    if (scope.has(r.fixture_id)) {
+      const prev = bookAt.get(r.sportsbook);
+      if (!prev || at > prev) bookAt.set(r.sportsbook, at);
     }
+    if (inPlay.has(r.fixture_id) && (!liveAt || at > liveAt)) liveAt = at;
   }
   const stamp = (ms) => (ms ? new Date(ms).toISOString() : null);
 
@@ -77,17 +102,21 @@ async function apiPulse() {
       key: b.key,
       label: b.label,
       at: stamp(bookAt.get(b.key)),
-      idle: !bookAt.has(b.key),
+      detail: scope.size ? `${scope.size} fx` : undefined,
+      // No fixtures in the window is not a fault — say so rather than alarm.
+      idle: scope.size === 0,
       warn: b.warn,
       stale: b.stale,
     })),
     {
       key: 'live',
-      label: 'Quoting',
+      // "Live", as the Mongo path calls it. The same key labelled two different
+      // things read as two different checks.
+      label: 'Live',
       at: stamp(liveAt),
-      detail: liveFixtures.size ? `${liveFixtures.size}` : undefined,
-      // Nothing being quoted at 4am is not a fault.
-      idle: liveFixtures.size === 0,
+      detail: inPlay.size ? `${inPlay.size}` : undefined,
+      // Nothing in play at 4am is not a fault.
+      idle: inPlay.size === 0,
       warn: 5,
       stale: 15,
     },
