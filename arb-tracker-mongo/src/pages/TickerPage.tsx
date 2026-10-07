@@ -272,13 +272,29 @@ export default function TickerPage() {
           <span className="text-xs text-slate-600">
             {live ? 'Live — bets appear as they are struck' : 'Latest single bets, every brand, every sport'}
           </span>
+          {/*
+            * Both times, but labelled by what is actually carrying the feed.
+            *
+            * The first paint is a FETCH, not a push, so the rows on screen are
+            * always the fetch's until something is struck — and once the stream
+            * connects the 30s poll is stopped on purpose, so its timestamp just
+            * ages. Calling that "polled 1h ago" reads as broken when it is the
+            * healthy state. While the stream is up it is the load; only when
+            * the stream is down is polling the thing keeping the table current.
+            */}
           <span className="flex items-center gap-2 text-[11px] tabular-nums text-slate-600">
-            <span title={lastPush ? new Date(lastPush).toLocaleString() : 'nothing pushed this session'}>
+            <span title={lastPush ? new Date(lastPush).toLocaleString() : 'no bet struck since this page opened'}>
               pushed <span className="text-slate-400">{ago(lastPush)}</span>
             </span>
             <span className="text-slate-700">·</span>
-            <span title={lastPoll ? new Date(lastPoll).toLocaleString() : 'not polled yet'}>
-              polled <span className="text-slate-400">{ago(lastPoll)}</span>
+            <span
+              title={
+                lastPoll
+                  ? `${new Date(lastPoll).toLocaleString()}${live ? ' — polling is off while the stream is up' : ''}`
+                  : 'not fetched yet'
+              }
+            >
+              {live ? 'loaded' : 'polled'} <span className="text-slate-400">{ago(lastPoll)}</span>
             </span>
           </span>
           {state === 'loading' && <Loader2 size={13} className="animate-spin text-slate-600" />}
