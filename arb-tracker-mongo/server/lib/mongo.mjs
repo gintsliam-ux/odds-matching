@@ -37,7 +37,7 @@ export const mirrorConfigured = Boolean(MIRROR_URI);
  */
 const MIRRORED = new Set([
   'entities', 'eventMapping', 'competitionMapping', 'leagues', 'leagueSquads', 'mappingPending',
-  'leagueHealth',
+  'leagueHealth', 'competitionCandidates',
 ]);
 
 const client = URI
@@ -101,6 +101,7 @@ export const COLLECTIONS = {
    * rather than each deriving it from `fixtures`.
    */
   leagueHealth: 'league_health',
+  competitionCandidates: 'competition_candidates',
   // Not yet surfaced by the UI, but present in the schema:
   oddsSp: 'odds_sp',
   eventMapping: 'event_mapping',

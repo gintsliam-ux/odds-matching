@@ -117,6 +117,35 @@ async function mybetCandidates(db) {
   }));
 }
 
+/**
+ * The same two lists, precomputed by scripts/sync-to-atlas.mjs.
+ *
+ * Grouping them live reads about 3 GB of documents to produce 1 MB of league
+ * names -- mybet_events averages 11 KB a row and gutsy.events 38 KB, because
+ * each carries its own price history -- which cost the deployed page 36s for
+ * mybet alone. Which competitions a book trades changes slowly, so they are
+ * built hourly instead, exactly as league_squads already is for the optic side
+ * of this same page.
+ *
+ * Null when the collection is not there yet, so the live path below still
+ * answers on a store that has never run the job.
+ */
+async function candidatesFromStore() {
+  const rows = await (await coll('competitionCandidates')).find({}).toArray().catch(() => []);
+  if (!rows?.length) return null;
+  const out = { swift: [], mybet: [] };
+  for (const r of rows) {
+    if (!out[r.provider]) continue;
+    // Shaped exactly as the live functions return, `alt` included only for
+    // mybet — the scorer reads both name and alt, and a stray null is not the
+    // same input as an absent key.
+    const c = { id: r.id, name: r.name, sport: r.sport ?? null, events: r.events, teams: r.teams ?? [] };
+    if (r.alt != null) c.alt = r.alt;
+    out[r.provider].push(c);
+  }
+  return out;
+}
+
 /* ----------------------------------------------------------- optic side */
 
 /** The squad summary, computed live from `fixtures` on the tailnet. */
@@ -248,14 +277,18 @@ export async function tournamentMapping() {
   if (!db) return { configured: false, providers: {}, leagues: [] };
 
   const timings = {};
+  // One read of the precomputed lists, or the two live aggregations if the job
+  // has not produced them yet.
+  const stored = await timed(timings, 'storedCandidates', () => candidatesFromStore());
+  timings.candidateSource = stored ? 'precomputed' : 'live';
   const [leagues, existing, swift, mybet, health] = await timed(timings, 'fetch', () =>
     Promise.all([
       timed(timings, 'opticLeagues', () => opticLeagues()),
       timed(timings, 'competitionMapping', async () =>
         (await coll('competitionMapping')).find({}).toArray(),
       ),
-      timed(timings, 'swiftCandidates', () => swiftCandidates(db)),
-      timed(timings, 'mybetCandidates', () => mybetCandidates(db)),
+      stored ? stored.swift : timed(timings, 'swiftCandidates', () => swiftCandidates(db)),
+      stored ? stored.mybet : timed(timings, 'mybetCandidates', () => mybetCandidates(db)),
       // Built hourly rather than derived here: it needs `fixtures`, which a
       // deployed instance does not carry. Missing is fine — the page just shows
       // no health, rather than failing.

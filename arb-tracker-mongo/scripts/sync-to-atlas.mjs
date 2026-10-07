@@ -85,6 +85,7 @@ try {
   // been replayed upstream by the time the rebuild runs.
   await drainPendingWrites(S, D);
   await buildLeagueHealth(S);
+  await buildCompetitionCandidates(D);
 
   for (const spec of PLAN) {
     const t0 = Date.now();
@@ -392,6 +393,128 @@ async function syncLeagueSquads(S, D) {
 
   console.log(
     `  ${'league_squads'.padEnd(21)} derived ${String(docs.length).padStart(7)}` +
+    (stale.length ? `  pruned ${stale.length}` : '') +
+    `   ${((Date.now() - t0) / 1000).toFixed(1)}s`,
+  );
+}
+
+/**
+ * The mapping page's candidate lists, precomputed.
+ *
+ * Same reasoning as league_squads, for the same page -- except the source is
+ * the books' own collections on Atlas rather than the NAS.
+ *
+ * Grouping them live cost the deployed page 36 SECONDS for mybet alone, and the
+ * reason is document size, not document count: mybet_events averages 11 KB a
+ * row because each one carries its whole `flucs` price history, so a $group
+ * over 175k of them reads about 2 GB off disk to produce 0.77 MB of league
+ * names. gutsy.events is worse per row at 38 KB. A covering index helps (12.6s
+ * -> 4.5s) but cannot eliminate the FETCH, because an aggregation's $group is
+ * not a covered projection.
+ *
+ * Which competitions a book trades changes slowly -- these are league names,
+ * not prices -- so hourly is plenty, and the page then reads ~1 MB of summaries
+ * instead of scanning 3 GB.
+ */
+async function buildCompetitionCandidates(D) {
+  const t0 = Date.now();
+  const books = new MongoClient(process.env.BETS_URI ?? DST_URI, { maxPoolSize: 3 });
+  const docs = [];
+  try {
+    await books.connect();
+    const g = books.db('gutsy');
+
+    // Swiftbet. `teams.name` is an array per event, hence the flatten.
+    for (const r of await g
+      .collection('events')
+      .aggregate(
+        [
+          { $sort: { start_date: -1 } },
+          {
+            $group: {
+              _id: '$competition.id',
+              name: { $first: '$competition.name' },
+              sport: { $first: '$sport.name' },
+              events: { $sum: 1 },
+              teams: { $firstN: { input: '$teams.name', n: TEAM_SAMPLE } },
+            },
+          },
+          { $match: { name: { $ne: null } } },
+        ],
+        { allowDiskUse: true },
+      )
+      .toArray()) {
+      if (r._id == null) continue;
+      docs.push({
+        _id: `swift|${r._id}`,
+        provider: 'swift',
+        id: String(r._id),
+        name: r.name,
+        sport: r.sport ?? null,
+        events: r.events,
+        teams: (r.teams ?? []).flat().filter(Boolean).slice(0, TEAM_SAMPLE),
+      });
+    }
+
+    // Mybet. `league` is the bare name and `description` the qualified one;
+    // which identifies the competition varies row to row, so both are carried.
+    for (const r of await g
+      .collection('mybet_events')
+      .aggregate(
+        [
+          { $sort: { lastSeenAt: -1 } },
+          {
+            $group: {
+              _id: '$leagueId',
+              name: { $first: '$league' },
+              alt: { $first: '$description' },
+              sport: { $first: '$sport' },
+              events: { $sum: 1 },
+              teamsA: { $firstN: { input: '$match.teamA', n: TEAM_SAMPLE } },
+              teamsB: { $firstN: { input: '$match.teamB', n: TEAM_SAMPLE } },
+            },
+          },
+          { $match: { name: { $ne: null } } },
+        ],
+        { allowDiskUse: true },
+      )
+      .toArray()) {
+      if (r._id == null) continue;
+      docs.push({
+        _id: `mybet|${r._id}`,
+        provider: 'mybet',
+        id: String(r._id),
+        name: r.name,
+        alt: r.alt ?? null,
+        sport: r.sport ?? null,
+        events: r.events,
+        teams: [...(r.teamsA ?? []), ...(r.teamsB ?? [])].filter(Boolean).slice(0, TEAM_SAMPLE),
+      });
+    }
+  } finally {
+    await books.close().catch(() => {});
+  }
+
+  if (DRY) {
+    console.log(`  ${'competition_candidates'.padEnd(21)} ${String(docs.length).padStart(7)} to derive (computed, not copied)`);
+    return;
+  }
+
+  const to = D.collection('competition_candidates');
+  for (let i = 0; i < docs.length; i += CHUNK) {
+    await to.bulkWrite(
+      docs.slice(i, i + CHUNK).map((d) => ({ replaceOne: { filter: { _id: d._id }, replacement: d, upsert: true } })),
+      { ordered: false },
+    );
+  }
+  const keep = new Set(docs.map((d) => String(d._id)));
+  const stale = (await to.find({}, { projection: { _id: 1 } }).toArray())
+    .filter((d) => !keep.has(String(d._id)))
+    .map((d) => d._id);
+  if (stale.length) await to.deleteMany({ _id: { $in: stale } });
+
+  console.log(
+    `  ${'competition_candidates'.padEnd(21)} derived ${String(docs.length).padStart(7)}` +
     (stale.length ? `  pruned ${stale.length}` : '') +
     `   ${((Date.now() - t0) / 1000).toFixed(1)}s`,
   );
