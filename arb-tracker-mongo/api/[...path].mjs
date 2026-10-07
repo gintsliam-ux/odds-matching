@@ -110,7 +110,22 @@ export default async function handler(req, res) {
       return;
     }
 
-    const CHEAP_AND_LIVE = new Set(['/api/bets', '/api/ticker', '/api/pulse']);
+    /*
+     * Responses that carry something which changes minute to minute, and so
+     * must not sit in a browser for five.
+     *
+     * `/api/events` and `/api/event` are here because the surface now reports
+     * in-play state: a board event carries the period, the clock and the
+     * per-period scores. The client polls them every 60s, but on a 300s window
+     * that poll was answered from the browser's own cache four times out of
+     * five -- prices refreshed on the minute while the game clock beside them
+     * stood still for up to five. They are not cheap upstream, but they are
+     * cheap to SERVE: the in-process cache hands back a stale board instantly
+     * and refreshes behind, which is the whole point of it.
+     */
+    const CHEAP_AND_LIVE = new Set([
+      '/api/bets', '/api/ticker', '/api/pulse', '/api/events', '/api/event',
+    ]);
     const PER_FIXTURE = new Set(['/api/odds', '/api/event/details']);
     const statusful = CHEAP_AND_LIVE.has(url.pathname);
     const perFixture = PER_FIXTURE.has(url.pathname);
