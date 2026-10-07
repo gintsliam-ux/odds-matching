@@ -97,24 +97,55 @@ const GENERIC = new Set([
   'open', 'classic', 'masters',
 ]);
 
-const strip = (s) =>
+/**
+ * Memoised, because the mapping page calls these on the same few thousand
+ * strings millions of times.
+ *
+ * Every unmapped league is scored against every candidate -- 1,044 pairs
+ * against 601 and 415 candidates -- and scoreNames re-tokenises BOTH sides on
+ * each call, up to four times per candidate. So one competition name was
+ * normalised once per league that had not been mapped yet. All three functions
+ * are pure functions of a string and their results are only ever read, never
+ * mutated.
+ *
+ * Capped rather than unbounded: a deployed function instance is long-lived, and
+ * the key space is bounded in practice but not by construction.
+ */
+const MEMO_CAP = 20_000;
+const memoise = (fn) => {
+  const cache = new Map();
+  return (arg) => {
+    const key = String(arg ?? '');
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+    const out = fn(key);
+    if (cache.size >= MEMO_CAP) cache.clear();
+    cache.set(key, out);
+    return out;
+  };
+};
+
+const strip = memoise((s) =>
   String(s ?? '')
     .toLowerCase()
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
     .replace(/['’`]/g, '')
     .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
+    .trim());
 
-/** Tokens of a name, with demonyms folded to countries and filler dropped. */
-export function tokens(name) {
-  return strip(name)
+/**
+ * Tokens of a name, with demonyms folded to countries and filler dropped.
+ *
+ * The array is shared between callers — see memoise — so treat it as read-only.
+ */
+export const tokens = memoise((name) =>
+  strip(name)
     .split(' ')
     .filter(Boolean)
     .map((t) => DEMONYMS[t] ?? t)
     .flatMap((t) => t.split(' '))
-    .filter((t) => !FILLER.has(t));
-}
+    .filter((t) => !FILLER.has(t)));
 
 /** Canonical sport key, or the stripped name when we don't know it. */
 export function sportKey(name) {
@@ -140,9 +171,7 @@ export function sportsAgree(a, b) {
  * because the filler words are precisely the ones the acronym is built from:
  * strip "league" from Major League Baseball and MLB stops matching it.
  */
-function rawTokens(name) {
-  return strip(name).split(' ').filter(Boolean);
-}
+const rawTokens = memoise((name) => strip(name).split(' ').filter(Boolean));
 
 /** Country words, for spotting a leading qualifier that an acronym ignores. */
 const COUNTRY_WORDS = new Set([
@@ -339,6 +368,10 @@ export function scoreNames(aName, bName) {
  */
 export function bestMatch(optic, candidates) {
   const scored = [];
+  // These depend only on `optic`, and were being rebuilt for every candidate —
+  // 333k times over on the swift side alone.
+  const qualified = optic.category ? `${optic.category} ${optic.tournament}` : null;
+  const mine = `${optic.category ?? ''} ${optic.tournament ?? ''}`;
   for (const c of candidates) {
     if (!sportsAgree(optic.sport, c.sport)) continue;
 
@@ -354,9 +387,6 @@ export function bestMatch(optic, candidates) {
     // `alt` is the provider's other spelling — mybet stores a bare `league`
     // ("KBO League") beside a qualified `description` ("Korean KBO League"),
     // and which one identifies the competition varies by row, so both count.
-    const qualified = optic.category ? `${optic.category} ${optic.tournament}` : null;
-    const mine = `${optic.category ?? ''} ${optic.tournament ?? ''}`;
-
     // The country belongs to the candidate, not to one spelling of it. mybet
     // stores a bare `league` beside a qualified `description` — "Super League"
     // and "Swiss Super League" are the same row, so reading them separately
@@ -426,10 +456,27 @@ export function teamKey(name) {
  * fields Juventus. Where both sides list teams, an overlap is close to proof
  * and no overlap is close to disproof, regardless of how well the names read.
  */
+/*
+ * One key set per squad array, not per comparison.
+ *
+ * Each candidate's squad was re-keyed for every league it was compared with —
+ * up to 400 names through teamKey(), thousands of times over. Keyed on the
+ * array itself, so it lives exactly as long as the candidate list does.
+ */
+const squadKeys = new WeakMap();
+const keySet = (arr) => {
+  let set = squadKeys.get(arr);
+  if (!set) {
+    set = new Set(arr.map(teamKey).filter(Boolean));
+    squadKeys.set(arr, set);
+  }
+  return set;
+};
+
 export function teamOverlap(a, b) {
   if (!a?.length || !b?.length) return null;
-  const setA = new Set(a.map(teamKey).filter(Boolean));
-  const setB = new Set(b.map(teamKey).filter(Boolean));
+  const setA = keySet(a);
+  const setB = keySet(b);
   if (!setA.size || !setB.size) return null;
   let shared = 0;
   for (const t of setA) if (setB.has(t)) shared++;
