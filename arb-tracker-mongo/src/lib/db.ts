@@ -114,12 +114,14 @@ export interface H2HPrices {
  * ticker. The id list goes in a POST body — a board-wide query string would
  * outrun the URL length limit.
  */
-export async function fetchH2HPrices(events: SportEvent[]): Promise<Map<string, H2HPrices>> {
-  // Only two-sided events have a home/away moneyline; skip outrights.
-  if (events.every((e) => e.outright)) return new Map();
+export async function fetchH2HPrices(): Promise<Map<string, H2HPrices>> {
   // A GET for the whole board rather than a POST of ids: the server already
   // knows what is on the board, the CDN can cache the answer, and deployment
   // protection refuses POSTs outright.
+  //
+  // It takes no parameters, which is the point: it used to be called with the
+  // board's events and so waited for them, turning two independent requests
+  // into a waterfall that cost the board load a second or more.
   const data = await apiGet<Record<string, H2HPrices>>('/api/h2h');
   return new Map(Object.entries(data));
 }

@@ -483,40 +483,26 @@ export default function App() {
       .slice(0, TICKER_RESULTS_MAX);
   }, [events, now]);
 
-  // Best H2H price for the ticker's upcoming (not-yet-played) fixtures. Keyed on
-  // all unplayed events — not the filtered set — since the ticker is filter-
-  // independent; refetches on the 60s poll, not every render.
+  /*
+   * Best H2H price for the ticker's upcoming fixtures.
+   *
+   * This does NOT wait for the board. /api/h2h takes no parameters and returns
+   * the whole board's map, which the ticker looks up by id, so keying the
+   * effect on the loaded events only made two independent requests run one
+   * after the other -- the board's own second, and then this one's. It goes out
+   * on mount alongside them, and refreshes on the same 60s nonce the board
+   * does.
+   */
   const [prices, setPrices] = useState<Map<string, H2HPrices>>(new Map());
-  const upcomingKey = useMemo(
-    () =>
-      events
-        .filter((e) => e.homeScore == null || e.awayScore == null)
-        .map((e) => e.id)
-        .sort()
-        .join(','),
-    [events],
-  );
   useEffect(() => {
-    const ids = new Set(upcomingKey ? upcomingKey.split(',') : []);
-    // Only the fixtures the ticker can actually show — unplayed and within the
-    // horizon. Date.now() here (not `now`) keeps the effect off the 1s tick.
-    const horizon = Date.now() + TICKER_HORIZON_MS;
-    const windowed = events.filter(
-      (e) => ids.has(e.id) && new Date(e.startsAt).getTime() < horizon,
-    );
-    if (windowed.length === 0) {
-      setPrices(new Map());
-      return;
-    }
     let cancelled = false;
-    fetchH2HPrices(windowed)
+    fetchH2HPrices()
       .then((m) => !cancelled && setPrices(m))
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [upcomingKey, oddsNonce]);
+  }, [oddsNonce]);
 
   // Land on the first event when none is selected in the URL.
   useEffect(() => {
