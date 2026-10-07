@@ -301,14 +301,28 @@ function safeParse(s) {
  * Unmapped bets are KEPT. A bet nobody has mapped is still a bet someone struck,
  * and dropping it would quietly make the busiest competitions look idle.
  */
-async function fixturesFor(bets) {
+async function fixturesFor(bets, timings) {
   const ids = [...new Set(bets.map((b) => b.eventId).filter(Boolean))];
   if (!ids.length) return { byEventId: new Map(), fixtures: new Map() };
 
-  const maps = await (await coll('eventMapping'))
+  /*
+   * Start the per-sport fixture drains NOW, before the mapping lookup.
+   *
+   * Which sports to drain depends only on the bets, which are already in hand,
+   * while the mapping query and the satellite pass are a couple of seconds of
+   * Mongo that used to run entirely before the first fixture byte was asked
+   * for. apiFixtures is single-flight cached, so this is also the only call
+   * made: the satellite pass and the filter below both join this promise
+   * instead of queueing behind each other.
+   */
+  const drains = mongoConfigured
+    ? null
+    : apiSportsIn(bets).map((sport) => [sport, apiFixtures(sport).catch(() => [])]);
+
+  const maps = await timed(timings, 'mapping', async () => (await coll('eventMapping'))
     .find({ gutsy_event_id: { $in: ids } })
     .project({ _id: 0, gutsy_event_id: 1, optic_fixture_id: 1, confidence: 1 })
-    .toArray();
+    .toArray());
   const byEventId = new Map();
   for (const m of maps) {
     if (!m.optic_fixture_id) continue;
@@ -318,7 +332,9 @@ async function fixturesFor(bets) {
 
   // Bets on a market-specific mybet event are resolved through their base
   // event before the fixture list is built — see resolveSatelliteEvents.
-  await resolveSatelliteEvents(bets, byEventId).catch(() => {});
+  await timed(timings, 'satellites', () =>
+    resolveSatelliteEvents(bets, byEventId).catch(() => {}),
+  );
 
   const fixtureIds = [...new Set([...byEventId.values()].map((m) => m.optic_fixture_id))];
   const fixtures = new Map();
@@ -344,14 +360,20 @@ async function fixturesFor(bets) {
   // One call per sport present, not one per fixture: 150 bets land on ~100
   // fixtures, and 100 round trips is not something a 30-second feed can spend.
   const want = new Set(fixtureIds);
-  await Promise.all(
-    apiSportsIn(bets).map(async (sport) => {
-      for (const f of await apiFixtures(sport).catch(() => [])) {
-        if (want.has(f.fixture_id)) fixtures.set(f.fixture_id, f);
-      }
-    }),
+  await timed(timings, 'fixtureList', () =>
+    Promise.all(
+      (drains ?? []).map(async ([, pending]) => {
+        for (const f of await pending) {
+          if (want.has(f.fixture_id)) fixtures.set(f.fixture_id, f);
+        }
+      }),
+    ),
   );
-  await resolveByNameAndStart(bets, byEventId, fixtures).catch((e) => console.error('[ticker] name-fallback failed:', e));
+  await timed(timings, 'nameFallback', () =>
+    resolveByNameAndStart(bets, byEventId, fixtures).catch((e) =>
+      console.error('[ticker] name-fallback failed:', e),
+    ),
+  );
   return { byEventId, fixtures };
 }
 
@@ -1048,7 +1070,7 @@ export async function betTicker() {
 export async function enrich(bets, timings) {
   if (!bets.length) return { bets: [], pricesError: null };
 
-  const { byEventId, fixtures } = await timed(timings, 'fixtures', () => fixturesFor(bets));
+  const { byEventId, fixtures } = await timed(timings, 'fixtures', () => fixturesFor(bets, timings));
   for (const b of bets) {
     const m = b.eventId ? byEventId.get(String(b.eventId)) : null;
     const f = m ? fixtures.get(m.optic_fixture_id) : null;
