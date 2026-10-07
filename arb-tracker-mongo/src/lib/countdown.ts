@@ -90,8 +90,55 @@ export const PERIOD_PREFIX: Record<string, string> = {
   Tennis: 'S',
 };
 
+/*
+ * How many periods a game has, for the sports whose feed carries a running
+ * clock.
+ *
+ * Tennis, cricket, darts and esports are deliberately absent. They have no
+ * clock at all -- not one live tennis match of seven had a value -- so a
+ * stopped clock there means nothing, and reading it as a break would label a
+ * match mid-set "End S1".
+ */
+const CLOCK_PERIODS: Record<string, number> = {
+  Basketball: 4,
+  'American Football': 4,
+  'Aussie Rules': 4,
+  'Ice Hockey': 3,
+  Soccer: 2,
+  'Rugby League': 2,
+  'Rugby Union': 2,
+};
+
+/**
+ * The label for a game sitting at a break.
+ *
+ * A clock that is STOPPED and absent is the feed's way of saying nothing is
+ * running: Golden State v LA Lakers sat at period 2 with a frozen 81-53 and no
+ * clock for as long as it was watched, which is halftime, but the badge read
+ * "Q2" and looked like a clock we had failed to fetch. A clock that is stopped
+ * and still has a value is an ordinary stoppage mid-period -- a timeout reads
+ * "00:34" -- and keeps its time.
+ */
+export function breakLabel(sport: string, period: number): string | null {
+  const periods = CLOCK_PERIODS[sport];
+  if (!periods) return null;
+  if (period * 2 === periods) return 'HT';
+  if (period >= periods) return 'END';
+  return `End ${PERIOD_PREFIX[sport] ?? 'P'}${period}`;
+}
+
+/**
+ * The clock as it should read.
+ *
+ * Sports played to a countdown send "MM:SS" -- "Q4 02:13" -- but soccer sends
+ * the minute elapsed as a bare number, which rendered as "H1 3" and read like
+ * a scoreline. A digits-only clock is a minute count, so it gets the prime the
+ * sport is always written with: "H1 3'".
+ */
+const clockText = (clock: string): string => (/^\d+$/.test(clock) ? `${clock}'` : clock);
+
 export function livePositionLabel(event: SportEvent): string {
-  const { sport, period, clock } = event;
+  const { sport, period, clock, clockStopped } = event;
   if (period == null) return 'LIVE';
   if (sport === 'Baseball') {
     // clock is the half-inning: Top / Middle / Bottom / End.
@@ -108,8 +155,12 @@ export function livePositionLabel(event: SportEvent): string {
    * "HALF" with no clock) and for some fixtures entirely, which is what the
    * guard is for.
    */
+  if (!clock && clockStopped) {
+    const atBreak = breakLabel(sport, period);
+    if (atBreak) return atBreak;
+  }
   const period_ = `${PERIOD_PREFIX[sport] ?? 'P'}${period}`;
-  return clock ? `${period_} ${clock}` : period_;
+  return clock ? `${period_} ${clockText(clock)}` : period_;
 }
 
 export const TONE_CLASSES: Record<CountdownTone, string> = {

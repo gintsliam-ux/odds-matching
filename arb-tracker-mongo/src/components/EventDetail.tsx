@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import type { SportEvent } from '../lib/types';
-import { countdownFor, effectiveStatus, PERIOD_PREFIX, TONE_CLASSES } from '../lib/countdown';
+import { breakLabel, countdownFor, effectiveStatus, PERIOD_PREFIX, TONE_CLASSES } from '../lib/countdown';
 import {
   BETFAIR,
   brandById,
@@ -148,15 +148,23 @@ function periodLabel(sport: string, period: number): string {
 /**
  * The live badge text. Baseball's `clock` is the half-inning ("Top"/"Bot")
  * rather than a countdown, so it reads ahead of the inning.
+ *
+ * Breaks are named by the same rule the event list uses -- see breakLabel --
+ * so the two cannot drift apart again.
  */
 function liveLabel(
   sport: string,
   period: number | null | undefined,
   clock: string | null | undefined,
+  clockStopped?: boolean,
 ): string {
   if (period == null) return 'LIVE';
   if (isBaseball(sport)) return `${clock ? `${clock} ` : ''}${ordinal(period)}`;
-  return `${periodLabel(sport, period)}${clock ? ` ${clock}` : ''}`;
+  if (!clock && clockStopped) {
+    const atBreak = breakLabel(sport, period);
+    if (atBreak) return atBreak;
+  }
+  return `${periodLabel(sport, period)}${clock ? ` ${/^\d+$/.test(clock) ? `${clock}'` : clock}` : ''}`;
 }
 
 interface Props {
@@ -212,7 +220,7 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
     team === home ? event.homeCountry : team === away ? event.awayCountry : null;
   const logoFor = (team: string) =>
     team === home ? event.homeLogo : team === away ? event.awayLogo : null;
-  const clockText = liveLabel(event.sport, event.period, event.clock);
+  const clockText = liveLabel(event.sport, event.period, event.clock, event.clockStopped);
 
   return (
     <div className="flex h-full flex-col">
