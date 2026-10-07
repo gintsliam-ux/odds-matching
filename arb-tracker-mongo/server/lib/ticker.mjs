@@ -966,9 +966,10 @@ async function pricesFor(bets, byEventId, fixtures, timings) {
     const extra = await timed(timings, 'oddsPerFixture', () => Promise.all(
       needFull.map((fixtureId) => {
         const sport = fixtures.get(fixtureId)?.sport;
-        // Current prices only — the comparison columns never show history.
+        // The comparison columns read only current_price, so the settled-price
+        // call is skipped. `flucs` is not optional — see apiOddsForFixture.
         return sport
-          ? apiOddsForFixture(fixtureId, sport, { history: false }).catch(() => [])
+          ? apiOddsForFixture(fixtureId, sport, { settledPrices: false }).catch(() => [])
           : Promise.resolve([]);
       }),
     ));

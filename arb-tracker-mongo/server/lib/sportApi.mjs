@@ -574,35 +574,42 @@ async function liveRows(sport) {
  *   event page, which draws it. False for callers that only want the current
  *   price — see the note on `flucs` below.
  */
-export async function apiOddsForFixture(fixtureId, sport, { history = true } = {}) {
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.settledPrices] Fetch the settled (SP) prices too.
+ *   True for the event page, which draws them. False for the ticker, which
+ *   reads only `current_price`.
+ */
+export async function apiOddsForFixture(fixtureId, sport, { settledPrices = true } = {}) {
   if (!sport) return [];
   const one = (extra) =>
-    cachedDrain(`fx:${fixtureId}:${extra.live ?? '0'}:${history ? 'h' : 'l'}`, () =>
+    cachedDrain(`fx:${fixtureId}:${extra.live ?? '0'}`, () =>
       drain('odds-api', {
         sport,
         fixture_id: fixtureId,
         include_stale: 'true',
         /*
-         * The event page is the one place the full price history is worth
-         * paying for: open, the 6h->10m ladder, close, and per-book status.
+         * NOT optional, and not only about history.
          *
-         * The ticker is not that place. It asks for up to 25 fixtures at once
-         * to fill its comparison columns and uses only `current_price`, so
-         * paying for every fixture's whole history there cost about 30s on a
-         * cold instance for data that was thrown away.
+         * `flucs` is also the switch that brings UNSETTLED fixtures onto this
+         * drain -- see UNSETTLED and the note on apiOddsForSport. Dropping it
+         * to save the ladder on the ticker's comparison fetch silently emptied
+         * every upcoming fixture, which is most of them: the feed went from
+         * about 120 bets priced to 50, and the columns simply read blank.
+         *
+         * So the ladder is paid for. Only the separate settled-price call
+         * below is skippable.
          */
-        ...(history ? { flucs: 'true' } : {}),
+        flucs: 'true',
         ...extra,
       }),
     ).catch(() => []);
 
   // No live pivot. This site shows pre-match prices only, so the in-play feed
   // is not a source here at all — see the merge note below.
-  // The settled-price call only feeds the history view; skip it when the
-  // caller is not drawing one.
   const [closing, sp] = await Promise.all([
     one({}),
-    history
+    settledPrices
       ? call('odds-sp-api', { fixture_id: fixtureId }).then((b) => b.data ?? []).catch(() => [])
       : Promise.resolve([]),
   ]);
