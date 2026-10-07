@@ -14,7 +14,16 @@ import {
  * feed associates with a competition and hand them to the scorer.
  */
 
-/** How many fixtures to sample per competition when collecting its squad. */
+/**
+ * How many fixtures to sample per competition when collecting its squad.
+ *
+ * It is also the cap the aggregations apply, with $firstN. They used to push
+ * every team name in the collection -- 175k documents' worth for mybet -- ship
+ * the lot over the wire and then slice to this number in JS. Same sample,
+ * since the sort is the same: the head of a sorted group is the head of what
+ * pushing everything would have produced, and 1,016 groups across the two
+ * feeds came back identical.
+ */
 const TEAM_SAMPLE = 400;
 
 const PROVIDERS = ['swift', 'mybet'];
@@ -33,7 +42,7 @@ async function swiftCandidates(db) {
           name: { $first: '$competition.name' },
           sport: { $first: '$sport.name' },
           events: { $sum: 1 },
-          teams: { $push: '$teams.name' },
+          teams: { $firstN: { input: '$teams.name', n: TEAM_SAMPLE } },
         },
       },
       { $match: { name: { $ne: null } } },
@@ -65,8 +74,8 @@ async function mybetCandidates(db) {
           alt: { $first: '$description' },
           sport: { $first: '$sport' },
           events: { $sum: 1 },
-          teamsA: { $push: '$match.teamA' },
-          teamsB: { $push: '$match.teamB' },
+          teamsA: { $firstN: { input: '$match.teamA', n: TEAM_SAMPLE } },
+          teamsB: { $firstN: { input: '$match.teamB', n: TEAM_SAMPLE } },
         },
       },
       { $match: { name: { $ne: null } } },
@@ -95,8 +104,8 @@ async function squadsFromFixtures() {
       {
         $group: {
           _id: '$optic_league',
-          home: { $push: '$home_team' },
-          away: { $push: '$away_team' },
+          home: { $firstN: { input: '$home_team', n: TEAM_SAMPLE } },
+          away: { $firstN: { input: '$away_team', n: TEAM_SAMPLE } },
           fixtures: { $sum: 1 },
           tournaments: { $addToSet: '$tournament' },
         },
