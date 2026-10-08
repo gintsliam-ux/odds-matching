@@ -108,3 +108,39 @@ worth special-casing.
   render correctly, the latter with a prime.
 - `flucs=true` is restored on the per-fixture drain with a comment explaining why it is
   not optional, so nobody removes it again.
+
+---
+
+## 4. The outright pivot cannot be assembled from `oc<n>_<book>_<field>`
+
+Added 8 Oct 2026, after trying to put golf on the deployed board and backing it
+out.
+
+Golf has no head-to-head market — a tournament is a field — so `market=h2h`
+removes the sport rather than thinning it, and the deployed board carries no
+golf at all. Asking for `market=outright` instead fixes that part: the fixture,
+the event page and the details panel all serve correctly.
+
+The odds behind it do not. For `fixture_id`
+`type_baycurrent_classic_2026_winner-sport_golf-league_pga` the surface
+returned **five rows for a 106-player field**, every one carrying `outcome_no: 1`
+and the same player, and the prices are not that player's:
+
+```
+                 surface says    odds store says
+Ishizaka betmgm        23              751
+         draftkings     21.5           1301
+         fanduel        56             1001
+         tab          1001              751
+         fanatics      501              501   <- the only one that agrees
+```
+
+Prices that short belong to favourites, so runner names and prices have come
+apart. We read a wide pivot as `oc<n>_<book>_<field>`, with the runner implied
+by `n` — which describes a two-sided market and cannot describe a field of 106.
+
+**What would help:** either the tall shape for outrights (one row per runner,
+with the runner named on the row), or confirmation of which column carries the
+runner name in the wide outright pivot so `n` can be resolved against it. We
+have reverted to `h2h` everywhere until then; golf simply stays off the
+deployed board, which is the safe failure.
