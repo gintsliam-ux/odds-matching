@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://gasoline-warm-weighted-nikon.trycloudflare.com/api/:path*"
+      "destination": "https://slip-trend-leads-medication.trycloudflare.com/api/:path*"
     }
   ]
 }
