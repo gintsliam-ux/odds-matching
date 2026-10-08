@@ -221,23 +221,6 @@ function cachedDrain(key, produce) {
 const BOARD_MARKET = 'h2h';
 
 /**
- * Which market stands in for "one row per fixture", per sport.
- *
- * Golf has no head-to-head market at all -- a tournament is a field, and every
- * one of the 3,012 odds rows across the four most recent tournaments carries
- * `outright` and nothing else. So `market=h2h` did not thin golf down, it
- * removed the sport: the deployed board carried 0 golf fixtures and 0 outrights
- * of any kind while the local one carried them, and a golf bet on the ticker
- * had no fixture to attach a comparison to.
- *
- * Only golf is special-cased. 355 of 19,020 sampled fixtures lack a moneyline
- * for other reasons -- a two-sided fixture nobody quotes a winner on -- and
- * those are genuinely nothing the board can price, which is what the note above
- * is about.
- */
-const boardMarket = (sport) => (sport === 'golf' ? 'outright' : BOARD_MARKET);
-
-/**
  * How much of the surface's week the board actually wants, as `date_from` /
  * `date_to`. Asking for the whole thing and discarding most of it is what made
  * a cold board take 38 seconds; bounded, all fourteen sports come back in three.
@@ -501,11 +484,11 @@ export async function apiOddsForSport(sport, { live = false } = {}) {
   const w = boardWindow();
   const pivot = await cachedDrain(`odds:${sport}:${live}`, () =>
     drain('odds-api', live
-      ? { sport, live: 'true', include_stale: 'true', market: boardMarket(sport), ...w }
+      ? { sport, live: 'true', include_stale: 'true', market: BOARD_MARKET, ...w }
       // Upcoming fixtures only exist on this drain with `flucs=true` — see
       // UNSETTLED. Without it the ticker has no price to show for anything
       // that has not already been played.
-      : { sport, include_stale: 'true', market: boardMarket(sport), ...UNSETTLED, ...w }),
+      : { sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED, ...w }),
   );
   const rows = [];
   for (const r of pivot) {
@@ -574,7 +557,7 @@ async function liveRows(sport) {
     // it took the board from 11 live to 554. A price someone is actively
     // quoting is the only honest signal that a game is still running.
     return await cachedDrain(`live:${sport}`, () =>
-      drain('odds-api', { sport, live: 'true', market: boardMarket(sport), ...boardWindow() }),
+      drain('odds-api', { sport, live: 'true', market: BOARD_MARKET, ...boardWindow() }),
     );
   } catch {
     return [];
@@ -728,7 +711,7 @@ async function buildFixtures(sport, window) {
     // drains then failed — which `pricesFor` swallows, so the deployed ticker
     // simply showed no comparison prices at all and said nothing was wrong.
     cachedDrain(`odds:${sport}:false`, () =>
-      drain('odds-api', { sport, include_stale: 'true', market: boardMarket(sport), ...UNSETTLED, ...window }),
+      drain('odds-api', { sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED, ...window }),
     ),
     // Enumeration needs the stale live rows too. A match that has just finished
     // has no active price left, and is not yet settled into `odds_sp` — so it
@@ -741,7 +724,7 @@ async function buildFixtures(sport, window) {
     // the live heartbeat and must not pay for a second copy of them.
     cachedDrain(`odds:${sport}:true`, () =>
       drain('odds-api', {
-        sport, live: 'true', include_stale: 'true', market: boardMarket(sport), ...window,
+        sport, live: 'true', include_stale: 'true', market: BOARD_MARKET, ...window,
       }),
     ).catch(() => []),
     liveRows(sport),
