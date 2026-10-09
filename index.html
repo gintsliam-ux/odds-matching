@@ -1030,25 +1030,23 @@
    league, which retires every spelling-merge heuristic the old schema needed.
    =========================================================================== */
 
-/* The database is Mongo now — `gutsys_sport` on the NAS — and Mongo has no
-   browser client, so the page talks to a small API instead of holding a
-   database client of its own.
+/* The page's only backend is `odds-sp-api`.
 
-   That API cannot run on Vercel. The NAS is `100.96.58.9`, inside Tailscale's
-   100.64.0.0/10 CGNAT range, so a serverless function has no route to it; the
-   symptom is a Mongo server-selection timeout. So the API runs next to the
-   database and a Cloudflare tunnel publishes it, alongside the odds API that
-   already works that way.
+   It replaced a Mongo API that ran on a laptop behind a disposable tunnel: the
+   hostname changed on every restart and the site went dark eight times, each
+   time until somebody noticed. This host is stable and Vercel can reach it, so
+   nothing of ours runs anywhere.
 
-   Empty means same origin, which covers both wirings:
-     · deployed — `vercel.json` rewrites /api/* to the tunnel hostname, so the
-       page never makes a cross-origin request and needs no CORS at all;
-     · local — `npm start` in odds-matching-mongo serves this file and /api
-       from one process on :5180.
-   Set it to an absolute URL (or define window.ODDS_API_BASE before this
-   script) to call the tunnel directly instead of through the rewrite. */
-const ODDS_API_DEFAULT = '';
-const API_BASE = String(window.ODDS_API_BASE || ODDS_API_DEFAULT || '').replace(/\/$/, '');
+   `action=list_fixtures` is what made the swap possible. The priced paths only
+   return a fixture that has rows in `odds_sp`, which is neither the future nor
+   the ~41% of a soccer window nobody prices — asking them to enumerate a month
+   returned 103 fixtures out of 9,207. The fixtures action reads `fixtures`
+   directly, pages at the database, and returns everything.
+
+   The key sits in the page, which is the same exposure the Supabase anon key
+   had: everything it serves is readable by opening the site. */
+const ODDS_API = 'https://sport.gutsysapi.com/odds-sp-api';
+const ODDS_KEY = '150b115a-2b75-4b2b-9b0e-1e477c63980a';
 
 /* ---- Sports ----------------------------------------------------------------
    Keys are the `sport` values in fixtures. No tables to name any more. */
@@ -1160,14 +1158,14 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 /* One GET helper for the whole page. Array values repeat the key rather than
    joining on a comma — a merged competition spans several optic_league ids and
    an id is free to contain anything a slug can. */
-async function api(path, params = {}) {
-  const qs = new URLSearchParams();
+async function api(params = {}) {
+  const qs = new URLSearchParams({ key: ODDS_KEY });
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined || v === null || v === '') continue;
     if (Array.isArray(v)) v.forEach(x => qs.append(k, String(x)));
     else qs.append(k, String(v));
   }
-  const url = `${API_BASE}/api/${path}${qs.toString() ? `?${qs}` : ''}`;
+  const url = `${ODDS_API}?${qs}`;
 
   let lastErr = null;
   for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
@@ -1182,7 +1180,7 @@ async function api(path, params = {}) {
         if (body && !Array.isArray(body) && body.error) throw new Error(body.error);
         return body;
       }
-      lastErr = new Error(`API ${r.status}: ${path}`);
+      lastErr = new Error(`API ${r.status}`);
       // 4xx is this page asking wrongly — retrying cannot fix it. 429 can.
       if (r.status < 500 && r.status !== 429) throw lastErr;
     } catch (err) {
@@ -1193,11 +1191,50 @@ async function api(path, params = {}) {
   throw lastErr;
 }
 
-// The span of dates a sport has, so the period picker knows its options.
+const PAGE_SIZE = 5000;
+
+function monthWindow(year, month) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return { date_from: `${year}-${pad(month)}-01`, date_to: `${year}-${pad(month)}-${pad(last)}` };
+}
+
+/**
+ * Every fixture matching a query, following `has_more`.
+ *
+ * Paging is real here — the action orders on `scheduled_start` then
+ * `fixture_id` and hands one `range()` to the database, so `offset` keeps
+ * returning rows past the first page. The priced paths accumulate and slice,
+ * which is why they stop after one page.
+ *
+ * A fixture can still appear on both sides of a page boundary when a kick-off
+ * straddles it, so the ids are deduped rather than trusted.
+ */
+async function listFixtures(params, onProgress = null) {
+  const out = [];
+  const seen = new Set();
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const body = await api({ action: 'list_fixtures', limit: PAGE_SIZE, offset, ...params });
+    for (const r of body.data || []) {
+      if (!seen.has(r.fixture_id)) { seen.add(r.fixture_id); out.push(r); }
+    }
+    if (onProgress) onProgress(out.length);
+    if (!body.has_more || !(body.data || []).length) break;
+  }
+  return out;
+}
+
+/* The archive starts in January 2025 — 2024 is empty for every sport but NRL,
+   which the coverage audit established — and the feed schedules a few months
+   out. The old backend answered this per sport from a min/max aggregation;
+   there is no equivalent, and a fixed span costs only a few empty months in
+   the picker. */
+const ARCHIVE_FLOOR = '2025-01-01';
+
 async function loadDateRange(key) {
-  const span = await api('date-range', { sport: key });
-  const min = span.min ? String(span.min).slice(0, 10) : null;
-  const max = span.max ? String(span.max).slice(0, 10) : null;
+  const now = new Date();
+  const min = ARCHIVE_FLOOR;
+  const max = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 4, 1)).toISOString().slice(0, 10);
 
   sportData[key] = sportData[key] || {};
   const range = { min, max, combos: [] };
@@ -1233,7 +1270,7 @@ async function loadLeagueDirectory() {
   if (directoryLoaded) return leagueDirectory;
   directoryLoaded = true;
   try {
-    for (const r of await api('leagues')) {
+    for (const r of (await api({ action: 'list_leagues' })).leagues || []) {
       leagueDirectory.set(r.optic_league, { category: r.category || null, tournament: r.tournament || null });
     }
   } catch (err) {
@@ -1341,7 +1378,13 @@ async function loadLeagues(key) {
   d.leagueScan = 'running';
   refreshNavTournaments(key);
   try {
-    const { rows } = await api('competitions', { sport: key });
+    /* Every competition the sport has ever run. The directory answers this in
+       one call; counting fixtures to get the same list would mean paging the
+       whole archive. `n` stays zero — this list is sorted by name, and the
+       month view below is what carries counts. */
+    const all = (await api({ action: 'list_leagues', sport: key })).leagues || [];
+    const rows = all.map(r => ({ optic_league: r.optic_league, tournament: r.tournament,
+                                 country: null, n: 0 }));
     d.leagues = groupCompetitions(rows).sort((a, b) => a.label.localeCompare(b.label));
     d.leagueScan = 'done';
     writeLeagueCache(key, d.leagues);
@@ -1363,33 +1406,71 @@ async function loadFixtures(key, year, month, league) {
   const scope = `${year}-${month}|${league || '*'}`;
   if (d.loadedScope === scope) return d;
 
-  const params = { sport: key, year, month };
   const entry = league ? findLeagueEntry(key, league) : null;
-  if (entry) Object.assign(params, entryParamsFor(entry));
-  else if (league) params.league = league;
+  const ids = entry ? (entry.leagues && entry.leagues.length ? entry.leagues : [entry.league]).filter(Boolean)
+                    : (league ? [league] : []);
 
   const what = league ? (leagueLabel(key, league) || league) : SPORTS[key].label;
   msg(`Loading ${what}…`);
-  const rows = await api('fixtures', params);
 
-  d.events = rows.map(toEvent).sort((a, b) => a.start.localeCompare(b.start));
+  let rows;
+  if (ids.length) {
+    /* One request per id — a merged competition spans several. `league=` now
+       matches a whole snake_case segment, so `nba` no longer drags in
+       `wnba`, but the response is filtered again here because a token the
+       directory does not know still falls back to a substring match. */
+    const wanted = new Set(ids);
+    const pages = await Promise.all(
+      ids.map(id => listFixtures({ sport: key, league: id, league_exact: 'true', ...monthWindow(year, month) })));
+    rows = pages.flat().filter(r => wanted.has(r.optic_league));
+  } else {
+    // No competition picked: the month's own fixtures, which the picker shares.
+    rows = await loadMonthFixtures(key, year, month);
+  }
+
+  const seen = new Set();
+  d.events = rows.filter(r => !seen.has(r.fixture_id) && seen.add(r.fixture_id))
+    .map(toEvent).sort((a, b) => a.start.localeCompare(b.start));
   d.loadedScope = scope;
   return d;
 }
 
-/* Which competitions ran this month, and how many fixtures each. Read off the
-   month's own rows when everything is loaded; otherwise a two-column pass. */
+/**
+ * One month of a sport's fixtures, fetched once and shared.
+ *
+ * Both the competition picker and the event list want the same rows, and a
+ * month of soccer is 9,207 fixtures over two pages — so it is fetched once per
+ * sport-month and held. Every other sport is a fraction of that.
+ */
+const monthCache = new Map();
+async function loadMonthFixtures(key, year, month) {
+  const stamp = `${key}|${year}-${month}`;
+  if (monthCache.has(stamp)) return monthCache.get(stamp);
+  const label = SPORTS[key].label;
+  msg(`Loading ${label}…`);
+  const rows = await listFixtures(
+    { sport: key, ...monthWindow(year, month) },
+    (n) => msg(`Loading ${label} — ${n.toLocaleString()} fixtures…`));
+  monthCache.set(stamp, rows);
+  return rows;
+}
+
+/* Which competitions ran this month, and how many fixtures each. */
 async function loadMonthLeagues(key, year, month) {
   const d = (sportData[key] = sportData[key] || {});
   const stamp = `${year}-${month}`;
   if (d.monthLeaguesFor === stamp) return d.monthLeagues;
 
-  msg(`Indexing ${SPORTS[key].label}…`);
-  const { total, rows } = await api('competitions', { sport: key, year, month });
+  const rows = await loadMonthFixtures(key, year, month);
 
-  d.monthLeagues = groupCompetitions(rows).sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));
+  /* Counted here rather than by the API: it lists leagues or it lists
+     fixtures, and there is no grouped count. The rows are already in hand for
+     the event list, so the count is free. */
+  d.monthLeagues = groupCompetitions(rows.map(r => ({
+    optic_league: r.optic_league, tournament: r.tournament, country: r.category, n: 1,
+  }))).sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));
   d.monthLeaguesFor = stamp;
-  d.monthFixtures = total;
+  d.monthFixtures = rows.length;
   return d.monthLeagues;
 }
 
@@ -1428,9 +1509,20 @@ function toEvent(r) {
    market closes, so anything still open reads from the live board instead and
    shows prices without the fair columns. */
 async function loadFixtureOdds(fixtureId) {
-  const { source, rows } = await api('odds', { fixture_id: fixtureId });
-  if (source === 'closing') return { source: 'closing', rows: rows.map(normaliseClosing) };
+  const body = await api({ fixture_id: fixtureId, group: 'fixture' });
+  const fx = (body.data || [])[0];
+  if (!fx) return { source: 'none', rows: [] };
+
+  /* `group=fixture` nests the markets under the event, but each bucket is
+     already a flat list of selection rows carrying `book_prices` and
+     `book_fairs` — the same shape `odds_sp` had — so they only need
+     concatenating, not unpacking. */
+  const rows = [];
+  for (const bucket of ['h2h', 'spreads', 'totals', 'outrights', 'other_markets']) {
+    rows.push(...(fx[bucket] || []));
+  }
   if (!rows.length) return { source: 'none', rows: [] };
+  return { source: 'closing', rows: rows.map(normaliseClosing) };
 
   /* `odds` carries both pregame and in-play rows for the same selection, and
      they must not be averaged into one cell — a live price is not a pregame
@@ -1441,10 +1533,26 @@ async function loadFixtureOdds(fixtureId) {
 }
 
 // odds_sp is already one row per selection; just give it the shape the table wants.
+/* The grouped response nests every book under the selection —
+   `books: { pinnacle: { price, open, fair } }` — where this table wants a flat
+   map per column group. `book_overround` is not served and is not rendered
+   either, so it stays empty rather than being invented. */
+function splitBooks(books) {
+  const prices = {}, fairs = {};
+  for (const [book, v] of Object.entries(books || {})) {
+    if (v == null) continue;
+    if (typeof v === 'number') { prices[book] = v; continue; }
+    if (v.price != null) prices[book] = v.price;
+    if (v.fair != null) fairs[book] = v.fair;
+  }
+  return { prices, fairs };
+}
+
 function normaliseClosing(r) {
+  const split = r.books ? splitBooks(r.books) : null;
   return {
     market: r.market_id,
-    marketName: r.market_name,
+    marketName: r.market_name || r.market_display,
     selection: r.selection,
     line: r.line,
     /* pair_key is the line signed from the HOME side, and it is what separates
@@ -1456,8 +1564,8 @@ function normaliseClosing(r) {
     lineGroup: lineGroupOf(r.pair_key != null ? r.pair_key : (r.line_group != null ? r.line_group : r.line)),
     outcomeNo: r.outcome_no,
     outcomes: r.n_outcomes,
-    prices: r.book_prices || {},
-    fairs: r.book_fairs || {},
+    prices: (split ? split.prices : r.book_prices) || {},
+    fairs: (split ? split.fairs : r.book_fairs) || {},
     overround: r.book_overround || {},
     blend: r.fair_blend,
     prob: r.fair_prob == null ? null : r.fair_prob * 100,
@@ -1789,8 +1897,11 @@ async function loadCompetitionLogos() {
   if (logosLoaded) return;
   logosLoaded = true;
   try {
-    const rows = await api('competition-logos');
-    for (const r of rows) competitionLogos.set(r.name, r.logo_url);
+    /* Snapshotted from `entities` and served beside this page — the odds API
+       has no entities endpoint, and 1,079 badge URLs change rarely enough that
+       a static file beats standing a service up for them. */
+    const r = await fetch('assets/competition-logos.json');
+    for (const [name, url] of Object.entries(await r.json())) competitionLogos.set(name, url);
   } catch (err) {
     console.warn('competition logos unavailable', err);
   }
@@ -2706,7 +2817,15 @@ async function runTeamSearch(q) {
   const container = document.getElementById('search-results');
   container.innerHTML = skeletonSearch();
   try {
-    const rows = await api('search', { q });
+    /* `team=` matches home, away or the event name. It needs an explicit
+       window or the action answers for now−4d → now+21d only. */
+    const now = new Date();
+    const rows = (await api({
+      action: 'list_fixtures', team: q, limit: 200, date_from: ARCHIVE_FLOOR,
+      date_to: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 4, 1)).toISOString().slice(0, 10),
+    })).data || [];
+    rows.sort((a, b) => String(b.scheduled_start).localeCompare(String(a.scheduled_start)));
+    rows.length = Math.min(rows.length, 40);
     if (!rows.length) { container.innerHTML = '<div class="search-no-results">No matches found</div>'; return; }
     container.innerHTML = rows.map(r => {
       const ev = toEvent(r);
@@ -2846,7 +2965,7 @@ async function handleRoute() {
       /* A deep link can name a fixture from another month. The id carries no
          date, so ask fixtures where it is and reload that period. */
       if (slug && !(sportData[sport].events || []).some(e => e.id === slug)) {
-        const found = await api('fixture', { id: slug });
+        const found = ((await api({ action: 'list_fixtures', fixture_id: slug })).data || [])[0];
         if (found && found.scheduled_start) {
           const d = new Date(found.scheduled_start);
           selectedYear = d.getUTCFullYear(); selectedMonth = d.getUTCMonth() + 1;
