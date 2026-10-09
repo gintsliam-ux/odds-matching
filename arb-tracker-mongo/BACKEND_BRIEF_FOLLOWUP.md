@@ -144,3 +144,60 @@ with the runner named on the row), or confirmation of which column carries the
 runner name in the wide outright pivot so `n` can be resolved against it. We
 have reverted to `h2h` everywhere until then; golf simply stays off the
 deployed board, which is the safe failure.
+
+---
+
+## 5. The board cannot enumerate fixtures from `market=h2h` any more — 22% are invisible
+
+Added 10 Oct 2026. This is the big one, and it supersedes item 4 (golf is one
+symptom of it).
+
+The deployed board derives its fixture list from `market=h2h`, because that is
+the cheapest way to get one row per fixture — 0.5 MB a sport against 28 MB
+unfiltered. The cost is that a fixture with no head-to-head price is invisible
+to it. That was measured once at eleven fixtures. Today:
+
+```
+                local board   deployed board   missing
+soccer               1563            1030        533
+basketball            513             464         49
+amfootball            148             126         22
+rugbyunion             15               3         12
+icehockey             383             377          6
+volleyball             18              13          5
+mma                    24              20          4
+golf                    1               0          1
+                    -----           -----       ----
+                     2892            2260        632   (22%)
+```
+
+Those fixtures are NOT missing from the surface. Fetched by `fixture_id` they
+return 58-161 rows each. They are missing a **full-match two-way moneyline**,
+which is the only thing `market=h2h` selects on. Four distinct shapes:
+
+```
+no moneyline at all        asian_total, spread, total, 1h_spread, 1h_total
+                           -> soccer (Premier League, Serie A, UCL), rugby union
+only a PERIOD moneyline    1h_moneyline, spread, total, 1h_spread
+                           -> basketball
+only a 3-WAY moneyline     moneyline_3way                 -> ice hockey
+no two-sided market        total_sets, set_spread, 1s_total -> volleyball
+```
+
+(Soccer's 1X2 is labelled `moneyline`, so soccer is unaffected by the 3-way
+case; ice hockey carries `moneyline_3way` as a separate market and is.)
+
+**What would help, in order of preference:**
+
+1. **A fixtures endpoint.** A fixture list should not be a side effect of an
+   odds market. Give us `fixture_id, sport, league, category, tournament,
+   commence_time, home/away, scores, and the in-play columns you just added`,
+   per sport and window, and the board stops guessing entirely. This also
+   removes the golf problem and the outright-pivot problem in one go.
+2. **Failing that: does `market` accept a list?** If `market=h2h,total` works,
+   one drain covers every shape above and we will take the extra bytes.
+3. **Failing that: a cheap enumeration market** — anything that returns exactly
+   one row per fixture regardless of what is priced.
+
+We have NOT worked around this by dropping the market filter: 28 MB a sport
+across sixteen sports is not something the board can pay on a cold load.
