@@ -32,13 +32,15 @@ const WINDOWS = [
   { key: '1h', label: '1h' },
 ];
 
-const MOVES = [3, 5, 8, 12];
+/* In implied-probability points. 2 is a real move; 5 is enormous. */
+const MOVES = [1, 2, 3, 5];
 
 const CHIP = 'rounded-md px-2.5 py-1 text-xs font-medium transition';
 
-function pctText(v: number | null): string {
+/** Points of implied probability, signed, never a percentage of the odds. */
+function ptsText(v: number | null): string {
   if (v == null) return '—';
-  return `${v > 0 ? '+' : ''}${v.toFixed(1)}%`;
+  return `${v > 0 ? '+' : ''}${v.toFixed(2)}`;
 }
 
 /** Countdown-ish, matching the board's phrasing without its colour. */
@@ -53,7 +55,7 @@ function startsIn(iso: string): string {
 
 function Row({ m }: { m: Mover }) {
   const [open, setOpen] = useState(false);
-  const shortened = m.movePct < 0;
+  const shortened = m.movePts < 0;
 
   return (
     <div
@@ -69,7 +71,8 @@ function Row({ m }: { m: Mover }) {
           }`}
         >
           {shortened ? <TrendingDown size={14} /> : <TrendingUp size={14} />}
-          {pctText(m.movePct)}
+          {ptsText(m.movePts)}
+          <span className="text-[10px] font-normal text-slate-600">pts</span>
         </span>
         <span className="shrink-0 text-xs tabular-nums text-slate-500">
           {m.then} <span className="text-slate-600">→</span>{' '}
@@ -103,14 +106,14 @@ function Row({ m }: { m: Mover }) {
           <span className="text-slate-600">best</span>
         </span>
         <span className="tabular-nums text-slate-500">
-          {pctText(m.bestVsNow)} <span className="text-slate-600">vs market now</span>
+          {ptsText(m.bestVsNowPts)} <span className="text-slate-600">pts vs market now</span>
         </span>
         <span className="tabular-nums text-slate-500">
-          {pctText(m.bestVsThen)} <span className="text-slate-600">vs before</span>
+          {ptsText(m.bestVsThenPts)} <span className="text-slate-600">vs before</span>
         </span>
-        {m.best.movePct != null && (
+        {m.best.movePts != null && (
           <span className="tabular-nums text-slate-500">
-            {pctText(m.best.movePct)} <span className="text-slate-600">its own move</span>
+            {ptsText(m.best.movePts)} <span className="text-slate-600">its own move</span>
           </span>
         )}
         {m.lagging && (
@@ -136,16 +139,16 @@ function Row({ m }: { m: Mover }) {
               {b.then != null && <span className="tabular-nums text-slate-600">from {b.then}</span>}
               <span
                 className={`tabular-nums ${
-                  b.movePct == null
+                  b.movePts == null
                     ? 'text-slate-600'
-                    : Math.abs(b.movePct) < 1
+                    : Math.abs(b.movePts) < 0.5
                       ? 'text-slate-500'
-                      : b.movePct < 0
+                      : b.movePts < 0
                         ? 'text-rose-300/80'
                         : 'text-emerald-300/80'
                 }`}
               >
-                {pctText(b.movePct)}
+                {ptsText(b.movePts)}
               </span>
               <span className="text-slate-600">{b.ageMins}m</span>
             </span>
@@ -161,7 +164,7 @@ export function MoversPage() {
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [error, setError] = useState<string | null>(null);
   const [win, setWin] = useState('open');
-  const [minMove, setMinMove] = useState(5);
+  const [minMove, setMinMove] = useState(2);
   const [sport, setSport] = useState('all');
   const [onlyLagging, setOnlyLagging] = useState(false);
 
@@ -214,7 +217,8 @@ export function MoversPage() {
               Movers
             </h1>
             <p className="mt-0.5 text-[11px] text-slate-500">
-              Head-to-head markets that have moved, and who has not moved with them
+              Head-to-head markets that have moved, and who has not moved with them —
+              measured in implied-probability points
             </p>
           </div>
 
@@ -255,7 +259,9 @@ export function MoversPage() {
             </button>
           ))}
           <span className="mx-1 h-4 w-px bg-surface-border" />
-          <span className="text-[11px] text-slate-600">move ≥</span>
+          <span className="text-[11px] text-slate-600" title="Implied-probability points: (1/before − 1/now) × 100">
+            move ≥
+          </span>
           {MOVES.map((v) => (
             <button
               key={v}
@@ -267,7 +273,7 @@ export function MoversPage() {
                   : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
               }`}
             >
-              {v}%
+              {v}
             </button>
           ))}
           <span className="mx-1 h-4 w-px bg-surface-border" />

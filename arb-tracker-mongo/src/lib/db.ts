@@ -423,8 +423,8 @@ export interface MoverBook {
   book: string;
   price: number;
   then: number | null;
-  /** This book's own move, which is what marks it as having followed or not. */
-  movePct: number | null;
+  /** This book's own move in points, which marks it as having followed or not. */
+  movePts: number | null;
   ageMins: number;
 }
 
@@ -439,14 +439,22 @@ export interface Mover {
   /** Median price across live books before and after. */
   then: number;
   now: number;
-  movePct: number;
+  /**
+   * The move in implied-probability POINTS: (1/then - 1/now) * 100.
+   *
+   * Not the percentage change in the odds, which flatters a drift at long
+   * prices and hides a serious one at short — 12.0 -> 10.0 is -16.7% of the
+   * odds but only -1.67 points, while 1.831 -> 1.635 is -10.7% of the odds and
+   * -6.55 points. Negative means the price shortened.
+   */
+  movePts: number;
   direction: 'shortened' | 'drifted';
   books: MoverBook[];
-  best: { book: string; price: number; movePct: number | null };
-  /** How much better the best price is than where the market now sits. */
-  bestVsNow: number;
-  /** And than where it sat BEFORE the move — the number that matters. */
-  bestVsThen: number;
+  best: { book: string; price: number; movePts: number | null };
+  /** Points of probability the best price gives away against the market now. */
+  bestVsNowPts: number;
+  /** And against where it sat BEFORE the move — the number that matters. */
+  bestVsThenPts: number;
   /** The market shortened and the best price did not follow it. */
   lagging: boolean;
 }
