@@ -71,19 +71,18 @@ const median = (xs) => {
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 1 ? v : null);
 
 /**
- * Movement in implied-probability points: (1/reference - 1/current) * 100.
+ * Movement in implied probability: (1/reference - 1/current) * 100.
  *
- * NOT the percentage change in the odds, which is the wrong measure and was
- * what this reported first. 1.10 -> 1.05 is only -4.5% of the odds but +4.3
- * points of probability; 10.0 -> 9.50 is the same -5% of the odds and +0.5 of
- * a point. The odds number flatters a drift at long prices and hides a serious
+ * A percentage of PROBABILITY, not of the odds, which is the distinction that
+ * matters and not what this reported first. 1.10 -> 1.05 is only -4.5% of the
+ * odds but -4.33% of probability; 10.0 -> 9.50 is the same -5% of the odds and
+ * -0.53%. The odds number flatters a drift at long prices and hides a serious
  * one at short, and it is the probability that moved.
  *
- * Sign follows the same convention the page already used: negative means the
- * price shortened, because the implied probability went up. 5.60 -> 4.34 is
- * 17.9% -> 23.0% implied, so -5.2 points.
+ * Negative means the price shortened, because the implied probability went up:
+ * 5.60 -> 4.34 is 17.9% -> 23.0% implied, so -5.18%.
  */
-const pts = (reference, current) =>
+const probPct = (reference, current) =>
   reference && current ? (1 / reference - 1 / current) * 100 : null;
 
 /** Every non-lay head-to-head row across the board, with its ladder. */
@@ -128,7 +127,7 @@ async function h2hRows() {
  * @param {object} [opts]
  * @param {keyof WINDOWS} [opts.window] Which rung of the ladder counts as "before".
  * @param {number} [opts.minMove] Smallest consensus move worth reporting, in
- *   implied-probability POINTS — 2 is a real move, 5 is enormous.
+ *   implied-probability PERCENT — 2 is a real move, 5 is enormous.
  * @param {number} [opts.minBooks] Fewest live books for a median to mean anything.
  */
 export async function marketMovers({ window = 'open', minMove = 2, minBooks = 3 } = {}) {
@@ -177,8 +176,8 @@ export async function marketMovers({ window = 'open', minMove = 2, minBooks = 3 
 
     const nowMid = median(live.map((b) => b.price));
     const thenMid = median(withThen.map((b) => b.then));
-    const movePts = pts(thenMid, nowMid);
-    if (movePts == null) continue;
+    const movePct = probPct(thenMid, nowMid);
+    if (movePct == null) continue;
     /*
      * Shortened markets only. A drift has no lagging price to take: when the
      * market moves OUT, the book that has not followed is holding the SMALLER
@@ -189,7 +188,7 @@ export async function marketMovers({ window = 'open', minMove = 2, minBooks = 3 
      * shortened on the other, so the same movement is already here under the
      * selection where there is something to do about it.
      */
-    if (movePts > -minMove) continue;
+    if (movePct > -minMove) continue;
 
     const sorted = [...live].sort((a, b) => b.price - a.price);
     const best = sorted[0];
@@ -206,12 +205,12 @@ export async function marketMovers({ window = 'open', minMove = 2, minBooks = 3 
       // invent it.
       then: Number(thenMid.toFixed(3)),
       now: Number(nowMid.toFixed(3)),
-      movePts: Number(movePts.toFixed(2)),
+      movePct: Number(movePct.toFixed(2)),
       books: sorted.map((b) => ({
         book: b.book,
         price: b.price,
         then: b.then,
-        movePts: b.then ? Number(pts(b.then, b.price).toFixed(2)) : null,
+        movePct: b.then ? Number(probPct(b.then, b.price).toFixed(2)) : null,
         ageMins: Math.round((now - b.at) / 60_000),
       })),
       best: {
@@ -220,16 +219,16 @@ export async function marketMovers({ window = 'open', minMove = 2, minBooks = 3 
         // The best book's OWN move, which is what separates a book that has
         // not followed the market from one that simply always prices this
         // selection highest.
-        movePts: best.then ? Number(pts(best.then, best.price).toFixed(2)) : null,
+        movePct: best.then ? Number(probPct(best.then, best.price).toFixed(2)) : null,
       },
       /* The two numbers that answer "is anyone still on the old price": how
          much better the best price is than where the market now sits, and
          whether it is still at or beyond where the market was BEFORE it
          moved. The second is the one that matters on a shortening market. */
-      // How many points of probability the best price gives away against the
-      // market now, and against where it was before it moved.
-      bestVsNowPts: Number(pts(nowMid, best.price).toFixed(2)),
-      bestVsThenPts: Number(pts(thenMid, best.price).toFixed(2)),
+      // How much probability the best price gives away against the market
+      // now, and against where it was before it moved.
+      bestVsNowPct: Number(probPct(nowMid, best.price).toFixed(2)),
+      bestVsThenPct: Number(probPct(thenMid, best.price).toFixed(2)),
       /*
        * Lagging means the market shortened and the best price did NOT follow
        * it — not merely that some book is the highest number on the row, which
@@ -238,7 +237,7 @@ export async function marketMovers({ window = 'open', minMove = 2, minBooks = 3 
        */
       // Every row here shortened, so this is only about whether the best
       // price followed it down.
-      lagging: best.then != null && pts(best.then, best.price) > movePts / 2,
+      lagging: best.then != null && probPct(best.then, best.price) > movePct / 2,
     });
   }
 
@@ -246,7 +245,7 @@ export async function marketMovers({ window = 'open', minMove = 2, minBooks = 3 
     // A book still on the old price first — that is the actionable half —
     // then by the size of the move.
     if (a.lagging !== b.lagging) return a.lagging ? -1 : 1;
-    return Math.abs(b.movePts) - Math.abs(a.movePts);
+    return Math.abs(b.movePct) - Math.abs(a.movePct);
   });
 
   return {

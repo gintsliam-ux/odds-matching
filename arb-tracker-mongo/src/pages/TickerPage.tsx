@@ -129,6 +129,33 @@ function IdChip({ value, title }: { value: string | null; title: string }) {
   );
 }
 
+/**
+ * The book's own risk tag on this bettor, beside their id.
+ *
+ * Several are common on the swiftbet side ("Good client|Tier 4"), so the first
+ * one shows and the rest are counted, with all of them on hover. The ones that
+ * mean trouble get a colour; everything else stays quiet, because most rows
+ * carry a tag and a table where every row shouts says nothing.
+ */
+const LOUD = /monitor|sharp|bonus hunter|barring|arb|bowler|not eligible|duplicate|test account/i;
+
+function TagChip({ tags }: { tags: string[] }) {
+  if (!tags.length) return null;
+  const [first, ...rest] = tags;
+  const loud = tags.some((t) => LOUD.test(t));
+  return (
+    <span
+      title={tags.join(' · ')}
+      className={`inline-flex max-w-[7rem] items-center gap-0.5 truncate rounded px-1 py-0.5 text-[9px] leading-none ${
+        loud ? 'bg-amber-500/15 text-amber-300' : 'bg-white/5 text-slate-500'
+      }`}
+    >
+      <span className="truncate">{first}</span>
+      {rest.length > 0 && <span className="opacity-60">+{rest.length}</span>}
+    </span>
+  );
+}
+
 export default function TickerPage() {
   const [bets, setBets] = useState<TickerBet[]>([]);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -456,6 +483,7 @@ export default function TickerPage() {
                           );
                         })()}
                         <IdChip value={b.userId} title="User" />
+                        <TagChip tags={b.tags ?? []} />
                         <IdChip value={b.betId} title="Bet" />
                       </span>
                     </td>

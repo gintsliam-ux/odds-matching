@@ -273,6 +273,11 @@ export interface TickerBet {
   /** Book -> best price on the same outcome; null when the market is one this
    *  board does not price, so a blank column is never mistaken for agreement. */
   prices: Record<string, number> | null;
+  /**
+   * The risk tag the book keeps against this bettor — "Monitor", "Good
+   * client|Tier 4", "barring order". Empty when the book holds none.
+   */
+  tags: string[];
 }
 
 export interface TickerFeed {
@@ -423,8 +428,8 @@ export interface MoverBook {
   book: string;
   price: number;
   then: number | null;
-  /** This book's own move in points, which marks it as having followed or not. */
-  movePts: number | null;
+  /** This book's own move, which marks it as having followed or not. */
+  movePct: number | null;
   ageMins: number;
 }
 
@@ -440,23 +445,22 @@ export interface Mover {
   then: number;
   now: number;
   /**
-   * The move in implied-probability POINTS: (1/then - 1/now) * 100.
+   * The move in implied PROBABILITY: (1/then - 1/now) * 100.
    *
-   * Not the percentage change in the odds, which flatters a drift at long
-   * prices and hides a serious one at short — 12.0 -> 10.0 is -16.7% of the
-   * odds but only -1.67 points, while 1.831 -> 1.635 is -10.7% of the odds and
-   * -6.55 points.
+   * A percentage of probability, not of the odds — 12.0 -> 10.0 is -16.7% of
+   * the odds but only -1.67% of probability, while 1.831 -> 1.635 is -10.7% of
+   * the odds and -6.55%.
    *
    * Always negative: only markets that SHORTENED are reported, because a drift
    * leaves the laggard holding the smaller price, which is no use to anyone.
    */
-  movePts: number;
+  movePct: number;
   books: MoverBook[];
-  best: { book: string; price: number; movePts: number | null };
-  /** Points of probability the best price gives away against the market now. */
-  bestVsNowPts: number;
+  best: { book: string; price: number; movePct: number | null };
+  /** Probability the best price gives away against the market now. */
+  bestVsNowPct: number;
   /** And against where it sat BEFORE the move — the number that matters. */
-  bestVsThenPts: number;
+  bestVsThenPct: number;
   /** The market shortened and the best price did not follow it. */
   lagging: boolean;
 }

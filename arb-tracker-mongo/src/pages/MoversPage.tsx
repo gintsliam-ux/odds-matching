@@ -32,15 +32,15 @@ const WINDOWS = [
   { key: '1h', label: '1h' },
 ];
 
-/* In implied-probability points. 2 is a real move; 5 is enormous. */
+/* Percent of implied probability. 2 is a real move; 5 is enormous. */
 const MOVES = [1, 2, 3, 5];
 
 const CHIP = 'rounded-md px-2.5 py-1 text-xs font-medium transition';
 
-/** Points of implied probability, signed, never a percentage of the odds. */
-function ptsText(v: number | null): string {
+/** Percent of implied probability, signed — never a percentage of the odds. */
+function probText(v: number | null): string {
   if (v == null) return '—';
-  return `${v > 0 ? '+' : ''}${v.toFixed(2)}`;
+  return `${v > 0 ? '+' : ''}${v.toFixed(2)}%`;
 }
 
 /** Countdown-ish, matching the board's phrasing without its colour. */
@@ -67,8 +67,7 @@ function Row({ m }: { m: Mover }) {
         {/* Every row shortened — see the note in movers.mjs. */}
         <span className="flex shrink-0 items-center gap-1 text-sm font-semibold tabular-nums text-rose-300">
           <TrendingDown size={14} />
-          {ptsText(m.movePts)}
-          <span className="text-[10px] font-normal text-slate-600">pts</span>
+          {probText(m.movePct)}
         </span>
         <span className="shrink-0 text-xs tabular-nums text-slate-500">
           {m.then} <span className="text-slate-600">→</span>{' '}
@@ -102,14 +101,14 @@ function Row({ m }: { m: Mover }) {
           <span className="text-slate-600">best</span>
         </span>
         <span className="tabular-nums text-slate-500">
-          {ptsText(m.bestVsNowPts)} <span className="text-slate-600">pts vs market now</span>
+          {probText(m.bestVsNowPct)} <span className="text-slate-600">vs market now</span>
         </span>
         <span className="tabular-nums text-slate-500">
-          {ptsText(m.bestVsThenPts)} <span className="text-slate-600">vs before</span>
+          {probText(m.bestVsThenPct)} <span className="text-slate-600">vs before</span>
         </span>
-        {m.best.movePts != null && (
+        {m.best.movePct != null && (
           <span className="tabular-nums text-slate-500">
-            {ptsText(m.best.movePts)} <span className="text-slate-600">its own move</span>
+            {probText(m.best.movePct)} <span className="text-slate-600">its own move</span>
           </span>
         )}
         {m.lagging && (
@@ -135,16 +134,16 @@ function Row({ m }: { m: Mover }) {
               {b.then != null && <span className="tabular-nums text-slate-600">from {b.then}</span>}
               <span
                 className={`tabular-nums ${
-                  b.movePts == null
+                  b.movePct == null
                     ? 'text-slate-600'
-                    : Math.abs(b.movePts) < 0.5
+                    : Math.abs(b.movePct) < 0.5
                       ? 'text-slate-500'
-                      : b.movePts < 0
+                      : b.movePct < 0
                         ? 'text-rose-300/80'
                         : 'text-emerald-300/80'
                 }`}
               >
-                {ptsText(b.movePts)}
+                {probText(b.movePct)}
               </span>
               <span className="text-slate-600">{b.ageMins}m</span>
             </span>
@@ -214,7 +213,7 @@ export function MoversPage() {
             </h1>
             <p className="mt-0.5 text-[11px] text-slate-500">
               Head-to-head markets that have come in, and who has not followed —
-              measured in implied-probability points
+              measured as a change in implied probability
             </p>
           </div>
 
@@ -255,7 +254,7 @@ export function MoversPage() {
             </button>
           ))}
           <span className="mx-1 h-4 w-px bg-surface-border" />
-          <span className="text-[11px] text-slate-600" title="Implied-probability points: (1/before − 1/now) × 100">
+          <span className="text-[11px] text-slate-600" title="Change in implied probability: (1/before − 1/now) × 100">
             move ≥
           </span>
           {MOVES.map((v) => (
@@ -269,7 +268,7 @@ export function MoversPage() {
                   : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
               }`}
             >
-              {v}
+              {v}%
             </button>
           ))}
           <span className="mx-1 h-4 w-px bg-surface-border" />

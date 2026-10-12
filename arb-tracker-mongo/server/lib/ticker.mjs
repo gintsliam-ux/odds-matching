@@ -300,6 +300,77 @@ function safeParse(s) {
   }
 }
 
+/* ------------------------------------------------------------- client tags */
+
+/**
+ * The risk tag the books keep against a bettor, attached to each row.
+ *
+ * Two stores, because the two sources number their customers differently:
+ * swiftbet's `tags` is keyed on the account UUID in `id`, and `multi_tags` on
+ * `user_accountID` alongside the licence, since Multis and MyBet share that
+ * collection.
+ *
+ * `multi_bets.user_accountID` is a NUMBER and `multi_tags.user_accountID` a
+ * STRING, so the lookup has to coerce — matching as-is returns nothing at all,
+ * which is how this looked like missing data rather than a type mismatch.
+ *
+ * Tags arrive pipe-separated on the swiftbet side ("Good client|Tier 4") and
+ * as one value on the other ("small", "barring order"), so both are split the
+ * same way and an empty string becomes no tag rather than a blank one.
+ */
+const LICENCE = { multis: 'MultisComAu', mybet: 'MyBet' };
+
+async function tagsFor(bets) {
+  if (!bets.length) return;
+  const db = await betsDb();
+  if (!db) return;
+
+  const swiftIds = [];
+  const multiIds = [];
+  for (const b of bets) {
+    if (b.userId == null || b.userId === '') continue;
+    if (b.brand === 'swiftbet') swiftIds.push(String(b.userId));
+    else multiIds.push(String(b.userId));
+  }
+
+  const [swift, multi] = await Promise.all([
+    swiftIds.length
+      ? db.collection('tags')
+          .find({ id: { $in: [...new Set(swiftIds)] } })
+          .project({ _id: 0, id: 1, tags: 1 })
+          .toArray()
+          .catch(() => [])
+      : [],
+    multiIds.length
+      ? db.collection('multi_tags')
+          .find({ user_accountID: { $in: [...new Set(multiIds)] } })
+          .project({ _id: 0, user_accountID: 1, tags: 1, transaction_licenseid: 1 })
+          .toArray()
+          .catch(() => [])
+      : [],
+  ]);
+
+  const split = (v) =>
+    String(v ?? '')
+      .split('|')
+      .map((t) => t.trim())
+      .filter(Boolean);
+
+  const bySwift = new Map(swift.map((t) => [String(t.id), split(t.tags)]));
+  // Keyed with the licence: the same account number exists under both.
+  const byMulti = new Map(
+    multi.map((t) => [`${t.transaction_licenseid}|${t.user_accountID}`, split(t.tags)]),
+  );
+
+  for (const b of bets) {
+    if (b.userId == null) { b.tags = []; continue; }
+    b.tags =
+      b.brand === 'swiftbet'
+        ? bySwift.get(String(b.userId)) ?? []
+        : byMulti.get(`${LICENCE[b.brand] ?? ''}|${String(b.userId)}`) ?? [];
+  }
+}
+
 /* ------------------------------------------------- the fixture, and the book */
 
 /**
@@ -1143,15 +1214,20 @@ export async function enrich(bets, timings) {
   // this step threw there, but the feed still answered 200 with a plausible
   // shape, so the failure read as "no comparison prices today" from the
   // outside. Anything that degrades the feed now says so in the payload.
-  const pricesError = await timed(timings, 'prices', () =>
-    pricesFor(bets, byEventId, fixtures, timings).then(
-      () => null,
-      (e) => String(e?.message ?? e).slice(0, 200),
+  const [pricesError] = await Promise.all([
+    timed(timings, 'prices', () =>
+      pricesFor(bets, byEventId, fixtures, timings).then(
+        () => null,
+        (e) => String(e?.message ?? e).slice(0, 200),
+      ),
     ),
-  );
+    // Independent of the prices, so it rides alongside rather than after. A
+    // missing tag is not worth failing a row over.
+    timed(timings, 'tags', () => tagsFor(bets).catch(() => {})),
+  ]);
 
   return {
-    bets: bets.map(({ leadSegment, ...b }) => ({ ...b, prices: b.prices ?? null })),
+    bets: bets.map(({ leadSegment, ...b }) => ({ ...b, prices: b.prices ?? null, tags: b.tags ?? [] })),
     pricesError,
   };
 }
