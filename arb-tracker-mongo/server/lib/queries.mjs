@@ -177,9 +177,23 @@ async function scheduleOnly(have) {
       .project(FIXTURE_PROJECTION)
       .sort({ scheduled_start: 1 })
       .toArray();
-    return rows.filter(
-      (f) => f.fixture_id && !seen.has(f.fixture_id) && !SKIP_SPORTS.has(f.sport),
-    );
+    return rows
+      .filter((f) => f.fixture_id && !seen.has(f.fixture_id) && !SKIP_SPORTS.has(f.sport))
+      /*
+       * Never live. `fixtures.is_live` is a stale flag in this store -- 26 of
+       * the 41 rows carrying it had started more than twelve hours earlier,
+       * including a La Liga match 44 hours gone -- and the mirror is only
+       * rebuilt hourly on top of that. The board already learned this lesson
+       * from stale live PRICES, where honouring them took it from 11 live
+       * events to 554.
+       *
+       * These are the fixtures nobody is quoting, so there is no second opinion
+       * to check the flag against. A game shown as in play when it finished
+       * yesterday is worse than one shown as merely scheduled, so the clock and
+       * the live badge stay off and the status comes from the fixture's own
+       * completed/upcoming value.
+       */
+      .map((f) => (f.is_live ? { ...f, is_live: false } : f));
   } catch {
     // The mirror is a bonus here, never a dependency.
     return [];
