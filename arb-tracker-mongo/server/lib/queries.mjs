@@ -153,10 +153,44 @@ export async function allEvents() {
  * fixture with an empty price pair, which is the honest answer: the game is on,
  * nobody is quoting it yet. A schedule we hold is strictly better than a gap.
  *
+ * Limited to fixtures SwiftBet or MyBet has an event for (see bookableIds). An
+ * unpriced game is only worth a row if it is one we could be taking bets on;
+ * the rest of the schedule's tail is noise on a board about prices.
+ *
  * Additive and best-effort. The odds-derived row always wins where both exist,
  * because only it carries live scores and the clock, and a mirror that is
  * missing or mid-sync leaves the board exactly as it was.
  */
+/**
+ * Of these fixtures, the ones SwiftBet or MyBet actually has an event for.
+ *
+ * An unpriced fixture is only worth a row if it is a game we could be taking
+ * bets on. Without this the schedule brings its whole tail with it: 796
+ * unpriced upcoming fixtures, most of them Ivy League NCAAF, darts Super
+ * Series qualifiers and third-tier volleyball that no book here lists. Gated
+ * on a book event it is 224 — including all 16 of Wednesday's NHL games.
+ *
+ * NOTE a row in `event_mapping` does NOT mean the book has the event. The
+ * matcher writes a row for every fixture it ATTEMPTS and records a miss as
+ * `confidence: 0, gutsy_event_id: null` — which is why 70% of swift's rows and
+ * 58% of mybet's are misses, and why "is it mapped" looked like it was true of
+ * all 2,016 upcoming fixtures. The link is the `gutsy_event_id`.
+ */
+async function bookableIds(ids) {
+  const out = new Set();
+  if (ids.length === 0) return out;
+  const em = await coll('eventMapping');
+  for (let i = 0; i < ids.length; i += 1000) {
+    const hit = await em.distinct('optic_fixture_id', {
+      provider: { $in: ['swift', 'mybet'] },
+      gutsy_event_id: { $ne: null },
+      optic_fixture_id: { $in: ids.slice(i, i + 1000) },
+    });
+    for (const x of hit) out.add(x);
+  }
+  return out;
+}
+
 /**
  * How long a fixture nobody is quoting may still claim to be in play.
  *
@@ -209,9 +243,11 @@ async function scheduleOnly(have) {
       .project(FIXTURE_PROJECTION)
       .sort({ scheduled_start: 1 })
       .toArray();
-    return rows
-      .filter((f) => f.fixture_id && !seen.has(f.fixture_id) && !SKIP_SPORTS.has(f.sport))
-      .map(expireStaleLive);
+    const candidates = rows.filter(
+      (f) => f.fixture_id && !seen.has(f.fixture_id) && !SKIP_SPORTS.has(f.sport),
+    );
+    const linked = await bookableIds(candidates.map((f) => f.fixture_id));
+    return candidates.filter((f) => linked.has(f.fixture_id)).map(expireStaleLive);
   } catch {
     // The mirror is a bonus here, never a dependency.
     return [];
