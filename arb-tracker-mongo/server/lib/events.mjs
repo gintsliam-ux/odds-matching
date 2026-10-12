@@ -179,7 +179,9 @@ function deriveLeague(sport, category, tournament, stage, compLogos) {
 }
 
 const FINAL = new Set(['final', 'completed', 'complete', 'ended', 'finished', 'result']);
-const LIVE = new Set(['live', 'in_play', 'inplay', 'playing', 'started']);
+/** Exported so callers that have to reason about live state use THIS list and
+ *  not a second copy of it that drifts — see expireStaleLive in queries.mjs. */
+export const LIVE = new Set(['live', 'in_play', 'inplay', 'playing', 'started']);
 const CANCELLED = new Set(['cancelled', 'canceled', 'postponed', 'abandoned', 'walkover']);
 
 function mapStatus(raw) {

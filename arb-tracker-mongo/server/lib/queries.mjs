@@ -1,7 +1,7 @@
 import { cached } from './cache.mjs';
 import { coll, mirrorConfigured } from './mongo.mjs';
 import { fixtureMapping } from './fixtureMapping.mjs';
-import { FIXTURE_PROJECTION, SKIP_SPORTS, toEvents } from './events.mjs';
+import { FIXTURE_PROJECTION, LIVE, SKIP_SPORTS, toEvents } from './events.mjs';
 import { isApi } from './source.mjs';
 import { apiFixtureById, apiFixtures, apiOddsForFixture, apiOddsForSport, apiSports } from './sportApi.mjs';
 
@@ -157,6 +157,38 @@ export async function allEvents() {
  * because only it carries live scores and the clock, and a mirror that is
  * missing or mid-sync leaves the board exactly as it was.
  */
+/**
+ * How long a fixture nobody is quoting may still claim to be in play.
+ *
+ * The live state on these rows comes from `fixtures`, where it goes stale: 26
+ * of the 41 rows flagged live had started more than twelve hours earlier, a La
+ * Liga match 44 hours gone among them. The mirror is only rebuilt hourly on top
+ * of that, and because nobody is pricing these fixtures there is no second
+ * opinion to check the flag against. The board already learned this from stale
+ * live PRICES, where honouring them took it from 11 live events to 554.
+ *
+ * So the clock is the arbiter, per sport, because "too long to still be on" is
+ * a different number for different games. Cricket really does run for days -- a
+ * Ranji match 29 hours in and a Test 72 hours in are both genuinely in progress
+ * -- and golf tournaments likewise, so those keep a long allowance. Everything
+ * else is a single session: generous at six hours, and past it the La Liga
+ * match from the day before yesterday stops claiming to be live.
+ */
+const LIVE_GRACE_MS = 6 * 60 * 60 * 1000;
+const MULTI_DAY_GRACE_MS = 6 * 24 * 60 * 60 * 1000;
+const MULTI_DAY = new Set(['cricket', 'golf']);
+
+function expireStaleLive(f) {
+  if (!f.is_live && !LIVE.has(String(f.status ?? '').toLowerCase())) return f;
+  const grace = MULTI_DAY.has(f.sport) ? MULTI_DAY_GRACE_MS : LIVE_GRACE_MS;
+  const start = f.actual_start ?? f.scheduled_start;
+  const t = start ? new Date(start).getTime() : NaN;
+  if (!Number.isFinite(t) || Date.now() - t <= grace) return f;
+  // Past the point where it could still be running: a finished game, not a
+  // live one. Scores it already carries stay — they are the final score.
+  return { ...f, is_live: false, status: 'completed' };
+}
+
 async function scheduleOnly(have) {
   if (!mirrorConfigured) return [];
   try {
@@ -179,21 +211,7 @@ async function scheduleOnly(have) {
       .toArray();
     return rows
       .filter((f) => f.fixture_id && !seen.has(f.fixture_id) && !SKIP_SPORTS.has(f.sport))
-      /*
-       * Never live. `fixtures.is_live` is a stale flag in this store -- 26 of
-       * the 41 rows carrying it had started more than twelve hours earlier,
-       * including a La Liga match 44 hours gone -- and the mirror is only
-       * rebuilt hourly on top of that. The board already learned this lesson
-       * from stale live PRICES, where honouring them took it from 11 live
-       * events to 554.
-       *
-       * These are the fixtures nobody is quoting, so there is no second opinion
-       * to check the flag against. A game shown as in play when it finished
-       * yesterday is worse than one shown as merely scheduled, so the clock and
-       * the live badge stay off and the status comes from the fixture's own
-       * completed/upcoming value.
-       */
-      .map((f) => (f.is_live ? { ...f, is_live: false } : f));
+      .map(expireStaleLive);
   } catch {
     // The mirror is a bonus here, never a dependency.
     return [];
