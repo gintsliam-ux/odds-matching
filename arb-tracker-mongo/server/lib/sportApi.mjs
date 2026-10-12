@@ -125,7 +125,13 @@ function marketId(type) {
  */
 const CALL_TIMEOUT_MS = 20_000;
 /** One retry, because most upstream failures here are momentary. */
-const CALL_RETRIES = 1;
+/*
+ * Two retries rather than one, and the wait grows.
+ *
+ * A 429 answered 400ms later is usually a 429 again; the point of backing off
+ * is to let the window move.
+ */
+const CALL_RETRIES = 2;
 
 /**
  * `include_stale=true` is what makes the feed complete.
@@ -160,16 +166,28 @@ async function call(route, params) {
         // A 4xx is our mistake — a bad sport, a bad key — and will not improve
         // on a retry. Only a server-side or transport failure is worth another go.
         const err = new Error(`${route} ${res.status}: ${body.slice(0, 160)}`);
-        if (res.status < 500) throw err;
+        /*
+         * 429 and 408 are transient, and treating them as "our mistake" was
+         * the start of the board losing whole sports.
+         *
+         * The board drains sixteen sports and three markets each, so a cold
+         * instance opens about fifty requests at once. The surface answers some
+         * of them with 429, which fell in `< 500`, threw immediately with no
+         * retry, and took that sport's fixtures out of the board entirely.
+         */
+        if (res.status < 500 && res.status !== 429 && res.status !== 408) throw err;
         lastErr = err;
       } else {
         return await res.json();
       }
     } catch (err) {
       lastErr = err;
-      if (err instanceof Error && /\d{3}:/.test(err.message) && !/ 5\d\d:/.test(err.message)) throw err;
+      if (
+        err instanceof Error && /\d{3}:/.test(err.message)
+        && !/ 5\d\d:/.test(err.message) && !/ (429|408):/.test(err.message)
+      ) throw err;
     }
-    if (attempt < CALL_RETRIES) await new Promise((r) => setTimeout(r, 400));
+    if (attempt < CALL_RETRIES) await new Promise((r) => setTimeout(r, 400 * (attempt + 1) ** 2));
   }
   throw lastErr ?? new Error(`${route}: failed`);
 }
@@ -197,6 +215,21 @@ function cachedDrain(key, produce) {
       return value;
     })
     .catch((err) => {
+      /*
+       * Keep the last good value. A failure here used to DELETE it, so a blip
+       * did not make a sport stale, it made the sport disappear: the next
+       * caller got nothing, allEvents turned that into zero events for it, and
+       * the partial board was cached for 45s and served to everyone on that
+       * instance. Consecutive polls returned 1,461 events, then 15, then
+       * 1,222 — whole sports coming and going in the rail.
+       *
+       * The original `at` is kept so the entry stays stale and the next caller
+       * tries again rather than settling for it.
+       */
+      if (hit?.value) {
+        pivotCache.set(key, { value: hit.value, at: hit.at });
+        return hit.value;
+      }
       pivotCache.delete(key);
       throw err;
     });

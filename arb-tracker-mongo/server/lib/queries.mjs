@@ -97,11 +97,28 @@ export async function allEvents() {
     if (failures.length) {
       console.warn(`[api] ${failures.length}/${sports.length} sports failed:`, failures.join(' | '));
     }
-    // Every sport failing is an outage, not an empty schedule. Throwing lets
-    // the caller return an error the client can retry past, instead of a
-    // cacheable, plausible-looking empty list.
-    if (failures.length === sports.length) {
-      throw new Error(`odds surface unreachable (${failures[0] ?? 'no detail'})`);
+    /*
+     * A materially incomplete board is an outage, not an empty schedule.
+     *
+     * This used to throw only when EVERY sport failed, so fifteen of sixteen
+     * failing produced a one-sport board -- which `cached` then held for 45s
+     * and served. The client replaces its list with whatever arrives, so the
+     * rail lost soccer, or basketball, or everything but volleyball, and got
+     * it back on the next poll from a different instance.
+     *
+     * Throwing is strictly better than answering partially: the board poll
+     * swallows errors, so the rail keeps the events it already has, and a warm
+     * `cached('board')` entry keeps serving the last complete board rather
+     * than being overwritten by a broken one.
+     *
+     * A quarter is the line because a failure now means the sport had no
+     * cached fixtures to fall back on either -- cachedDrain serves stale on
+     * failure -- so this only fires on a cold instance meeting a real outage.
+     */
+    if (failures.length > Math.max(1, Math.floor(sports.length / 4))) {
+      throw new Error(
+        `odds surface degraded — ${failures.length}/${sports.length} sports failed (${failures[0] ?? 'no detail'})`,
+      );
     }
     // Window it the same way the Mongo path does. The surface publishes about
     // a week, which is 1,040 events and half a megabyte of JSON for a board
