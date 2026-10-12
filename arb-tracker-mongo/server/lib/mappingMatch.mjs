@@ -322,6 +322,23 @@ export function scoreNames(aName, bName) {
     if (setA.has(d) !== setB.has(d)) return 0;
   }
 
+  /*
+   * A tier number is as discriminating as the words above.
+   *
+   * "France Ligue 2" against "France Ligue 1" shares two tokens of three and
+   * scored 0.667 -- offered as a suggestion for a competition one division
+   * away. Same for "Norway Division 1" against "Norway 2. Division", and
+   * tennis "ATP 250" against "ATP 500".
+   *
+   * Only BARE digits count, and only when both sides carry one: a year or a
+   * sponsor's number on one side alone says nothing, and "T20" or "NBL1" are
+   * single tokens rather than a number beside a word.
+   */
+  const tiers = (set) => [...set].filter((t) => /^\d+$/.test(t)).sort().join(',');
+  const tierA = tiers(setA);
+  const tierB = tiers(setB);
+  if (tierA && tierB && tierA !== tierB) return 0;
+
   const joinedA = a.join('');
   const joinedB = b.join('');
   if (joinedA === joinedB) return 1;
