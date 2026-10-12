@@ -742,40 +742,74 @@ export async function apiFixtureById(fixtureId, sports) {
  * 333 and 851 price rows. This measures the enumeration directly rather than
  * guessing a deploy at a time, and comes out once the right value is known.
  */
-export async function probeMarket(sport, market, { limit = 4000 } = {}) {
+export async function probeMarket(sport, market, opts = {}) {
+  const { limit = 4000, maxPages = 12, from, to } = opts;
+  const win = boardWindow();
   const params = {
-    sport, include_stale: 'true', ...UNSETTLED, ...boardWindow(), limit: String(limit),
+    sport,
+    include_stale: 'true',
+    ...UNSETTLED,
+    date_from: from || win.date_from,
+    date_to: to || win.date_to,
+    limit: String(limit),
   };
   if (market) params.market = market;
+
   const t0 = Date.now();
-  const body = await call('odds-api', { ...params, offset: '0' });
-  const rows = body.data ?? [];
   const now = Date.now();
+  const pages = [];
   const fixtures = new Map();
-  for (const r of rows) {
-    const id = r.optic_fixture_id;
-    if (id && !fixtures.has(id)) fixtures.set(id, r);
+  let offset = 0;
+  let total = 0;
+  for (let page = 0; page < maxPages; page++) {
+    const body = await call('odds-api', { ...params, offset: String(offset) });
+    const rows = body.data ?? [];
+    total += rows.length;
+    let up = 0;
+    let firstStart = null;
+    let lastStart = null;
+    for (const r of rows) {
+      const id = r.optic_fixture_id;
+      if (id && !fixtures.has(id)) fixtures.set(id, r);
+      const t = r.commence_time ? new Date(r.commence_time).getTime() : NaN;
+      if (Number.isFinite(t)) {
+        if (t > now) up++;
+        if (firstStart == null || t < firstStart) firstStart = t;
+        if (lastStart == null || t > lastStart) lastStart = t;
+      }
+    }
+    pages.push({
+      page,
+      rows: rows.length,
+      upcoming: up,
+      hasMore: Boolean(body.has_more),
+      nextOffset: body.next_offset ?? null,
+      earliest: firstStart ? new Date(firstStart).toISOString().slice(0, 16) : null,
+      latest: lastStart ? new Date(lastStart).toISOString().slice(0, 16) : null,
+    });
+    if (!body.has_more || body.next_offset == null) break;
+    offset = body.next_offset;
   }
+
   const future = [...fixtures.values()].filter(
     (r) => r.commence_time && new Date(r.commence_time).getTime() > now,
   );
-  const sample = future.slice(0, 3).map((r) => ({
-    id: r.optic_fixture_id,
-    name: r.event_name ?? `${r.home_team} v ${r.away_team}`,
-    start: r.commence_time,
-    tournament: r.tournament,
-  }));
   return {
     sport,
     market: market || '(none)',
+    window: { from: params.date_from, to: params.date_to },
     ms: Date.now() - t0,
-    rows: rows.length,
-    hasMore: Boolean(body.has_more),
-    bytes: JSON.stringify(rows).length,
+    pagesFetched: pages.length,
+    totalRows: total,
     fixtures: fixtures.size,
     upcoming: future.length,
-    tournaments: [...new Set(future.map((r) => r.tournament).filter(Boolean))].slice(0, 6),
-    sample,
+    pages,
+    tournaments: [...new Set(future.map((r) => r.tournament).filter(Boolean))].slice(0, 8),
+    sample: future.slice(0, 3).map((r) => ({
+      name: r.event_name ?? `${r.home_team} v ${r.away_team}`,
+      start: r.commence_time,
+      tournament: r.tournament,
+    })),
   };
 }
 

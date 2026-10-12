@@ -184,8 +184,12 @@ const ROUTES = {
   'GET /api/_probe': async (url) => {
     const sport = url.searchParams.get('sport') ?? 'soccer';
     const market = url.searchParams.get('market') ?? '';
-    const limit = Number(url.searchParams.get('limit') ?? 4000);
-    return probeMarket(sport, market, { limit });
+    return probeMarket(sport, market, {
+      limit: Number(url.searchParams.get('limit') ?? 4000),
+      maxPages: Number(url.searchParams.get('pages') ?? 12),
+      from: url.searchParams.get('from') ?? undefined,
+      to: url.searchParams.get('to') ?? undefined,
+    });
   },
 
   'GET /api/pulse': () => cached('pulse', TTL.pulse, fetchPulse),
