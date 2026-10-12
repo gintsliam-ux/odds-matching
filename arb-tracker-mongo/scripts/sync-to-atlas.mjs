@@ -56,6 +56,14 @@ const PLAN = [
   { name: 'competition_mapping', mode: 'replace' },
   { name: 'leagues', mode: 'replace' },
   { name: 'league_health', mode: 'replace' },
+  /*
+   * The TAB scraper's own competition list. It reads `optic_league` off these
+   * rows to decide what to fetch -- see compsFromTable in tab-arb.mjs -- so
+   * mapping one is a matter of filling that field, and the mapping page can do
+   * it once the rows are over here. 288 small rows, and rows do get retired,
+   * so `replace` rather than a watermark.
+   */
+  { name: 'tab_competitions', mode: 'replace' },
 ];
 
 /** How far either side of now the health check looks. */
@@ -175,11 +183,27 @@ async function drainPendingWrites(S, D) {
   if (!pending.length) return;
 
   const cm = S.collection('competition_mapping');
+  const tabComps = S.collection('tab_competitions');
   const leagues = S.collection('leagues');
   let applied = 0, deleted = 0, failed = 0;
 
   for (const p of pending) {
     try {
+      /*
+       * A TAB mapping is one field on one row -- `optic_league`, which is what
+       * compsFromTable in tab-arb.mjs selects on -- so replaying it is a
+       * single $set rather than the upsert the competition tables need.
+       */
+      if (p.op === 'tab') {
+        const { id, opticLeague } = p.payload ?? {};
+        if (id == null) { failed++; continue; }
+        const set = opticLeague
+          ? { optic_league: opticLeague, confirmed: true }
+          : { optic_league: null, confirmed: false };
+        const r = await tabComps.updateOne({ _id: id }, { $set: set });
+        if (r.matchedCount) applied++; else failed++;
+        continue;
+      }
       if (p.op === 'upsert') {
         const items = p.payload?.items ?? [];
         const now = new Date();

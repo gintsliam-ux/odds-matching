@@ -37,7 +37,7 @@ export const mirrorConfigured = Boolean(MIRROR_URI);
  */
 const MIRRORED = new Set([
   'entities', 'eventMapping', 'competitionMapping', 'leagues', 'leagueSquads', 'mappingPending',
-  'leagueHealth', 'competitionCandidates',
+  'leagueHealth', 'competitionCandidates', 'tabCompetitions',
 ]);
 
 const client = URI

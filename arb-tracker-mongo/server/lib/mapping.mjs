@@ -28,6 +28,9 @@ const TEAM_SAMPLE = 400;
 
 const PROVIDERS = ['swift', 'mybet'];
 
+/** Dates reach the client as strings; a null stays null. */
+const iso = (v) => (v instanceof Date ? v.toISOString() : v ?? null);
+
 /**
  * Phase timings, reported on the payload.
  *
@@ -487,6 +490,148 @@ export async function tournamentMapping() {
  */
 const matcherTournamentKey = (league) =>
   (league?.sport ?? '').toLowerCase() === 'tennis' ? (league?.tournament ?? '') : '';
+
+/* ------------------------------------------------------------ tab mapping */
+
+/**
+ * The TAB competition list, and which optic league each one feeds.
+ *
+ * This is a different shape from the swift/mybet page above and deliberately
+ * so. There, one optic league maps to MANY book competitions and the mapping
+ * lives in `competition_mapping`. Here the mapping lives ON the TAB row as its
+ * `optic_league`, because that is the field the scraper reads: compsFromTable
+ * in tab-arb.mjs selects `active: true` AND `optic_league` not null, and
+ * fetches exactly those competitions. So a row with no `optic_league` is a
+ * competition TAB is offering that nobody is capturing.
+ *
+ * Which also means mapping one needs no scraper change at all -- fill the
+ * field and the next pass picks it up.
+ */
+export async function tabMapping() {
+  const [rows, leagues] = await Promise.all([
+    (await coll('tabCompetitions')).find({}).toArray(),
+    (await coll('leagues')).find({ active: true }).toArray(),
+  ]);
+
+  /*
+   * Candidates for the scorer: each optic league, named WITH its country.
+   *
+   * Naming them by `tournament` alone was actively dangerous. TAB names a
+   * competition in full -- "Brazil Serie B" -- while our `tournament` is often
+   * just "Serie B" with the country in `category`. countriesConflict compares
+   * the two names, so with no country on the candidate side it had nothing to
+   * object to and happily offered:
+   *
+   *   "Brazil Serie B"     -> soccer_ecuador_serie_b          0.920
+   *   "Colombia Primera B" -> soccer_argentina_primera_b      0.800
+   *   "Iceland Division 1" -> soccer_saudi_arabia_division_1  0.800
+   *
+   * Qualifying the candidate lets the country disagreement do its job. Where
+   * `tournament` already carries the country the tokens simply dedupe.
+   *
+   * Grouped by sport too, so a soccer competition is never offered a
+   * basketball league.
+   */
+  const bySport = new Map();
+  for (const l of leagues) {
+    const key = sportKey(l.sport) || String(l.sport ?? '').toLowerCase();
+    const qualified = `${l.category ?? ''} ${l.tournament ?? l.optic_league}`.trim();
+    const list = bySport.get(key) ?? [];
+    list.push({
+      id: l.optic_league,
+      name: qualified,
+      // What the row will read as once mapped, which is the league's own name.
+      display: l.tournament ?? l.optic_league,
+      sport: l.sport,
+      events: 0,
+      teams: [],
+    });
+    bySport.set(key, list);
+  }
+
+  const out = rows.map((r) => {
+    const mapped = r.optic_league != null && String(r.optic_league).trim() !== '';
+    const row = {
+      id: r._id,
+      sport: r.sport ?? null,
+      tabSport: r.tab_sport ?? null,
+      tabComp: r.tab_comp ?? null,
+      opticLeague: mapped ? r.optic_league : null,
+      confirmed: !!r.confirmed,
+      active: r.active !== false,
+      fixtures: r.n_fixtures ?? 0,
+      lastSeen: iso(r.last_seen_at),
+      suggestion: null,
+      alternatives: [],
+    };
+    if (mapped) return row;
+
+    /*
+     * Suggest a league by name, reusing the same scorer the swift/mybet page
+     * uses -- the TAB competition plays the role the optic league plays there,
+     * which works because TAB names a competition the way our leagues do
+     * ("Argentina Primera B" against "Argentina - Primera B").
+     */
+    const key = sportKey(r.sport) || String(r.sport ?? '').toLowerCase();
+    const candidates = bySport.get(key) ?? [];
+    if (!candidates.length) return row;
+    const ranked = bestMatch(
+      { sport: r.sport, category: '', tournament: r.tab_comp, teams: [] },
+      candidates,
+    ).filter((c) => c.score >= SUGGEST_THRESHOLD);
+    row.suggestion = ranked[0]
+      ? { opticLeague: ranked[0].id, name: ranked[0].display ?? ranked[0].name, score: ranked[0].score }
+      : null;
+    row.alternatives = ranked.slice(1, SHORTLIST).map((c) => ({
+      opticLeague: c.id, name: c.display ?? c.name, score: c.score,
+    }));
+    return row;
+  });
+
+  const unmapped = out.filter((r) => !r.opticLeague);
+  return {
+    configured: true,
+    thresholds: { auto: AUTO_THRESHOLD, suggest: SUGGEST_THRESHOLD },
+    counts: {
+      total: out.length,
+      mapped: out.length - unmapped.length,
+      unmapped: unmapped.length,
+      suggested: unmapped.filter((r) => r.suggestion).length,
+      auto: unmapped.filter((r) => r.suggestion && r.suggestion.score >= AUTO_THRESHOLD).length,
+    },
+    // Every active league, for the picker behind "Edit".
+    leagues: leagues.map((l) => ({
+      opticLeague: l.optic_league,
+      sport: l.sport,
+      category: l.category ?? '',
+      tournament: l.tournament ?? '',
+    })),
+    rows: out,
+  };
+}
+
+/**
+ * Point one TAB competition at an optic league, or clear it.
+ *
+ * `confirmed` is set alongside, because a row this page wrote had a human
+ * press the button -- the same reasoning as `source: 'manual'` below.
+ */
+export async function saveTabMapping({ id, opticLeague }) {
+  if (id == null) throw new Error('which TAB competition?');
+  const clearing = opticLeague == null || String(opticLeague).trim() === '';
+  if (!clearing) {
+    const league = await (await coll('leagues')).findOne({ optic_league: opticLeague });
+    if (!league) throw new Error(`no such optic league: ${opticLeague}`);
+  }
+  const set = clearing
+    ? { optic_league: null, confirmed: false }
+    : { optic_league: opticLeague, confirmed: true };
+
+  const res = await (await coll('tabCompetitions')).updateOne({ _id: id }, { $set: set });
+  if (!res.matchedCount) throw new Error(`no TAB competition with id ${id}`);
+  await queueForNas('tab', { id, opticLeague: clearing ? null : opticLeague });
+  return { ok: true, id, opticLeague: clearing ? null : opticLeague };
+}
 
 export async function saveTournamentMapping({ opticLeague, provider, competitionId, competitionName, sport, confidence }) {
   if (!opticLeague || !PROVIDERS.includes(provider)) throw new Error('bad mapping target');

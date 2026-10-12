@@ -16,7 +16,8 @@ import { CAPABILITIES, DATA_SOURCE, isMongo } from './source.mjs';
 import { apiHealth } from './sportApi.mjs';
 import { betsForFixture } from './bets.mjs';
 import {
-  clearTournamentMapping, saveTournamentMapping, saveTournamentMappings, tournamentMapping,
+  clearTournamentMapping, saveTabMapping, saveTournamentMapping, saveTournamentMappings,
+  tabMapping, tournamentMapping,
 } from './mapping.mjs';
 import { closeBets } from './betsMongo.mjs';
 import { cached, invalidate } from './cache.mjs';
@@ -98,6 +99,17 @@ const ROUTES = {
   // Expensive (it reads squads from three feeds), so it is cached and only
   // built when the page asks.
   'GET /api/mapping/tournaments': () => cached('mapping:tournaments', TTL.mapping, tournamentMapping),
+
+  // The TAB scraper's own competition list. Its `optic_league` is what the
+  // scraper reads to decide what to fetch, so this page fills that field —
+  // see tabMapping.
+  'GET /api/mapping/tab': () => cached('mapping:tab', TTL.mapping, tabMapping),
+
+  'POST /api/mapping/tab': async (_url, body) => {
+    const out = await saveTabMapping(body ?? {});
+    invalidate('mapping:tab');
+    return out;
+  },
 
   'POST /api/mapping/tournament': async (_url, body) => {
     const out = await saveTournamentMapping(body ?? {});
@@ -210,6 +222,10 @@ const MIRROR_SERVES = new Set([
   'POST /api/mapping/tournament',
   'POST /api/mapping/tournaments/apply',
   'POST /api/mapping/tournament/clear',
+  // Same loop for the TAB list: the row lands on the mirror and the agent
+  // replays the optic_league onto the NAS, which is where the scraper reads it.
+  'GET /api/mapping/tab',
+  'POST /api/mapping/tab',
   // Assembled from the board row, the mirrored mapping tables and the odds the
   // event page already holds — see apiEventDetails. Not everything the Mongo
   // path shows, but the mapping block is the point of the tab.
@@ -224,6 +240,8 @@ const MONGO_ONLY = {
   'POST /api/mapping/tournament': 'the mapping tables',
   'POST /api/mapping/tournaments/apply': 'the mapping tables',
   'POST /api/mapping/tournament/clear': 'the mapping tables',
+  'GET /api/mapping/tab': 'the TAB competition list',
+  'POST /api/mapping/tab': 'the TAB competition list',
   'GET /api/meta': 'the reference tables',
   'GET /api/event/details': 'fixture detail',
 };

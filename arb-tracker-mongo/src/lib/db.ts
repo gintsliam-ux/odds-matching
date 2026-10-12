@@ -563,6 +563,48 @@ export const saveTournamentMappings = (
   apiPost('/api/mapping/tournaments/apply', { items });
 
 /** Remove one mapped competition, or all of them when `competitionId` is omitted. */
+/* ------------------------------------------------------------- tab mapping */
+
+/**
+ * One TAB competition, and which optic league it feeds.
+ *
+ * A different shape from the tables above, on purpose. There one optic league
+ * maps to many book competitions; here the mapping lives ON the TAB row as its
+ * `opticLeague`, because that is the field the scraper reads to decide what to
+ * fetch. A row with no `opticLeague` is a competition TAB offers that nobody is
+ * capturing — and filling it is all that is needed, no scraper change.
+ */
+export interface TabCompetitionRow {
+  id: number;
+  sport: string | null;
+  tabSport: string | null;
+  tabComp: string | null;
+  opticLeague: string | null;
+  confirmed: boolean;
+  active: boolean;
+  fixtures: number;
+  lastSeen: string | null;
+  suggestion: { opticLeague: string; name: string; score: number } | null;
+  alternatives: { opticLeague: string; name: string; score: number }[];
+}
+
+export interface TabMapping {
+  configured: boolean;
+  thresholds: { auto: number; suggest: number };
+  counts: { total: number; mapped: number; unmapped: number; suggested: number; auto: number };
+  leagues: { opticLeague: string; sport: string; category: string; tournament: string }[];
+  rows: TabCompetitionRow[];
+}
+
+export const fetchTabMapping = (): Promise<TabMapping> => apiGet<TabMapping>('/api/mapping/tab');
+
+/** Point one TAB competition at a league, or pass null to clear it. */
+export const saveTabMapping = (body: {
+  id: number;
+  opticLeague: string | null;
+}): Promise<{ ok: boolean; id: number; opticLeague: string | null }> =>
+  apiPost('/api/mapping/tab', body);
+
 export const clearTournamentMapping = (body: {
   opticLeague: string;
   provider: string;

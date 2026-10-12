@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, ArrowLeft, Check, Link2, Link2Off, Loader2, Pencil, Plus, Search, Users } from 'lucide-react';
 import { CompetitionPicker } from '../components/CompetitionPicker';
+import { TabCompetitions } from '../components/TabCompetitions';
 import {
   clearTournamentMapping,
   fetchTournamentMapping,
@@ -389,6 +390,16 @@ export default function MappingPage() {
   const [sport, setSport] = useState('all');
   const [query, setQuery] = useState('');
   const [applyingAll, setApplyingAll] = useState(false);
+  /*
+   * Two jobs on one page, not two providers of one job.
+   *
+   * The leagues view is optic-league-first: one league maps to many book
+   * competitions. The TAB view is the other way round -- one TAB competition
+   * points at one league, stored on the TAB row itself because that is the
+   * field its scraper reads. Same page because it is the same task; separate
+   * views because the shape is genuinely inverted.
+   */
+  const [view, setView] = useState<'leagues' | 'tab'>('leagues');
   const { mappingWrite } = useCapabilities();
 
   // `fresh` on every reload that follows a write — see fetchTournamentMapping.
@@ -501,13 +512,34 @@ export default function MappingPage() {
               Tournament mapping
             </h1>
             <p className="mt-0.5 text-[11px] text-slate-500">
-              Optic leagues matched to their Swiftbet and Mybet counterparts
+              {view === 'leagues'
+                ? 'Optic leagues matched to their Swiftbet and Mybet counterparts'
+                : 'TAB competitions pointed at the optic league they feed'}
             </p>
+          </div>
+
+          {/* Which of the two jobs. */}
+          <div className="flex shrink-0 items-center gap-1 rounded-md bg-white/5 p-0.5">
+            {([
+              ['leagues', 'Leagues'],
+              ['tab', 'TAB'],
+            ] as const).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setView(key)}
+                className={`rounded px-2.5 py-1 text-xs font-medium transition ${
+                  view === key ? 'bg-white/10 text-slate-100' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
           {/* Coverage per provider — the single number that says how much of
               this job is left, and the reason to keep going. */}
-          {data?.configured && (
+          {view === 'leagues' && data?.configured && (
             <div className="flex items-center gap-5">
               {PROVIDERS.map((p) => {
                 const c = data.providers?.[p.key];
@@ -534,7 +566,7 @@ export default function MappingPage() {
             </div>
           )}
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className={`ml-auto flex items-center gap-2 ${view === 'leagues' ? '' : 'hidden'}`}>
             <div className="relative">
               <Search
                 size={13}
@@ -577,7 +609,7 @@ export default function MappingPage() {
 
         {/* Sports first: the coarsest useful cut, and the one that makes a
             415-row table feel finite. */}
-        {data?.configured && sports.length > 1 && (
+        {view === 'leagues' && data?.configured && sports.length > 1 && (
           <div className="flex flex-wrap items-center gap-1 border-t border-surface-border/60 px-5 py-2">
             <button
               type="button"
@@ -617,7 +649,7 @@ export default function MappingPage() {
           </div>
         )}
 
-        {data?.configured && (
+        {view === 'leagues' && data?.configured && (
           <div className="flex flex-wrap items-center gap-1 border-t border-surface-border/60 px-5 py-2">
             {FILTERS.map((f) => {
               const n = counts[f.key];
@@ -642,27 +674,29 @@ export default function MappingPage() {
         )}
       </header>
 
-      {state === 'loading' && (
+      {view === 'tab' && <TabCompetitions canWrite={mappingWrite} />}
+
+      {view === 'leagues' && state === 'loading' && (
         <div className="flex flex-1 items-center justify-center gap-2 text-sm text-slate-500">
           <Loader2 size={15} className="animate-spin" />
           Reading squads from all three feeds…
         </div>
       )}
 
-      {state === 'error' && (
+      {view === 'leagues' && state === 'error' && (
         <div className="flex flex-1 items-center justify-center text-sm text-slate-500">
           Couldn't load the mapping table.
         </div>
       )}
 
-      {state === 'ready' && data && !data.configured && (
+      {view === 'leagues' && state === 'ready' && data && !data.configured && (
         <div className="flex flex-1 items-center justify-center px-8 text-center text-sm text-slate-500">
           No bets cluster is configured, so there is nothing to map against. Set{' '}
           <code className="mx-1">BETS_URI</code> and reload.
         </div>
       )}
 
-      {state === 'ready' && data?.configured && (
+      {view === 'leagues' && state === 'ready' && data?.configured && (
         <div className="min-h-0 flex-1 overflow-auto">
           <table className="w-full text-sm">
             <thead>
