@@ -178,7 +178,18 @@ export async function marketMovers({ window = 'open', minMove = 2, minBooks = 3 
     const nowMid = median(live.map((b) => b.price));
     const thenMid = median(withThen.map((b) => b.then));
     const movePts = pts(thenMid, nowMid);
-    if (movePts == null || Math.abs(movePts) < minMove) continue;
+    if (movePts == null) continue;
+    /*
+     * Shortened markets only. A drift has no lagging price to take: when the
+     * market moves OUT, the book that has not followed is holding the SMALLER
+     * number, which nobody wants. The value only exists when the market comes
+     * IN and somebody is still on the old, longer price.
+     *
+     * Nothing is lost by it either. A two-way market that drifts on one side
+     * shortened on the other, so the same movement is already here under the
+     * selection where there is something to do about it.
+     */
+    if (movePts > -minMove) continue;
 
     const sorted = [...live].sort((a, b) => b.price - a.price);
     const best = sorted[0];
@@ -196,7 +207,6 @@ export async function marketMovers({ window = 'open', minMove = 2, minBooks = 3 
       then: Number(thenMid.toFixed(3)),
       now: Number(nowMid.toFixed(3)),
       movePts: Number(movePts.toFixed(2)),
-      direction: movePts < 0 ? 'shortened' : 'drifted',
       books: sorted.map((b) => ({
         book: b.book,
         price: b.price,
@@ -226,10 +236,9 @@ export async function marketMovers({ window = 'open', minMove = 2, minBooks = 3 
        * is often just that book's standing opinion. Judged on the best book's
        * own move against the market's: less than half as far, or none at all.
        */
-      lagging:
-        movePts < -minMove
-        && best.then != null
-        && pts(best.then, best.price) > movePts / 2,
+      // Every row here shortened, so this is only about whether the best
+      // price followed it down.
+      lagging: best.then != null && pts(best.then, best.price) > movePts / 2,
     });
   }
 

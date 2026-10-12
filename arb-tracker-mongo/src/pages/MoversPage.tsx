@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Loader2, TrendingDown, TrendingUp } from 'lucide-react';
+import { ArrowLeft, Loader2, TrendingDown } from 'lucide-react';
 import { fetchMovers, type Mover, type Movers } from '../lib/db';
 import { BookmakerLogo } from '../components/BookmakerLogo';
 import { brandById } from '../lib/markets';
@@ -55,7 +55,6 @@ function startsIn(iso: string): string {
 
 function Row({ m }: { m: Mover }) {
   const [open, setOpen] = useState(false);
-  const shortened = m.movePts < 0;
 
   return (
     <div
@@ -65,12 +64,9 @@ function Row({ m }: { m: Mover }) {
     >
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         {/* The move, first, because it is the subject. */}
-        <span
-          className={`flex shrink-0 items-center gap-1 text-sm font-semibold tabular-nums ${
-            shortened ? 'text-rose-300' : 'text-emerald-300'
-          }`}
-        >
-          {shortened ? <TrendingDown size={14} /> : <TrendingUp size={14} />}
+        {/* Every row shortened — see the note in movers.mjs. */}
+        <span className="flex shrink-0 items-center gap-1 text-sm font-semibold tabular-nums text-rose-300">
+          <TrendingDown size={14} />
           {ptsText(m.movePts)}
           <span className="text-[10px] font-normal text-slate-600">pts</span>
         </span>
@@ -217,7 +213,7 @@ export function MoversPage() {
               Movers
             </h1>
             <p className="mt-0.5 text-[11px] text-slate-500">
-              Head-to-head markets that have moved, and who has not moved with them —
+              Head-to-head markets that have come in, and who has not followed —
               measured in implied-probability points
             </p>
           </div>

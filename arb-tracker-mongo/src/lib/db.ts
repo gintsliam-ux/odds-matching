@@ -445,10 +445,12 @@ export interface Mover {
    * Not the percentage change in the odds, which flatters a drift at long
    * prices and hides a serious one at short — 12.0 -> 10.0 is -16.7% of the
    * odds but only -1.67 points, while 1.831 -> 1.635 is -10.7% of the odds and
-   * -6.55 points. Negative means the price shortened.
+   * -6.55 points.
+   *
+   * Always negative: only markets that SHORTENED are reported, because a drift
+   * leaves the laggard holding the smaller price, which is no use to anyone.
    */
   movePts: number;
-  direction: 'shortened' | 'drifted';
   books: MoverBook[];
   best: { book: string; price: number; movePts: number | null };
   /** Points of probability the best price gives away against the market now. */
