@@ -201,3 +201,76 @@ case; ice hockey carries `moneyline_3way` as a separate market and is.)
 
 We have NOT worked around this by dropping the market filter: 28 MB a sport
 across sixteen sports is not something the board can pay on a cold load.
+
+---
+
+## 6. A windowed query is truncated and reports `has_more: false` — this is the big one
+
+Added 12 Oct 2026. This cost us every upcoming soccer fixture on the deployed
+board for an unknown length of time, and it presents as an empty schedule
+rather than as an error, which is why it went unnoticed.
+
+**One `odds-api` query per (sport, date window) stops at roughly 1,240 rows and
+about 4 MB, and then says there is nothing more.**
+
+```
+soccer, market=h2h, date_from=2026-10-10 date_to=2026-10-19
+  limit=50000   1 page    1239 rows   has_more=false   latest start 10-11T18:15
+  limit=4000    4 pages   1248 rows   has_more=false   latest start 10-11T18:15
+
+soccer, market=h2h, date_from=2026-10-13 date_to=2026-10-20
+                1 page     630 rows   has_more=false   ALL 630 upcoming
+```
+
+Nothing is missing on your side. The narrower window returns exactly the rows
+the wider one dropped. But the response is ordered by start time, so what the
+cap removes is always the **far end of the window** — which for a ten-day board
+is its entire upcoming half.
+
+The result on the deployed board: **1,205 soccer fixtures, not one of them yet
+to start.** Rugby union and volleyball likewise. Two of the vanished fixtures,
+fetched by `fixture_id` instead, returned 333 and 851 price rows — so the data
+was always there and always reachable, just not that way.
+
+### `next_offset` advances by the requested `limit`, not by the rows returned
+
+This is the part that makes the cap unpageable, and it is a straightforward bug:
+
+```
+limit=4000:  page rows  404, 345, 438, 61
+             next_offset 4000, 8000, 12000
+```
+
+Each step skips the ~3,600 rows between what arrived and what was asked for.
+Honouring that offset loses more than ignoring it does, so we now send a `limit`
+large enough that a span comes back in one page and the offset is never used.
+
+**What would help, in order:**
+
+1. **Make `has_more` honest.** If the response was capped, say so. We can page
+   or narrow the window ourselves — but only if we are told. Silent truncation
+   on a fixture-enumerating query is the worst possible failure mode.
+2. **Fix `next_offset`** to advance by rows actually returned, which would make
+   paging work and remove the need for (1) to be acted on urgently.
+3. Tell us what the cap actually is (rows? bytes? both?) so we can size spans to
+   it instead of probing for it.
+
+### What we changed on our side
+
+The window is split into 3-day spans up front and any span that still looks
+truncated is split again — detected directly, by a span whose last fixture
+starts a day or more before its own `date_to` on a response near the cap. That
+took the board from 464 upcoming events to 1,988 and a cold build from 23s to
+2.1s. It is a workaround for a surface that misreports completeness, and item 1
+above would let us delete it.
+
+### This also re-prices item 5
+
+Item 5 asked for a fixtures endpoint on the strength of 22% of fixtures being
+invisible. That number was measuring two faults at once. With the cap worked
+around, **"has a price but the board cannot see it" fell to 9 fixtures.** What
+remains is the genuine version of item 5: **766 upcoming fixtures with no odds
+row anywhere** — 47 NHL (a whole Wednesday slate), 58 NCAAF, 31 Premier League,
+26 NBA, 30 darts. Those cannot be reached by any odds query, and we now serve
+them from our own mirrored copy of `fixtures` instead. A fixtures endpoint would
+still be the right home for it, but it is no longer urgent.
