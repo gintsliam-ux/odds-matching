@@ -1,3 +1,4 @@
+import { ObjectId } from 'mongodb';
 import { coll, mongoConfigured } from './mongo.mjs';
 import { betsConfigured, betsDb } from './betsMongo.mjs';
 import {
@@ -30,6 +31,28 @@ const PROVIDERS = ['swift', 'mybet'];
 
 /** Dates reach the client as strings; a null stays null. */
 const iso = (v) => (v instanceof Date ? v.toISOString() : v ?? null);
+
+/**
+ * Every shape a `tab_competitions` _id can take, for one $in lookup.
+ *
+ * The collection is keyed two ways: the original seed used plain numbers (max
+ * 681) and the scraper inserts ObjectIds, which is 115 of the 288 rows and 62
+ * of the 117 unmapped ones. Both reach the client as JSON -- an ObjectId as
+ * its hex string -- so a save that echoed the id straight back into
+ * `{ _id: id }` matched the numeric rows and silently missed every ObjectId
+ * one. Hence candidates rather than a cast.
+ */
+const idCandidates = (v) => {
+  if (typeof v === 'number') return [v];
+  const str = String(v ?? '').trim();
+  if (!str) return [];
+  const out = [str];
+  if (/^\d+$/.test(str)) out.push(Number(str));
+  if (/^[0-9a-f]{24}$/i.test(str)) {
+    try { out.push(new ObjectId(str)); } catch { /* not an ObjectId after all */ }
+  }
+  return out;
+};
 
 /**
  * Phase timings, reported on the payload.
@@ -611,6 +634,115 @@ export async function tabMapping() {
 }
 
 /**
+ * Pull (tab_sport, tab_comp) out of a TAB url.
+ *
+ * The scraper addresses a competition as
+ * `/{sportPath}/competitions/{compPath}` against
+ * api.beta.tab.com.au/v1/tab-info-service/sports -- see fetchComp in
+ * tab-arb.mjs -- and the public site carries the same two names in the same
+ * order. So rather than pin this to one url shape, it looks for the
+ * `competitions` segment and takes the name after it and the sport before it.
+ * Anything it cannot read, the caller supplies by hand.
+ */
+export function parseTabUrl(url) {
+  const raw = String(url ?? '').trim();
+  if (!raw) return null;
+  let path = raw;
+  try {
+    path = new URL(raw.includes('://') ? raw : `https://${raw}`).pathname;
+  } catch {
+    /* not a url — treat it as a bare path */
+  }
+  const parts = path.split('/').map((p) => p.trim()).filter(Boolean).map((p) => {
+    try { return decodeURIComponent(p); } catch { return p; }
+  });
+  const at = parts.findIndex((p) => p.toLowerCase() === 'competitions');
+  if (at < 1 || at + 1 >= parts.length) return null;
+  return { tabSport: parts[at - 1], tabComp: parts[at + 1] };
+}
+
+/**
+ * Add a competition the scrape has not discovered.
+ *
+ * The TAB view edits rows the scraper has already seen. A competition it has
+ * never listed -- a new cup, a sport path it does not walk -- has no row to
+ * edit, which is the one thing that still sent you to the file.
+ *
+ * Nothing here can check the competition exists: TAB blocks datacentre
+ * addresses, which is why the scraper drives a local headless Chrome through
+ * residential proxies. So the row is taken on trust and the scrape is the
+ * verdict -- a name that is wrong simply never matches, `n_fixtures` stays 0
+ * and `last_seen_at` stays null, both of which the table already shows.
+ */
+export async function addTabCompetition({ url, tabSport, tabComp, sport, opticLeague }) {
+  const fromUrl = url ? parseTabUrl(url) : null;
+  const tSport = String(tabSport ?? fromUrl?.tabSport ?? '').trim();
+  const tComp = String(tabComp ?? fromUrl?.tabComp ?? '').trim();
+  if (!tComp) throw new Error('could not read a competition name — paste the TAB url, or type the name');
+  if (!tSport) throw new Error('could not read a sport — pick one');
+
+  const comps = await coll('tabCompetitions');
+
+  /*
+   * Which of our sports this TAB sport is, learned from the rows that already
+   * exist rather than hardcoded -- the collection carries both fields on every
+   * row, so the mapping is in the data ("AFL Football" -> aussierules).
+   */
+  let ourSport = String(sport ?? '').trim();
+  if (!ourSport) {
+    const sibling = await comps.findOne(
+      { tab_sport: tSport, sport: { $nin: [null, ''] } },
+      { projection: { _id: 0, sport: 1 } },
+    );
+    ourSport = sibling?.sport ?? '';
+  }
+  if (!ourSport) {
+    throw new Error(`no sport known for TAB sport "${tSport}" — pick one`);
+  }
+
+  // The collection carries a unique index on (tab_sport, tab_comp). Hand back
+  // the row that is already there rather than failing: "it exists" and "I just
+  // made it" are the same outcome from the caller's side.
+  const existing = await comps.findOne({ tab_sport: tSport, tab_comp: tComp });
+  if (existing) {
+    if (opticLeague && !existing.optic_league) {
+      await saveTabMapping({ id: existing._id, opticLeague });
+      return { ok: true, id: existing._id, existed: true, mapped: true };
+    }
+    return { ok: true, id: existing._id, existed: true, mapped: !!existing.optic_league };
+  }
+
+  if (opticLeague) {
+    const league = await (await coll('leagues')).findOne({ optic_league: opticLeague });
+    if (!league) throw new Error(`no such optic league: ${opticLeague}`);
+  }
+
+  /*
+   * An ObjectId, which is what the scraper itself inserts -- 115 of the 288
+   * rows are keyed that way and only the original seed used numbers. Minting
+   * one here rather than max+1 keeps both stores on the same id when the drain
+   * replays this upstream, and sidesteps the numeric sequence entirely.
+   */
+  const doc = {
+    _id: new ObjectId(),
+    sport: ourSport,
+    tab_sport: tSport,
+    tab_comp: tComp,
+    optic_league: opticLeague ?? null,
+    confirmed: !!opticLeague,
+    active: true,
+    n_fixtures: 0,
+    last_seen_at: null,
+    last_matched_at: null,
+    created_at: new Date(),
+    source: 'manual',
+  };
+  await comps.insertOne(doc);
+  await queueForNas('tab-add', { doc: { ...doc, _id: String(doc._id) } });
+  return { ok: true, id: String(doc._id), existed: false, mapped: !!opticLeague };
+}
+
+/**
  * Point one TAB competition at an optic league, or clear it.
  *
  * `confirmed` is set alongside, because a row this page wrote had a human
@@ -627,7 +759,9 @@ export async function saveTabMapping({ id, opticLeague }) {
     ? { optic_league: null, confirmed: false }
     : { optic_league: opticLeague, confirmed: true };
 
-  const res = await (await coll('tabCompetitions')).updateOne({ _id: id }, { $set: set });
+  const ids = idCandidates(id);
+  if (!ids.length) throw new Error('which TAB competition?');
+  const res = await (await coll('tabCompetitions')).updateOne({ _id: { $in: ids } }, { $set: set });
   if (!res.matchedCount) throw new Error(`no TAB competition with id ${id}`);
   await queueForNas('tab', { id, opticLeague: clearing ? null : opticLeague });
   return { ok: true, id, opticLeague: clearing ? null : opticLeague };

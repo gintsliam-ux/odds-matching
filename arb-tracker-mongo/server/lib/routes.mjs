@@ -16,8 +16,8 @@ import { CAPABILITIES, DATA_SOURCE, isMongo } from './source.mjs';
 import { apiHealth } from './sportApi.mjs';
 import { betsForFixture } from './bets.mjs';
 import {
-  clearTournamentMapping, saveTabMapping, saveTournamentMapping, saveTournamentMappings,
-  tabMapping, tournamentMapping,
+  addTabCompetition, clearTournamentMapping, saveTabMapping, saveTournamentMapping,
+  saveTournamentMappings, tabMapping, tournamentMapping,
 } from './mapping.mjs';
 import { closeBets } from './betsMongo.mjs';
 import { cached, invalidate } from './cache.mjs';
@@ -107,6 +107,13 @@ const ROUTES = {
 
   'POST /api/mapping/tab': async (_url, body) => {
     const out = await saveTabMapping(body ?? {});
+    invalidate('mapping:tab');
+    return out;
+  },
+
+  // A competition the scrape has never listed, so there is no row to edit.
+  'POST /api/mapping/tab/add': async (_url, body) => {
+    const out = await addTabCompetition(body ?? {});
     invalidate('mapping:tab');
     return out;
   },
@@ -226,6 +233,7 @@ const MIRROR_SERVES = new Set([
   // replays the optic_league onto the NAS, which is where the scraper reads it.
   'GET /api/mapping/tab',
   'POST /api/mapping/tab',
+  'POST /api/mapping/tab/add',
   // Assembled from the board row, the mirrored mapping tables and the odds the
   // event page already holds — see apiEventDetails. Not everything the Mongo
   // path shows, but the mapping block is the point of the tab.
@@ -242,6 +250,7 @@ const MONGO_ONLY = {
   'POST /api/mapping/tournament/clear': 'the mapping tables',
   'GET /api/mapping/tab': 'the TAB competition list',
   'POST /api/mapping/tab': 'the TAB competition list',
+  'POST /api/mapping/tab/add': 'the TAB competition list',
   'GET /api/meta': 'the reference tables',
   'GET /api/event/details': 'fixture detail',
 };

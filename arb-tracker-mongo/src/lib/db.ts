@@ -575,7 +575,8 @@ export const saveTournamentMappings = (
  * capturing — and filling it is all that is needed, no scraper change.
  */
 export interface TabCompetitionRow {
-  id: number;
+  /** Numeric for the seeded rows, an ObjectId hex string for scraped ones. */
+  id: number | string;
   sport: string | null;
   tabSport: string | null;
   tabComp: string | null;
@@ -600,10 +601,27 @@ export const fetchTabMapping = (): Promise<TabMapping> => apiGet<TabMapping>('/a
 
 /** Point one TAB competition at a league, or pass null to clear it. */
 export const saveTabMapping = (body: {
-  id: number;
+  id: number | string;
   opticLeague: string | null;
-}): Promise<{ ok: boolean; id: number; opticLeague: string | null }> =>
+}): Promise<{ ok: boolean; id: number | string; opticLeague: string | null }> =>
   apiPost('/api/mapping/tab', body);
+
+/**
+ * Add a competition the scrape has never listed.
+ *
+ * Paste a TAB url and the sport and competition name come out of its path; or
+ * give them directly. Nothing can verify the competition exists from here —
+ * TAB blocks datacentre addresses — so the scrape is the verdict: a wrong name
+ * never matches and the row stays at 0 fixtures, never seen.
+ */
+export const addTabCompetition = (body: {
+  url?: string;
+  tabSport?: string;
+  tabComp?: string;
+  sport?: string;
+  opticLeague?: string | null;
+}): Promise<{ ok: boolean; id: number | string; existed: boolean; mapped: boolean }> =>
+  apiPost('/api/mapping/tab/add', body);
 
 export const clearTournamentMapping = (body: {
   opticLeague: string;

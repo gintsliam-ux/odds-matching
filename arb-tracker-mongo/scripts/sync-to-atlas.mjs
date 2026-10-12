@@ -27,7 +27,7 @@
 //   node --env-file=.env scripts/sync-to-atlas.mjs --full      re-copy everything
 //   node --env-file=.env scripts/sync-to-atlas.mjs --dry-run   report, write nothing
 
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 
 const SRC_URI = process.env.MONGO_URI;
 const SRC_DB = process.env.MONGO_DB || 'gutsys_sport';
@@ -177,6 +177,23 @@ try {
  * user made is worth retrying next hour, and dropping it silently is how a
  * mapping quietly un-applies itself.
  */
+/**
+ * Every shape a `tab_competitions` _id can take — see idCandidates in
+ * server/lib/mapping.mjs. The queued intent carries whatever JSON carried, so
+ * an ObjectId arrives as its hex string and needs casting back.
+ */
+const tabIdCandidates = (v) => {
+  if (typeof v === 'number') return [v];
+  const str = String(v ?? '').trim();
+  if (!str) return [];
+  const out = [str];
+  if (/^\d+$/.test(str)) out.push(Number(str));
+  if (/^[0-9a-f]{24}$/i.test(str)) {
+    try { out.push(new ObjectId(str)); } catch { /* not an ObjectId after all */ }
+  }
+  return out;
+};
+
 async function drainPendingWrites(S, D) {
   const queue = D.collection('mapping_pending');
   const pending = await queue.find({}).sort({ at: 1 }).limit(1000).toArray();
@@ -200,10 +217,28 @@ async function drainPendingWrites(S, D) {
         const set = opticLeague
           ? { optic_league: opticLeague, confirmed: true }
           : { optic_league: null, confirmed: false };
-        const r = await tabComps.updateOne({ _id: id }, { $set: set });
+        const ids = tabIdCandidates(id);
+        if (!ids.length) throw new Error('bad tab intent: no id');
+        const r = await tabComps.updateOne({ _id: { $in: ids } }, { $set: set });
         // Left queued rather than dropped: a row the scrape has not created
         // yet is a reason to try again, not a reason to lose the intent.
         if (!r.matchedCount) throw new Error(`no tab_competitions row ${id}`);
+        applied++;
+      } else if (p.op === 'tab-add') {
+        /*
+         * A competition added by hand, which the scrape has never listed. The
+         * _id travels as a string so both stores end up keyed the same; an
+         * upsert rather than an insert because the unique index on
+         * (tab_sport, tab_comp) means a replay must not fail on its own work.
+         */
+        const doc = p.payload?.doc;
+        if (!doc?.tab_comp || !doc?.tab_sport) throw new Error('bad tab-add intent');
+        const [id] = tabIdCandidates(doc._id).slice(-1);
+        await tabComps.updateOne(
+          { tab_sport: doc.tab_sport, tab_comp: doc.tab_comp },
+          { $setOnInsert: { ...doc, _id: id ?? doc._id, created_at: new Date(doc.created_at ?? Date.now()) } },
+          { upsert: true },
+        );
         applied++;
       } else if (p.op === 'upsert') {
         const items = p.payload?.items ?? [];

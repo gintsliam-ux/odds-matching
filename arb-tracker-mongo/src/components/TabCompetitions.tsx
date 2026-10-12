@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  addTabCompetition,
   fetchTabMapping,
   saveTabMapping,
   type TabCompetitionRow,
@@ -39,6 +40,114 @@ function ago(iso: string | null): string {
 
 const CHIP = 'rounded-md px-2 py-1 text-xs font-medium transition-colors';
 
+/**
+ * Add a competition the scrape has never listed.
+ *
+ * The table below edits what the scraper has already found. A brand new cup,
+ * or a sport path it does not walk, has no row to edit — which was the one
+ * case still worth opening the scraper for.
+ */
+function AddCompetition({
+  sports,
+  onAdded,
+}: {
+  sports: string[];
+  onAdded: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [url, setUrl] = useState('');
+  const [sport, setSport] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'bad'; text: string } | null>(null);
+
+  const submit = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await addTabCompetition({ url: url.trim(), sport: sport || undefined });
+      setMsg({
+        kind: 'ok',
+        text: r.existed ? 'Already on the list — find it below.' : 'Added. Give it a league below.',
+      });
+      setUrl('');
+      onAdded();
+    } catch (e) {
+      setMsg({ kind: 'bad', text: e instanceof Error ? e.message : 'could not add it' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className={`${CHIP} bg-white/5 text-slate-300 hover:bg-white/10`}
+      >
+        + Add a competition
+      </button>
+    );
+  }
+
+  return (
+    <div className="w-full space-y-1.5 rounded-lg border border-surface-border p-2.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <input
+          autoFocus
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && !busy && submit()}
+          placeholder="Paste the TAB competition url"
+          className="min-w-[280px] flex-1 rounded border border-surface-border bg-surface px-2 py-1 text-xs text-slate-200 placeholder:text-slate-600 outline-none focus:border-emerald-500/50"
+        />
+        <select
+          value={sport}
+          onChange={(e) => setSport(e.target.value)}
+          className="rounded border border-surface-border bg-surface px-2 py-1 text-xs text-slate-300 outline-none"
+          title="Only needed when the sport cannot be read from the url"
+        >
+          <option value="">sport from url</option>
+          {sports.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={busy || !url.trim()}
+          onClick={submit}
+          className={`${CHIP} bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 disabled:opacity-40`}
+        >
+          {busy ? '…' : 'Add'}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false);
+            setMsg(null);
+          }}
+          className={`${CHIP} bg-white/5 text-slate-400 hover:bg-white/10`}
+        >
+          Close
+        </button>
+      </div>
+      <p className="text-[11px] text-slate-600">
+        The sport and competition come out of the url path — …/
+        <span className="text-slate-500">Soccer</span>/competitions/
+        <span className="text-slate-500">Brazil Serie B</span>. Nothing here can check it exists;
+        if the name is wrong the row simply stays at 0 fixtures, never seen.
+      </p>
+      {msg && (
+        <p className={`text-xs ${msg.kind === 'ok' ? 'text-emerald-300' : 'text-red-300'}`}>
+          {msg.text}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** One row: what TAB calls it, and the league it feeds. */
 function Row({
   row,
@@ -50,7 +159,7 @@ function Row({
   row: TabCompetitionRow;
   leagues: TabMapping['leagues'];
   auto: number;
-  onSaved: (id: number, opticLeague: string | null) => void;
+  onSaved: (id: number | string, opticLeague: string | null) => void;
   canWrite: boolean;
 }) {
   const [editing, setEditing] = useState(false);
@@ -202,6 +311,11 @@ export function TabCompetitions({ canWrite }: { canWrite: boolean }) {
   const [sport, setSport] = useState('all');
   const [query, setQuery] = useState('');
 
+  const [nonce, setNonce] = useState(0);
+  /* An add changes the row set, so that one does refetch — unlike a save,
+     which is patched in place below. */
+  const reload = () => setNonce((n) => n + 1);
+
   useEffect(() => {
     let cancelled = false;
     fetchTabMapping()
@@ -214,12 +328,12 @@ export function TabCompetitions({ canWrite }: { canWrite: boolean }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [nonce]);
 
   /* Patch in place rather than refetching. The read is a 5-minute cached
      aggregate, so a refetch would either serve the pre-save copy or make the
      next visitor pay for a rebuild. */
-  const onSaved = (id: number, opticLeague: string | null) =>
+  const onSaved = (id: number | string, opticLeague: string | null) =>
     setData((prev) =>
       prev
         ? {
@@ -328,6 +442,7 @@ export function TabCompetitions({ canWrite }: { canWrite: boolean }) {
           className="rounded-md border border-surface-border bg-surface px-2 py-1 text-xs text-slate-300 outline-none focus:border-emerald-500/50"
         />
         <span className="text-xs text-slate-600">{visible.length} shown</span>
+        {canWrite && <AddCompetition sports={sports as string[]} onAdded={reload} />}
       </div>
 
       <div className="overflow-x-auto rounded-lg border border-surface-border">
