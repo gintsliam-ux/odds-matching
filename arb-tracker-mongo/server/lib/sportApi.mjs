@@ -401,10 +401,31 @@ async function drainWindow(params, { from, to, depth = 0 } = {}) {
   return [...a, ...b];
 }
 
-/** Drain a sport across the board's window, split as finely as it takes. */
+/**
+ * The window is pre-split rather than discovered, because discovery is
+ * sequential and the splits are not.
+ *
+ * Handing drainWindow the whole ten days means a big sport learns it was
+ * truncated, splits, and each half learns the same thing again — three or four
+ * round trips deep before any of it is useful, and a cold board took 23s.
+ * Starting from spans that mostly fit removes those rounds: they all go out at
+ * once, and only a span that is still saturated pays for a further split.
+ *
+ * Three days because it is the widest span soccer — comfortably the heaviest
+ * sport — usually answers whole. A sport small enough to have fitted in one
+ * request now makes four small ones instead, which is cheap and parallel.
+ */
+const INITIAL_SPAN_DAYS = 3;
+
 function drainBoard(params) {
   const { date_from: from, date_to: to } = boardWindow();
-  return drainWindow(params, { from, to });
+  const spans = [];
+  for (let start = from; daysBetween(start, to) >= 0; start = shiftYmd(start, INITIAL_SPAN_DAYS)) {
+    const end = shiftYmd(start, INITIAL_SPAN_DAYS - 1);
+    // Clamp the last span to the window rather than running past it.
+    spans.push({ from: start, to: daysBetween(end, to) < 0 ? to : end });
+  }
+  return Promise.all(spans.map((sp) => drainWindow(params, sp))).then((all) => all.flat());
 }
 
 /* ------------------------------------------------------------- odds rows */
