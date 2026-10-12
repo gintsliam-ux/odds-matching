@@ -11,6 +11,10 @@ const iso = (v) => (v instanceof Date ? v.toISOString() : v ?? null);
 /** How far back to load finished events (the UI drops finals after 24h). */
 const WINDOW_MS = 48 * 60 * 60 * 1000;
 
+/** How far forward the mirrored schedule is read — matches WINDOW_FWD_DAYS, so
+ *  the schedule half of the board covers the same span the odds half does. */
+const SCHEDULE_FWD_MS = 7 * 24 * 60 * 60 * 1000;
+
 /**
  * Which of these fixtures actually carry odds.
  *
@@ -157,8 +161,25 @@ async function scheduleOnly(have) {
   if (!mirrorConfigured) return [];
   try {
     const seen = new Set(have.map((f) => f.fixture_id));
-    const rows = await fixturesInWindow(new Date(Date.now() - WINDOW_MS));
-    return rows.filter((f) => f.fixture_id && !seen.has(f.fixture_id) && !SKIP_SPORTS.has(f.sport));
+    /*
+     * Deliberately NOT fixturesInWindow. That helper ends in keepPriceable,
+     * which is both unavailable here -- it reads `odds`, which the mirror does
+     * not carry -- and the exact opposite of what this wants. Its job is to
+     * drop fixtures with no prices; this function exists to find them.
+     */
+    const rows = await (await coll('fixtures'))
+      .find({
+        scheduled_start: {
+          $gte: new Date(Date.now() - WINDOW_MS),
+          $lte: new Date(Date.now() + SCHEDULE_FWD_MS),
+        },
+      })
+      .project(FIXTURE_PROJECTION)
+      .sort({ scheduled_start: 1 })
+      .toArray();
+    return rows.filter(
+      (f) => f.fixture_id && !seen.has(f.fixture_id) && !SKIP_SPORTS.has(f.sport),
+    );
   } catch {
     // The mirror is a bonus here, never a dependency.
     return [];
