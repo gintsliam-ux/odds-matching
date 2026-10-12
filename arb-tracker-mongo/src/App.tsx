@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, Link2, LogOut, Radio, Users as UsersIcon } from 'lucide-react';
+import { Activity, Link2, LogOut, Radio, TrendingDown, Users as UsersIcon } from 'lucide-react';
 import { Link, Outlet, useMatch, useNavigate } from 'react-router-dom';
 import { Header } from './components/Header';
 import { FilterBar } from './components/FilterBar';
@@ -647,6 +647,17 @@ export default function App() {
             )}
           </nav>
           {/* Pinned to the bottom of the rail, below the scrolling event list. */}
+          <div className="shrink-0 border-t border-surface-border p-2">
+            {/* Movers reads the same price ladder the board already holds, so
+                it works on either source — no mapping tables involved. */}
+            <Link
+              to="/movers"
+              className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
+            >
+              <TrendingDown size={14} />
+              Movers
+            </Link>
+          </div>
           {caps.mapping && (
             <div className="shrink-0 border-t border-surface-border p-2">
               <Link

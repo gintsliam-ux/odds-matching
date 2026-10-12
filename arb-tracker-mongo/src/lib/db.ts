@@ -416,6 +416,67 @@ export const FULL_CAPABILITIES: Capabilities = {
 export const fetchCapabilities = (): Promise<Capabilities> =>
   apiGet<Capabilities>('/api/capabilities');
 
+/* ------------------------------------------------------------------ movers */
+
+/** One book's price on a mover, and how far that book itself moved. */
+export interface MoverBook {
+  book: string;
+  price: number;
+  then: number | null;
+  /** This book's own move, which is what marks it as having followed or not. */
+  movePct: number | null;
+  ageMins: number;
+}
+
+export interface Mover {
+  fixtureId: string;
+  name: string;
+  sport: string;
+  league: string | null;
+  startsAt: string;
+  market: string;
+  selection: string;
+  /** Median price across live books before and after. */
+  then: number;
+  now: number;
+  movePct: number;
+  direction: 'shortened' | 'drifted';
+  books: MoverBook[];
+  best: { book: string; price: number; movePct: number | null };
+  /** How much better the best price is than where the market now sits. */
+  bestVsNow: number;
+  /** And than where it sat BEFORE the move — the number that matters. */
+  bestVsThen: number;
+  /** The market shortened and the best price did not follow it. */
+  lagging: boolean;
+}
+
+export interface Movers {
+  window: string;
+  thresholds: { minMove: number; minBooks: number; freshMins: number };
+  counts: {
+    markets: number;
+    comparable: number;
+    movers: number;
+    lagging: number;
+    staleRowsIgnored: number;
+  };
+  movers: Mover[];
+}
+
+export const fetchMovers = (q: {
+  window?: string;
+  minMove?: number;
+  minBooks?: number;
+} = {}): Promise<Movers> => {
+  const p = new URLSearchParams();
+  if (q.window) p.set('window', q.window);
+  if (q.minMove != null) p.set('minMove', String(q.minMove));
+  if (q.minBooks != null) p.set('minBooks', String(q.minBooks));
+  const qs = p.toString();
+  return apiGet<Movers>(`/api/movers${qs ? `?${qs}` : ''}`);
+};
+
 /* ----------------------------------------------------------------- mapping */
 
 /** A provider competition proposed for an optic league. */

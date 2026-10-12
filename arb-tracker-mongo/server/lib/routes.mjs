@@ -13,6 +13,7 @@
 import { coll, mirrorConfigured } from './mongo.mjs';
 import { betTicker } from './ticker.mjs';
 import { CAPABILITIES, DATA_SOURCE, isMongo } from './source.mjs';
+import { marketMovers } from './movers.mjs';
 import { apiHealth } from './sportApi.mjs';
 import { betsForFixture } from './bets.mjs';
 import {
@@ -98,6 +99,19 @@ const ROUTES = {
   // The mapping table: every optic league beside its provider counterparts.
   // Expensive (it reads squads from three feeds), so it is cached and only
   // built when the page asks.
+  // Head-to-head prices that have moved, and who has not moved with them.
+  'GET /api/movers': (url) => {
+    const win = url.searchParams.get('window') ?? '6h';
+    const minMove = Number(url.searchParams.get('minMove') ?? 5);
+    const minBooks = Number(url.searchParams.get('minBooks') ?? 3);
+    const key = `movers:${win}:${minMove}:${minBooks}`;
+    return cached(key, TTL.board, () => marketMovers({
+      window: win,
+      minMove: Number.isFinite(minMove) ? minMove : 5,
+      minBooks: Number.isFinite(minBooks) ? minBooks : 3,
+    }));
+  },
+
   'GET /api/mapping/tournaments': () => cached('mapping:tournaments', TTL.mapping, tournamentMapping),
 
   // The TAB scraper's own competition list. Its `optic_league` is what the

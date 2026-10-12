@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import App from './App';
 import EventView from './EventView';
 import TickerPage from './pages/TickerPage';
+import MoversPage from './pages/MoversPage';
 import MappingPage from './pages/MappingPage';
 import { CapabilitiesProvider } from './lib/capabilities';
 import UsersPage from './pages/UsersPage';
@@ -45,6 +46,7 @@ createRoot(document.getElementById('root')!).render(
           <Route path="event/:slug/:fixtureId" element={<EventView />} />
         </Route>
         {/* Full-width: the mapping table has no use for the event rail. */}
+        <Route path="/movers" element={<MoversPage />} />
         <Route path="/ticker" element={<TickerPage />} />
         <Route path="/mapping" element={<MappingPage />} />
         <Route path="/users" element={<AdminOnly><UsersPage /></AdminOnly>} />
