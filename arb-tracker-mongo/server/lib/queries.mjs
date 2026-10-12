@@ -14,6 +14,9 @@ const WINDOW_MS = 48 * 60 * 60 * 1000;
 /** How far forward the mirrored schedule is read — matches WINDOW_FWD_DAYS, so
  *  the schedule half of the board covers the same span the odds half does. */
 const SCHEDULE_FWD_MS = 7 * 24 * 60 * 60 * 1000;
+/** And how far back: enough that a game which has just kicked off does not
+ *  vanish mid-refresh, not enough to carry finished fixtures nobody priced. */
+const SCHEDULE_BACK_MS = 2 * 60 * 60 * 1000;
 
 /**
  * Which of these fixtures actually carry odds.
@@ -235,8 +238,19 @@ async function scheduleOnly(have) {
      */
     const rows = await (await coll('fixtures'))
       .find({
+        /*
+         * Forward only, bar a short grace. A fixture with no price and no book
+         * event is worth a row because it is a game you could be taking bets
+         * on; once it has started that is no longer true, and a FINISHED one
+         * with no prices has nothing to show at all — no result worth trusting
+         * from an hourly mirror and no price history to read.
+         *
+         * It also keeps the work small: reaching 48h back made this consider
+         * ~3,500 schedule rows and ask Atlas about every one of them, against
+         * ~800 looking forward.
+         */
         scheduled_start: {
-          $gte: new Date(Date.now() - WINDOW_MS),
+          $gte: new Date(Date.now() - SCHEDULE_BACK_MS),
           $lte: new Date(Date.now() + SCHEDULE_FWD_MS),
         },
       })
