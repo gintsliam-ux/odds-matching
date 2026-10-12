@@ -151,7 +151,42 @@ const CALL_RETRIES = 2;
  * NOT be asked is "what is live": a stale live row survives long after the game
  * ends, so including them turned 11 live fixtures into 554.
  */
-async function call(route, params) {
+/**
+ * How many requests this instance will have open upstream at once.
+ *
+ * A cold board is 14 sports x 4 window spans x 3 drains = 168 requests, and
+ * splitting the window to beat the response cap is what multiplied them. Fired
+ * all at once the surface answers a large share with 429, each of which costs a
+ * retry and a 400ms-then-1600ms backoff, and a cold build took 24s. The gate is
+ * FASTER than unbounded concurrency despite doing less at a time, because the
+ * work it declines to start is work that would have been thrown away.
+ *
+ * This is the same failure the retry logic in `call` was written for; that fixed
+ * the lost sports, this removes the cause.
+ */
+const MAX_INFLIGHT = 10;
+let inflight = 0;
+const queued = [];
+
+function gate(fn) {
+  if (inflight < MAX_INFLIGHT) return run(fn);
+  return new Promise((resolve, reject) => {
+    queued.push(() => run(fn).then(resolve, reject));
+  });
+}
+
+function run(fn) {
+  inflight++;
+  return fn().finally(() => {
+    inflight--;
+    queued.shift()?.();
+  });
+}
+
+/** Rate-limited entry point; `callRaw` does the work. */
+const call = (route, params) => gate(() => callRaw(route, params));
+
+async function callRaw(route, params) {
   if (!KEY) throw new Error('SPORT_API_KEY is not set');
   const qs = new URLSearchParams({ key: KEY, ...params });
   let lastErr;
