@@ -196,15 +196,16 @@ async function drainPendingWrites(S, D) {
        */
       if (p.op === 'tab') {
         const { id, opticLeague } = p.payload ?? {};
-        if (id == null) { failed++; continue; }
+        if (id == null) throw new Error('bad tab intent: no id');
         const set = opticLeague
           ? { optic_league: opticLeague, confirmed: true }
           : { optic_league: null, confirmed: false };
         const r = await tabComps.updateOne({ _id: id }, { $set: set });
-        if (r.matchedCount) applied++; else failed++;
-        continue;
-      }
-      if (p.op === 'upsert') {
+        // Left queued rather than dropped: a row the scrape has not created
+        // yet is a reason to try again, not a reason to lose the intent.
+        if (!r.matchedCount) throw new Error(`no tab_competitions row ${id}`);
+        applied++;
+      } else if (p.op === 'upsert') {
         const items = p.payload?.items ?? [];
         const now = new Date();
         for (const i of items) {
