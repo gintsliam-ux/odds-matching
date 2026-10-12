@@ -77,6 +77,8 @@ const STATUS_ORDER: Record<EventStatus, number> = {
 // day. Live games always qualify (they started in the past); this only bounds
 // how far ahead upcoming fixtures reach.
 const TICKER_HORIZON_MS = 24 * 60 * 60 * 1000;
+/** Cards in the top strip. Soonest first, so the cap only ever trims the far end. */
+const TICKER_UPCOMING_MAX = 80;
 /** How many finished games the ticker falls back to when nothing is due. */
 const TICKER_RESULTS_MAX = 40;
 
@@ -476,7 +478,18 @@ export default function App() {
         const sb = STATUS_ORDER[effectiveStatus(b, now)];
         if (sa !== sb) return sa - sb;
         return new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime();
-      });
+      })
+      /*
+       * Capped, like the results branch below always was.
+       *
+       * This strip is live-and-next-up, not the whole day, and it scrolls
+       * horizontally — nobody reaches card four hundred. It was unbounded
+       * because the deployed board only ever had a few hundred upcoming
+       * fixtures to give it; once the board started carrying the real schedule
+       * that became 1,988 cards, each with crests, a badge and two price lines,
+       * and the page stopped reaching idle at all.
+       */
+      .slice(0, TICKER_UPCOMING_MAX);
 
     if (upcoming.length > 0) return upcoming;
 
