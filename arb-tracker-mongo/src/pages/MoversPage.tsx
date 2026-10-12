@@ -111,11 +111,6 @@ function Row({ m }: { m: Mover }) {
             {probText(m.best.movePct)} <span className="text-slate-600">its own move</span>
           </span>
         )}
-        {m.lagging && (
-          <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
-            has not followed
-          </span>
-        )}
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
