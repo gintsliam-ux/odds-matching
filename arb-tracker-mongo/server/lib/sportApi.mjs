@@ -330,6 +330,83 @@ async function drain(route, params, { maxPages = 12 } = {}) {
   return out;
 }
 
+/**
+ * The surface truncates a (sport, window) query and says it is complete.
+ *
+ * Measured on the deployed board. Soccer, `market=h2h`, window 10-10..10-19:
+ *
+ *     limit=50000   1 page    1239 rows   has_more=false   latest start 10-11T18:15
+ *     limit=4000    4 pages   1248 rows   has_more=false   latest start 10-11T18:15
+ *
+ * Both stop at the same place, roughly 1,240 rows and about 4 MB, and both
+ * report that there is nothing more. There is: the identical query windowed to
+ * 10-13..10-20 returns 630 rows, every one of them upcoming. The response is
+ * ordered by start time, so what the cap removes is always the far end of the
+ * window — which for the board is its entire upcoming half.
+ *
+ * That is why the deployed board carried 1,205 soccer fixtures and NOT ONE of
+ * them was yet to start, while the same fixtures fetched by id returned 333 and
+ * 851 price rows apiece. Rugby union and volleyball were empty for the same
+ * reason. It reads exactly like an empty schedule, which is why it survived
+ * this long.
+ *
+ * Paging past it does not work either, and the reason is worth recording:
+ * `next_offset` advances by the REQUESTED `limit`, not by the number of rows
+ * actually returned. At `limit=4000` the pages came back 404, 345, 438, 61 rows
+ * while `next_offset` went 4000, 8000, 12000 — so each step skipped the roughly
+ * 3,600 rows between what arrived and what was asked for. Honouring that offset
+ * is worse than ignoring it, so `PAGE_LIMIT` stays large enough that a span is
+ * answered in one page and the broken offset is never used.
+ *
+ * So the window is split instead, and a span that still looks truncated is
+ * split again. Truncation is detected directly rather than inferred: a span
+ * whose last fixture starts well before the span's own `date_to`, on a response
+ * big enough to be near the cap, did not fit.
+ */
+const SATURATED_ROWS = 900;
+const MAX_SPLIT_DEPTH = 5;
+
+const ymdOf = (d) => new Date(d).toISOString().slice(0, 10);
+const shiftYmd = (ymd, days) =>
+  ymdOf(new Date(`${ymd}T00:00:00Z`).getTime() + days * 86_400_000);
+const daysBetween = (from, to) =>
+  Math.round((new Date(`${to}T00:00:00Z`) - new Date(`${from}T00:00:00Z`)) / 86_400_000);
+
+/**
+ * Drain one sport across a date window, splitting the window whenever the
+ * surface answers with a truncated span. Spans are disjoint and inclusive at
+ * both ends, so no row is fetched twice.
+ */
+async function drainWindow(params, { from, to, depth = 0 } = {}) {
+  const rows = await drain('odds-api', { ...params, date_from: from, date_to: to });
+
+  const span = daysBetween(from, to);
+  if (span < 1 || depth >= MAX_SPLIT_DEPTH || rows.length < SATURATED_ROWS) return rows;
+
+  // Where did the answer actually stop?
+  let latest = null;
+  for (const r of rows) {
+    const t = r.commence_time ? new Date(r.commence_time).getTime() : NaN;
+    if (Number.isFinite(t) && (latest == null || t > latest)) latest = t;
+  }
+  // A full span ends on its own last day. Stopping a day or more short of that
+  // on a response this size means the tail was cut, not that the tail is empty.
+  if (latest != null && daysBetween(ymdOf(latest), to) < 1) return rows;
+
+  const mid = shiftYmd(from, Math.floor(span / 2));
+  const [a, b] = await Promise.all([
+    drainWindow(params, { from, to: mid, depth: depth + 1 }),
+    drainWindow(params, { from: shiftYmd(mid, 1), to, depth: depth + 1 }),
+  ]);
+  return [...a, ...b];
+}
+
+/** Drain a sport across the board's window, split as finely as it takes. */
+function drainBoard(params) {
+  const { date_from: from, date_to: to } = boardWindow();
+  return drainWindow(params, { from, to });
+}
+
 /* ------------------------------------------------------------- odds rows */
 
 /** Columns that describe the fixture rather than a price. */
@@ -514,14 +591,13 @@ function mergeOpens(rows, spRows) {
 
 /** Every odds row the surface has for one sport, tall and canonicalised. */
 export async function apiOddsForSport(sport, { live = false } = {}) {
-  const w = boardWindow();
   const pivot = await cachedDrain(`odds:${sport}:${live}`, () =>
-    drain('odds-api', live
-      ? { sport, live: 'true', include_stale: 'true', market: BOARD_MARKET, ...w }
+    drainBoard(live
+      ? { sport, live: 'true', include_stale: 'true', market: BOARD_MARKET }
       // Upcoming fixtures only exist on this drain with `flucs=true` — see
       // UNSETTLED. Without it the ticker has no price to show for anything
       // that has not already been played.
-      : { sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED, ...w }),
+      : { sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED }),
   );
   const rows = [];
   for (const r of pivot) {
@@ -590,7 +666,7 @@ async function liveRows(sport) {
     // it took the board from 11 live to 554. A price someone is actively
     // quoting is the only honest signal that a game is still running.
     return await cachedDrain(`live:${sport}`, () =>
-      drain('odds-api', { sport, live: 'true', market: BOARD_MARKET, ...boardWindow() }),
+      drainBoard({ sport, live: 'true', market: BOARD_MARKET }),
     );
   } catch {
     return [];
@@ -825,7 +901,8 @@ async function buildFixtures(sport, window) {
     // drains then failed — which `pricesFor` swallows, so the deployed ticker
     // simply showed no comparison prices at all and said nothing was wrong.
     cachedDrain(`odds:${sport}:false`, () =>
-      drain('odds-api', { sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED, ...window }),
+      drainWindow({ sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED },
+        { from: window.date_from, to: window.date_to }),
     ),
     // Enumeration needs the stale live rows too. A match that has just finished
     // has no active price left, and is not yet settled into `odds_sp` — so it
@@ -837,9 +914,8 @@ async function buildFixtures(sport, window) {
     // keys over one request is two drains. The pulse bar reads these rows for
     // the live heartbeat and must not pay for a second copy of them.
     cachedDrain(`odds:${sport}:true`, () =>
-      drain('odds-api', {
-        sport, live: 'true', include_stale: 'true', market: BOARD_MARKET, ...window,
-      }),
+      drainWindow({ sport, live: 'true', include_stale: 'true', market: BOARD_MARKET },
+        { from: window.date_from, to: window.date_to }),
     ).catch(() => []),
     liveRows(sport),
   ]);
