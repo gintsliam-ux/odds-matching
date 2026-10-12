@@ -732,6 +732,53 @@ export async function apiFixtureById(fixtureId, sports) {
   return hit ? fixtureFromPivot(hit.row, hit.sport, Date.now(), new Set()) : null;
 }
 
+/**
+ * TEMPORARY. Which `market` value actually enumerates a sport's upcoming half.
+ *
+ * The board derives its fixture list from one drain, so a fixture it does not
+ * return does not exist as far as the site is concerned. On the deployed board
+ * that silently removed EVERY upcoming soccer fixture -- 1,205 soccer rows, all
+ * of them already played -- while the same fixtures fetched by id came back with
+ * 333 and 851 price rows. This measures the enumeration directly rather than
+ * guessing a deploy at a time, and comes out once the right value is known.
+ */
+export async function probeMarket(sport, market, { limit = 4000 } = {}) {
+  const params = {
+    sport, include_stale: 'true', ...UNSETTLED, ...boardWindow(), limit: String(limit),
+  };
+  if (market) params.market = market;
+  const t0 = Date.now();
+  const body = await call('odds-api', { ...params, offset: '0' });
+  const rows = body.data ?? [];
+  const now = Date.now();
+  const fixtures = new Map();
+  for (const r of rows) {
+    const id = r.optic_fixture_id;
+    if (id && !fixtures.has(id)) fixtures.set(id, r);
+  }
+  const future = [...fixtures.values()].filter(
+    (r) => r.commence_time && new Date(r.commence_time).getTime() > now,
+  );
+  const sample = future.slice(0, 3).map((r) => ({
+    id: r.optic_fixture_id,
+    name: r.event_name ?? `${r.home_team} v ${r.away_team}`,
+    start: r.commence_time,
+    tournament: r.tournament,
+  }));
+  return {
+    sport,
+    market: market || '(none)',
+    ms: Date.now() - t0,
+    rows: rows.length,
+    hasMore: Boolean(body.has_more),
+    bytes: JSON.stringify(rows).length,
+    fixtures: fixtures.size,
+    upcoming: future.length,
+    tournaments: [...new Set(future.map((r) => r.tournament).filter(Boolean))].slice(0, 6),
+    sample,
+  };
+}
+
 export async function apiFixtures(sport) {
   return buildFixtures(sport, boardWindow());
 }

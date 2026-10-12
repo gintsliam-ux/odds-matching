@@ -14,7 +14,7 @@ import { coll, mirrorConfigured } from './mongo.mjs';
 import { betTicker } from './ticker.mjs';
 import { CAPABILITIES, DATA_SOURCE, isMongo } from './source.mjs';
 import { marketMovers } from './movers.mjs';
-import { apiHealth } from './sportApi.mjs';
+import { apiHealth, probeMarket } from './sportApi.mjs';
 import { betsForFixture } from './bets.mjs';
 import {
   addTabCompetition, clearTournamentMapping, saveTabMapping, saveTournamentMapping,
@@ -175,6 +175,18 @@ const ROUTES = {
   },
 
   'POST /api/h2h': (_url, body) => h2hPrices(body?.fixtureIds ?? []),
+
+  /*
+   * TEMPORARY diagnostic — which `market` value enumerates a sport's upcoming
+   * half. Read-only, changes nothing, and comes out once the board is fixed.
+   * One deploy, many probes: ?sport=soccer&market=h2h
+   */
+  'GET /api/_probe': async (url) => {
+    const sport = url.searchParams.get('sport') ?? 'soccer';
+    const market = url.searchParams.get('market') ?? '';
+    const limit = Number(url.searchParams.get('limit') ?? 4000);
+    return probeMarket(sport, market, { limit });
+  },
 
   'GET /api/pulse': () => cached('pulse', TTL.pulse, fetchPulse),
 
