@@ -1,5 +1,5 @@
 import { cached } from './cache.mjs';
-import { coll } from './mongo.mjs';
+import { coll, mirrorConfigured } from './mongo.mjs';
 import { fixtureMapping } from './fixtureMapping.mjs';
 import { FIXTURE_PROJECTION, SKIP_SPORTS, toEvents } from './events.mjs';
 import { isApi } from './source.mjs';
@@ -131,9 +131,38 @@ export async function allEvents() {
         const t = f.scheduled_start ? new Date(f.scheduled_start).getTime() : NaN;
         return !Number.isFinite(t) || t >= since;
       });
-    return toEvents(recent);
+    return toEvents([...recent, ...await scheduleOnly(recent)]);
   }
   return toEvents(await fixturesInWindow(new Date(Date.now() - WINDOW_MS)));
+}
+
+/**
+ * The fixtures that are ON but not PRICED, from the mirrored schedule.
+ *
+ * Everything the deployed board knows comes from an odds query, so a fixture
+ * nobody has quoted yet cannot be in it. That hid 766 upcoming games: 47 NHL,
+ * 58 NCAAF, 31 Premier League, 26 NBA. Wednesday's NHL slate was in the
+ * schedule with the right teams and times and had no odds row anywhere, so
+ * there was no odds query that could have returned it.
+ *
+ * These rows carry no prices and are not pretending to — the board renders a
+ * fixture with an empty price pair, which is the honest answer: the game is on,
+ * nobody is quoting it yet. A schedule we hold is strictly better than a gap.
+ *
+ * Additive and best-effort. The odds-derived row always wins where both exist,
+ * because only it carries live scores and the clock, and a mirror that is
+ * missing or mid-sync leaves the board exactly as it was.
+ */
+async function scheduleOnly(have) {
+  if (!mirrorConfigured) return [];
+  try {
+    const seen = new Set(have.map((f) => f.fixture_id));
+    const rows = await fixturesInWindow(new Date(Date.now() - WINDOW_MS));
+    return rows.filter((f) => f.fixture_id && !seen.has(f.fixture_id) && !SKIP_SPORTS.has(f.sport));
+  } catch {
+    // The mirror is a bonus here, never a dependency.
+    return [];
+  }
 }
 
 /**

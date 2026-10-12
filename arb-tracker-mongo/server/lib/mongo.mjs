@@ -38,6 +38,9 @@ export const mirrorConfigured = Boolean(MIRROR_URI);
 const MIRRORED = new Set([
   'entities', 'eventMapping', 'competitionMapping', 'leagues', 'leagueSquads', 'mappingPending',
   'leagueHealth', 'competitionCandidates', 'tabCompetitions',
+  // The schedule, windowed. The deployed board unions it over the odds-derived
+  // fixture list so a game nobody has priced yet still appears -- see allEvents.
+  'fixtures',
 ]);
 
 const client = URI

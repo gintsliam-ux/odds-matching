@@ -64,6 +64,21 @@ const PLAN = [
    * so `replace` rather than a watermark.
    */
   { name: 'tab_competitions', mode: 'replace' },
+  /*
+   * The schedule itself, so the deployed board stops being a list of what is
+   * priced and becomes a list of what is on.
+   *
+   * While the board enumerated fixtures from an odds market, a game nobody had
+   * priced yet could not appear: 766 upcoming fixtures were invisible, among
+   * them 47 NHL games, 58 NCAAF, 31 Premier League and 26 NBA. Wednesday's NHL
+   * slate existed here with correct teams and times and had no odds row
+   * anywhere, so there was nothing for an odds query to return.
+   *
+   * Windowed, because `fixtures` is 167k rows and the board wants ten days of
+   * them. Pruned on both edges: rows that drift out of the window are deleted
+   * from the mirror, which a watermark would never do.
+   */
+  { name: 'fixtures', mode: 'window', field: 'scheduled_start', backDays: 3, fwdDays: 10 },
 ];
 
 /** How far either side of now the health check looks. */
@@ -102,6 +117,13 @@ try {
     const total = await from.countDocuments();
 
     let filter = {};
+    let lo = null;
+    let hi = null;
+    if (spec.mode === 'window') {
+      lo = new Date(Date.now() - spec.backDays * 86_400_000);
+      hi = new Date(Date.now() + spec.fwdDays * 86_400_000);
+      filter = { [spec.field]: { $gte: lo, $lte: hi } };
+    }
     if (spec.mode === 'watermark' && !FULL) {
       const newest = await to.find({}, { projection: { [spec.field]: 1 } })
         .sort({ [spec.field]: -1 }).limit(1).next();
@@ -139,6 +161,29 @@ try {
     await flush();
 
     let removed = 0;
+    if (spec.mode === 'window') {
+      // Both edges. A fixture that has aged out of the window is as stale as
+      // one that was deleted, and leaving it behind would grow the mirror
+      // without bound and put finished games back on the board.
+      const out = await to.deleteMany({
+        $or: [
+          { [spec.field]: { $lt: lo } },
+          { [spec.field]: { $gt: hi } },
+          { [spec.field]: null },
+        ],
+      });
+      removed += out.deletedCount ?? 0;
+      const keep = new Set(
+        (await from.find(filter, { projection: { _id: 1 } }).toArray()).map((d) => String(d._id)),
+      );
+      const stale = (await to.find(filter, { projection: { _id: 1 } }).toArray())
+        .filter((d) => !keep.has(String(d._id)))
+        .map((d) => d._id);
+      for (let i = 0; i < stale.length; i += CHUNK) {
+        const r = await to.deleteMany({ _id: { $in: stale.slice(i, i + CHUNK) } });
+        removed += r.deletedCount ?? 0;
+      }
+    }
     if (spec.mode === 'replace') {
       const keep = new Set((await from.find({}, { projection: { _id: 1 } }).toArray()).map((d) => String(d._id)));
       const stale = (await to.find({}, { projection: { _id: 1 } }).toArray())
@@ -592,6 +637,9 @@ async function ensureIndexes(D) {
     ['competition_mapping', { optic_league: 1 }, {}],
     ['competition_mapping', { provider: 1 }, {}],
     ['entities', { sport: 1, normalized: 1 }, {}],
+    // What fixturesInWindow sorts and filters on.
+    ['fixtures', { scheduled_start: 1 }, {}],
+    ['fixtures', { fixture_id: 1 }, {}],
   ];
   for (const [c, key, opts] of want) {
     try {
