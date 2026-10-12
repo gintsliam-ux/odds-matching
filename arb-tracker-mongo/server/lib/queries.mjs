@@ -397,13 +397,40 @@ export async function searchEvents(query) {
  * close stamps — come back null rather than absent, so the panel renders its
  * normal empty state for them instead of looking broken.
  */
+/**
+ * The raw fixture document from whichever Mongo this instance can reach.
+ *
+ * On the tailnet that is the NAS; deployed it is the mirror, which carries a
+ * rolling -3/+10 day window of `fixtures`. Null when neither has it, which is
+ * the honest answer for anything older than the mirrored window.
+ */
+async function mirrorFixtureDoc(fixtureId) {
+  if (!fixtureId || (isApi && !mirrorConfigured)) return null;
+  try {
+    return await (await coll('fixtures')).findOne({ fixture_id: fixtureId });
+  } catch {
+    return null;
+  }
+}
+
 async function apiEventDetails(fixtureId, sport) {
   if (!sport) return null;
-  const [fixtures, rows] = await Promise.all([
+  const [fixtures, rows, doc] = await Promise.all([
     apiFixtures(sport).catch(() => []),
     apiOddsForFixture(fixtureId, sport).catch(() => []),
+    /*
+     * The mirrored schedule row, which is strictly richer than anything this
+     * function can assemble from an odds pivot -- venue, season, broadcast,
+     * tier, round, the real created/updated stamps.
+     *
+     * It is also the only way this panel can describe a fixture nobody has
+     * priced. Keyed off the odds-derived list alone, a schedule-only fixture
+     * failed both tests below and the whole panel came back null, so opening
+     * Wednesday's NHL games showed no details at all.
+     */
+    mirrorFixtureDoc(fixtureId),
   ]);
-  const f = fixtures.find((x) => x.fixture_id === fixtureId);
+  const f = fixtures.find((x) => x.fixture_id === fixtureId) ?? doc;
   if (!f && rows.length === 0) return null;
 
   const mapping = await fixtureMapping(fixtureId, f?.optic_league).catch(() => null);
@@ -423,38 +450,42 @@ async function apiEventDetails(fixtureId, sport) {
 
   return {
     fixtureId,
-    venue: null,
-    location: null,
-    country: f?.category ?? null,
-    season: null,
-    seasonType: null,
-    tier: null,
-    broadcast: null,
+    venue: doc?.venue ?? null,
+    location: doc?.location ?? null,
+    country: doc?.country ?? f?.category ?? null,
+    season: doc?.season ?? null,
+    seasonType: doc?.season_type ?? null,
+    tier: doc?.tier ?? null,
+    broadcast: doc?.broadcast ?? null,
     status: f?.status ?? null,
-    opticStatus: null,
+    opticStatus: doc?.optic_status ?? null,
     isLive: !!f?.is_live,
     source: 'optic',
     category: f?.category ?? null,
     tournament: f?.tournament ?? null,
-    tournamentStage: null,
+    tournamentStage: doc?.tournament_stage ?? null,
     opticLeague: f?.optic_league ?? null,
-    opticLeagueId: null,
-    currentRound: null,
+    opticLeagueId: doc?.optic_league_id ?? null,
+    currentRound: doc?.current_round ?? null,
     hasOdds: rows.length > 0,
-    hasSp: false,
-    competitors: [
-      f?.home_team ? { name: f.home_team, side: 'home', id: null, country: null } : null,
-      f?.away_team ? { name: f.away_team, side: 'away', id: null, country: null } : null,
-    ].filter(Boolean),
+    hasSp: !!doc?.has_sp,
+    competitors: (doc?.competitors?.length
+      ? doc.competitors.map((c) => ({
+        name: c.name ?? null, side: c.side ?? null, id: c.id ?? null, country: c.country ?? null,
+      }))
+      : [
+        f?.home_team ? { name: f.home_team, side: 'home', id: null, country: null } : null,
+        f?.away_team ? { name: f.away_team, side: 'away', id: null, country: null } : null,
+      ].filter(Boolean)),
     times: {
-      scheduledStart: f?.scheduled_start ?? null,
-      actualStart: null,
-      endDate: null,
-      oddsOpenAt: firstSeen ? new Date(firstSeen).toISOString() : null,
-      oddsCloseAt: null,
-      settledAt: null,
-      createdAt: null,
-      updatedAt: null,
+      scheduledStart: iso(doc?.scheduled_start) ?? f?.scheduled_start ?? null,
+      actualStart: iso(doc?.actual_start) ?? f?.actual_start ?? null,
+      endDate: iso(doc?.end_date),
+      oddsOpenAt: iso(doc?.odds_open_at) ?? (firstSeen ? new Date(firstSeen).toISOString() : null),
+      oddsCloseAt: iso(doc?.odds_close_at),
+      settledAt: iso(doc?.settled_at),
+      createdAt: iso(doc?.created_at),
+      updatedAt: iso(doc?.updated_at),
     },
     mapping,
     coverage: {
