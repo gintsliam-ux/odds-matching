@@ -182,7 +182,11 @@ try {
  * server/lib/mapping.mjs. The queued intent carries whatever JSON carried, so
  * an ObjectId arrives as its hex string and needs casting back.
  */
-const tabIdCandidates = (v) => {
+/* A declaration, not a const: drainPendingWrites is hoisted and runs from
+   main() before this point in the file is reached, so a const left it in the
+   temporal dead zone and every TAB intent failed with "Cannot access
+   'tabIdCandidates' before initialization" -- queued, never applied. */
+function tabIdCandidates(v) {
   if (typeof v === 'number') return [v];
   const str = String(v ?? '').trim();
   if (!str) return [];
@@ -192,7 +196,7 @@ const tabIdCandidates = (v) => {
     try { out.push(new ObjectId(str)); } catch { /* not an ObjectId after all */ }
   }
   return out;
-};
+}
 
 async function drainPendingWrites(S, D) {
   const queue = D.collection('mapping_pending');
