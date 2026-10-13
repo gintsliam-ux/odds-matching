@@ -544,6 +544,26 @@ async function classifyLeadSegments(bets) {
 }
 
 /**
+ * How far a market-specific mybet event may sit from its own match event.
+ *
+ * mybet mints a separate event per side market -- "First Set Winner - Alex De
+ * Minaur vs Karen Khachanov" is its own id, with no teams and no league, only a
+ * description -- so a bet on one has nothing the hourly matcher can map and
+ * must be resolved through the base match event instead.
+ *
+ * That pairing used to require the two to suspend at the SAME instant, and
+ * mostly they do: for this match the base and five of its six satellites all
+ * sat at 04:05. "First Set Winner" sat at 04:10. Five minutes was enough for the
+ * slot lookup to find no sibling carrying a league, give up, and leave the bet
+ * with no fixture and therefore no prices -- while the identical bet on "Set
+ * Betting" resolved fine.
+ *
+ * Twenty minutes covers that drift. It is only safe because the player names
+ * are then checked against the candidate fixture; see the loop below.
+ */
+const SATELLITE_SLOT_SKEW_MS = 20 * 60_000;
+
+/**
  * mybet mints a SEPARATE event id for every market on a match, and only the
  * base one carries a competition:
  *
@@ -584,20 +604,28 @@ async function resolveSatelliteEvents(bets, byEventId) {
 
   const siblings = await db
     .collection('mybet_events')
-    .find({ $or: slots.map((e) => ({ sport: e.sport, suspendAt: e.suspendAt })) })
+    .find({
+      $or: slots.map((e) => {
+        const at = new Date(e.suspendAt).getTime();
+        return {
+          sport: e.sport,
+          suspendAt: {
+            $gte: new Date(at - SATELLITE_SLOT_SKEW_MS),
+            $lte: new Date(at + SATELLITE_SLOT_SKEW_MS),
+          },
+        };
+      }),
+    })
     .project({ league: 1, sport: 1, suspendAt: 1 })
     .toArray();
 
   const real = (l) => l && String(l).trim() !== '-' && String(l).trim() !== '';
-  const basesBySlot = new Map();
-  for (const e of siblings) {
-    if (!real(e.league)) continue;
-    const k = `${e.sport}|${e.suspendAt}`;
-    basesBySlot.set(k, [...(basesBySlot.get(k) ?? []), String(e._id)]);
-  }
-  if (!basesBySlot.size) return;
+  const bases = siblings
+    .filter((e) => real(e.league) && e.suspendAt)
+    .map((e) => ({ id: String(e._id), sport: e.sport, at: new Date(e.suspendAt).getTime() }));
+  if (!bases.length) return;
 
-  const baseIds = [...new Set([...basesBySlot.values()].flat())];
+  const baseIds = [...new Set(bases.map((e) => e.id))];
   const maps = await (await coll('eventMapping'))
     .find({ gutsy_event_id: { $in: baseIds } })
     .project({ _id: 0, gutsy_event_id: 1, optic_fixture_id: 1, confidence: 1 })
@@ -631,25 +659,34 @@ async function resolveSatelliteEvents(bets, byEventId) {
   for (const b of orphans) {
     const own = slotOf.get(Number(b.eventId));
     if (!own) continue;
-    const cands = (basesBySlot.get(`${own.sport}|${own.suspendAt}`) ?? [])
-      .map((id) => mapOf.get(id))
+    const ownAt = own.suspendAt ? new Date(own.suspendAt).getTime() : NaN;
+    if (!Number.isFinite(ownAt)) continue;
+    const cands = bases
+      .filter((e) => e.sport === own.sport && Math.abs(e.at - ownAt) <= SATELLITE_SLOT_SKEW_MS)
+      // Nearest in time first, so the closest base wins among equally-named ones.
+      .sort((x, y) => Math.abs(x.at - ownAt) - Math.abs(y.at - ownAt))
+      .map((e) => mapOf.get(e.id))
       .filter(Boolean);
     if (!cands.length) continue;
 
-    let pick = cands[0];
-    if (cands.length > 1) {
-      // Several matches suspend at this minute: the teams decide.
-      const want = new Set(key(b.event).split(' ').filter((t) => t.length > 2));
-      pick = cands.find((m) => {
-        const f = teams.get(m.optic_fixture_id);
-        if (!f) return false;
-        const got = key(`${f.home_team ?? ''} ${f.away_team ?? ''} ${f.event_name ?? ''}`);
-        let hit = 0;
-        for (const t of want) if (got.includes(t)) hit++;
-        return want.size && hit / want.size >= 0.6;
-      });
-      if (!pick) continue;
-    }
+    /*
+     * The players must agree, even when there is only one candidate.
+     *
+     * Under an exact slot the time WAS the evidence, so a lone candidate could
+     * be taken on trust. A window is not evidence — twenty minutes of a tennis
+     * day holds a dozen matches — so the name check is no longer the
+     * tie-breaker it was, it is the whole test.
+     */
+    const want = new Set(key(b.event).split(' ').filter((t) => t.length > 2));
+    const pick = cands.find((m) => {
+      const f = teams.get(m.optic_fixture_id);
+      if (!f) return false;
+      const got = key(`${f.home_team ?? ''} ${f.away_team ?? ''} ${f.event_name ?? ''}`);
+      let hit = 0;
+      for (const t of want) if (got.includes(t)) hit++;
+      return want.size && hit / want.size >= 0.6;
+    });
+    if (!pick) continue;
     byEventId.set(String(b.eventId), pick);
   }
 }
