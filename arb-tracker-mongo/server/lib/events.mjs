@@ -75,7 +75,7 @@ export function isWomensCompetition(fixture) {
  * "Wisla Krakow" and "KS Ruch Chorzow" both read as already-qualified.
  */
 const SAYS_WOMENS =
-  /\b(womens?|women's|ladies|lady|wfc|w\.f\.c\.?|f[eé]minin(?:es?)?|f[ee]menin[oa]|feminin[oa]|frauen|damen|dames)\b/i;
+  /\b(womens?|women's|ladies|lady|wfc|w\.f\.c\.?|f[eé]minin(?:es?)?|f[eé]minas?|f[ee]menin[oa]|feminin[oa]|frauen|damen|dames)\b/i;
 
 /**
  * Name a women's side so it cannot be read as the men's one.
@@ -85,8 +85,20 @@ const SAYS_WOMENS =
  * crest per country, so the fixture rendered with the men's name AND the men's
  * badge. The only thing marking it was the competition line underneath.
  */
+/**
+ * A PARENTHESISED W, which is a different proposition from a bare one.
+ *
+ * TAB writes its women's sides as "Australia (W)" and "Samoa (W)", so the
+ * qualifier below was appending to a name that already carried one and the
+ * board read "Australia (W) Women vs Samoa (W) Women".
+ *
+ * The bare-W trap above does not apply: the parentheses are the signal, and no
+ * club ends in a bracketed letter. "Wisla Krakow" is untouched by this.
+ */
+const BRACKETED_W = /\(\s*w\s*\)/i;
+
 const qualifyWomens = (name) =>
-  !name || SAYS_WOMENS.test(name) ? name : `${name} Women`;
+  !name || SAYS_WOMENS.test(name) || BRACKETED_W.test(name) ? name : `${name} Women`;
 
 function localLeagueLogo(sport, cat, name) {
   const k = normEntity(name);
