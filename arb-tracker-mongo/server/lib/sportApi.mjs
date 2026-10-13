@@ -241,11 +241,44 @@ async function callRaw(route, params) {
 const PIVOT_TTL_MS = 60_000;
 const pivotCache = new Map();
 
+/**
+ * Beyond this a stale pivot is no longer worth standing behind, and a caller
+ * waits for a fresh one rather than being told something this old.
+ */
+const PIVOT_STALE_MAX_MS = 3 * PIVOT_TTL_MS;
+/*
+ * It bounds how long a stale pivot is served WITHOUT a wait, not how old the
+ * data can get. While drains keep failing the last good value is still handed
+ * out past this, because a stale sport beats a vanished one — see beginDrain.
+ */
+
+/**
+ * Single-flight drain cache, now stale-while-revalidate — which `cached` in
+ * cache.mjs has done all along and this did not.
+ *
+ * On expiry this used to AWAIT a fresh drain, and that is what made the ticker
+ * slow in a way no phase timing explained. Its response cache and this one both
+ * last 60s, so almost every ticker rebuild found the pivots just expired and
+ * paid full upstream freight for them: `oddsPerSport` was measured at 840ms,
+ * 6.2s and 19.3s on three consecutive rebuilds, entirely according to whether
+ * it had to re-drain.
+ *
+ * A caller is now handed the stale pivot and the refresh runs behind it, so a
+ * rebuild never blocks on the network. That includes callers that arrive DURING
+ * a refresh: the stale check deliberately comes before the in-flight check,
+ * because joining the refresh is the very wait this exists to avoid.
+ */
 function cachedDrain(key, produce) {
   const hit = pivotCache.get(key);
-  if (hit && Date.now() - hit.at < PIVOT_TTL_MS) return hit.value;
-  if (hit?.inflight) return hit.inflight;
+  const age = hit ? Date.now() - hit.at : Infinity;
+  if (hit?.value && age < PIVOT_TTL_MS) return hit.value;
 
+  const refresh = hit?.inflight ?? beginDrain(key, produce, hit);
+  if (hit?.value && age < PIVOT_STALE_MAX_MS) return hit.value;
+  return refresh;
+}
+
+function beginDrain(key, produce, hit) {
   const inflight = produce()
     .then((value) => {
       pivotCache.set(key, { value: Promise.resolve(value), at: Date.now() });
@@ -260,8 +293,11 @@ function cachedDrain(key, produce) {
        * instance. Consecutive polls returned 1,461 events, then 15, then
        * 1,222 — whole sports coming and going in the rail.
        *
-       * The original `at` is kept so the entry stays stale and the next caller
-       * tries again rather than settling for it.
+       * The original `at` is kept, so the value stays stale: it is served
+       * straight away while inside PIVOT_STALE_MAX_MS, and past that a caller
+       * waits on a fresh attempt instead of being handed it immediately. Note
+       * that if the attempt ALSO fails they still receive this value rather
+       * than an error — however old it is, that is the lesson above.
        */
       if (hit?.value) {
         pivotCache.set(key, { value: hit.value, at: hit.at });
@@ -270,9 +306,10 @@ function cachedDrain(key, produce) {
       pivotCache.delete(key);
       throw err;
     });
-  // A caller that never awaits this — a warm-up tick, a request that gave up —
-  // must not turn a failed fetch into an unhandled rejection and take the
-  // process with it. The error still reaches whoever did await.
+  // A caller that never awaits this — a warm-up tick, a request served the
+  // stale copy instead — must not turn a failed fetch into an unhandled
+  // rejection and take the process with it. The error still reaches whoever
+  // did await.
   inflight.catch(() => {});
   pivotCache.set(key, { ...hit, inflight });
   return inflight;
