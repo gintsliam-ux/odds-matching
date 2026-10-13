@@ -203,6 +203,7 @@ try {
     );
   }
 
+  await syncTabOdds(S, D);
   await syncLeagueSquads(S, D);
 
   if (!DRY) await ensureIndexes(dst.db(DST_DB));
@@ -630,6 +631,71 @@ async function buildCompetitionCandidates(D) {
 }
 
 /** The mirror is read exactly like the original, so it needs the same lookups. */
+/**
+ * TAB's own odds for TAB-sourced fixtures.
+ *
+ * The TAB scraper writes fixtures OPTIC does not carry — the whole Rugby League
+ * World Cup, nine games, `TAB`-prefixed ids — and TAB is the only book on them.
+ * So the odds surface has nothing for these and a deployed instance, which
+ * cannot read `odds`, had no way to price them at all.
+ *
+ * Copied into `tab_odds` rather than `odds`, because mirroring a slice of a
+ * collection under its real name would make every coll('odds') on a deployed
+ * instance quietly answer from a few hundred rows.
+ *
+ * Scoped to the fixtures the mirror already holds, so it cannot outlive them,
+ * and pruned whole: it is small enough that working out what changed costs more
+ * than recopying it.
+ */
+async function syncTabOdds(S, D) {
+  const t0 = Date.now();
+  const lo = new Date(Date.now() - 3 * 86_400_000);
+  const hi = new Date(Date.now() + 10 * 86_400_000);
+  const fixtures = await S.collection('fixtures')
+    .find({ source: 'tab', scheduled_start: { $gte: lo, $lte: hi } }, { projection: { _id: 0, fixture_id: 1 } })
+    .toArray();
+  const ids = fixtures.map((f) => f.fixture_id).filter(Boolean);
+
+  const from = S.collection('odds');
+  const to = D.collection('tab_odds');
+  const n = ids.length ? await from.countDocuments({ fixture_id: { $in: ids } }) : 0;
+  if (DRY) {
+    console.log(`  tab_odds              ${String(ids.length).padStart(7)} tab fixtures, ${String(n).padStart(7)} odds rows to copy`);
+    return;
+  }
+
+  let copied = 0;
+  if (ids.length) {
+    const cursor = from.find({ fixture_id: { $in: ids } });
+    let batch = [];
+    const flush = async () => {
+      if (!batch.length) return;
+      await to.bulkWrite(
+        batch.map((doc) => ({ replaceOne: { filter: { _id: doc._id }, replacement: doc, upsert: true } })),
+        { ordered: false },
+      );
+      copied += batch.length;
+      batch = [];
+    };
+    for await (const doc of cursor) {
+      batch.push(doc);
+      if (batch.length >= CHUNK) await flush();
+    }
+    await flush();
+  }
+
+  // Anything for a fixture no longer in scope, including every row if TAB has
+  // stopped writing fixtures altogether.
+  const stale = await to.deleteMany(
+    ids.length ? { fixture_id: { $nin: ids } } : {},
+  );
+  console.log(
+    `  tab_odds              copied ${String(copied).padStart(7)}` +
+    (stale.deletedCount ? `  pruned ${stale.deletedCount}` : '') +
+    `   ${ids.length} fixtures   ${((Date.now() - t0) / 1000).toFixed(1)}s`,
+  );
+}
+
 async function ensureIndexes(D) {
   const want = [
     ['event_mapping', { optic_fixture_id: 1 }, {}],
@@ -640,6 +706,7 @@ async function ensureIndexes(D) {
     // What fixturesInWindow sorts and filters on.
     ['fixtures', { scheduled_start: 1 }, {}],
     ['fixtures', { fixture_id: 1 }, {}],
+    ['tab_odds', { fixture_id: 1 }, {}],
   ];
   for (const [c, key, opts] of want) {
     try {

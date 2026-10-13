@@ -41,6 +41,7 @@ const MIRRORED = new Set([
   // The schedule, windowed. The deployed board unions it over the odds-derived
   // fixture list so a game nobody has priced yet still appears -- see allEvents.
   'fixtures',
+  'tabOdds',
 ]);
 
 const client = URI
@@ -110,6 +111,13 @@ export const COLLECTIONS = {
   eventMapping: 'event_mapping',
   competitionMapping: 'competition_mapping',
   tabCompetitions: 'tab_competitions',
+  /*
+   * TAB's own odds for TAB-sourced fixtures, mirrored so a deployed instance
+   * can price them. Deliberately NOT `odds`: mirroring a slice of a collection
+   * under its real name would make every coll('odds') on a deployed instance
+   * silently answer from a 400-row subset.
+   */
+  tabOdds: 'tab_odds',
   blendConfig: 'blend_config',
 };
 

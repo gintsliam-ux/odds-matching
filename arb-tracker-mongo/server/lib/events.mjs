@@ -230,6 +230,9 @@ export const FIXTURE_PROJECTION = {
   current_round: 1, scores: 1, in_play_data: 1,
   // Read by keepPriceable(); not part of the SportEvent the client sees.
   has_odds: 1,
+  // Which scraper wrote the fixture. Read by scheduleOnly: a TAB-sourced
+  // fixture is priced by definition, whoever else has heard of it.
+  source: 1,
 };
 
 /* --------------------------------------------------------------- lookups */

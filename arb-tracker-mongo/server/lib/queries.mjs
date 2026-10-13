@@ -261,7 +261,22 @@ async function scheduleOnly(have) {
       (f) => f.fixture_id && !seen.has(f.fixture_id) && !SKIP_SPORTS.has(f.sport),
     );
     const linked = await bookableIds(candidates.map((f) => f.fixture_id));
-    return candidates.filter((f) => linked.has(f.fixture_id)).map(expireStaleLive);
+    /*
+     * A TAB-sourced fixture skips the gate, because the gate's premise does not
+     * hold for it: it exists BECAUSE TAB priced it. The `TAB`-prefixed ids come
+     * from the TAB scraper rather than OPTIC, so the event matcher — which
+     * works off OPTIC fixtures — has never seen them and never will, and all
+     * nine of them had zero event_mapping rows.
+     *
+     * Which is how the whole Rugby League World Cup came to be invisible: TAB
+     * has moneyline, spread, total and 1h_spread on every game, OPTIC carries
+     * no rugby league at all, and the one store that had the prices was the one
+     * a deployed instance cannot read. They looked unpriced from here and were
+     * dropped as noise.
+     */
+    return candidates
+      .filter((f) => linked.has(f.fixture_id) || f.source === 'tab')
+      .map(expireStaleLive);
   } catch {
     // The mirror is a bonus here, never a dependency.
     return [];
@@ -726,9 +741,40 @@ function foldBookAliases(rows, aliases) {
  * sports it shouldn't and its rows lack `outcome_no`), so they're filtered at
  * the source. Rides the `{fixture_id, is_live, status}` index.
  */
+/**
+ * TAB's own prices for a TAB-sourced fixture, from the mirror.
+ *
+ * These fixtures exist only because the TAB scraper wrote them — OPTIC carries
+ * no rugby league at all — so the odds surface has nothing for them and the
+ * prices live in `odds`, which a deployed instance cannot reach. A small
+ * mirrored slice closes that: ~400 rows for the nine World Cup games.
+ *
+ * Empty for every OPTIC fixture, because only TAB-sourced fixtures' rows are
+ * copied. So this cannot shadow or double up a price the surface already
+ * serves, including TAB's own price on an OPTIC fixture.
+ */
+async function tabOddsFor(fixtureId) {
+  if (!mirrorConfigured || !fixtureId) return [];
+  try {
+    return await (await coll('tabOdds'))
+      .find({ fixture_id: fixtureId, is_live: false })
+      .project(ODDS_PROJECTION)
+      .sort({ id: 1 })
+      .toArray();
+  } catch {
+    return [];
+  }
+}
+
 export async function oddsForFixture(fixtureId, sport) {
   if (!fixtureId) return [];
-  if (isApi) return apiOddsForFixture(fixtureId, sport);
+  if (isApi) {
+    // Checked first and returned whole: a fixture with mirrored TAB odds has
+    // nothing on the surface to merge with.
+    const tab = await tabOddsFor(fixtureId);
+    if (tab.length) return foldBookAliases(tab.map(serializeOdds), await bookAliases());
+    return apiOddsForFixture(fixtureId, sport);
+  }
   const [rows, aliases] = await Promise.all([
     (await coll('odds'))
       .find({ fixture_id: fixtureId, is_live: false })
@@ -752,7 +798,22 @@ export async function h2hPrices(fixtureIds) {
     const wanted = new Set(ids);
     const sports = (await apiSports()).filter((s) => !SKIP_SPORTS.has(s));
     const perSport = await Promise.all(sports.map((s) => apiOddsForSport(s).catch(() => [])));
-    for (const r of perSport.flat()) {
+    /*
+     * TAB-sourced fixtures are not on any per-sport pivot — the surface has
+     * never heard of them — so their moneyline comes from the mirror or the
+     * board shows them with empty price columns.
+     */
+    const tabRows = mirrorConfigured
+      ? await (await coll('tabOdds'))
+        .find({ fixture_id: { $in: ids }, market_id: 'moneyline', is_lay: false, is_live: false })
+        .project({
+          _id: 0, fixture_id: 1, outcome_no: 1, current_price: 1, open_price: 1,
+          market_id: 1, is_lay: 1,
+        })
+        .toArray()
+        .catch(() => [])
+      : [];
+    for (const r of [...perSport.flat(), ...tabRows]) {
       if (r.market_id !== 'moneyline' || r.is_lay || !wanted.has(r.fixture_id)) continue;
       const price = r.current_price ?? r.open_price;
       if (price == null) continue;
