@@ -15,6 +15,8 @@
  * degrades rather than breaks — see `toOddsRows`.
  */
 
+import { cached } from './cache.mjs';
+
 const DEFAULT_BASE = 'https://sport.gutsysapi.com';
 
 export const sportApiConfigured = Boolean(process.env.SPORT_API_KEY);
@@ -863,6 +865,54 @@ export async function apiFixtureById(fixtureId, sports) {
   const hit = hits.find(Boolean);
   return hit ? fixtureFromPivot(hit.row, hit.sport, Date.now(), new Set()) : null;
 }
+
+/**
+ * Fixture metadata only, for callers that never ask whether a game is live.
+ *
+ * The ticker reads exactly seven fields off a fixture -- sport, category,
+ * tournament, home_team, away_team, event_name, scheduled_start -- and not one
+ * of them is live state. It was paying for all three of buildFixtures' drains
+ * anyway, and on a cold build those were 4.7s of the ticker's 9.2s.
+ *
+ * Two of the three are kept because they decide WHICH fixtures exist, and both
+ * share their cached result with the board (`odds:<sport>:false` and
+ * `odds:<sport>:true`), so they are usually paid for already. The third,
+ * liveRows, is dropped: it exists solely to work out which fixtures are in play,
+ * its `live:<sport>` key is shared with nothing, and a third of the ticker's
+ * upstream work went on an answer it discards.
+ *
+ * Deliberately NOT a thinner request. Dropping the live pivot too would lose the
+ * fixtures that exist only there -- a game between the final whistle and
+ * settlement has no active closing price -- and those are exactly the
+ * just-finished games a bet feed is full of.
+ */
+export function apiFixtureIndex(sport) {
+  // Short-lived, because the explode-and-map pass over every sport's pivot is
+  // CPU the ticker was repeating on each build even when the drains were warm.
+  return cached(`fxindex:${sport}`, PIVOT_TTL_MS, async () => {
+    const w = boardWindow();
+    const [closing, liveAll] = await Promise.all([
+      cachedDrain(`odds:${sport}:false`, () =>
+        drainWindow({ sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED },
+          { from: w.date_from, to: w.date_to }),
+      ),
+      cachedDrain(`odds:${sport}:true`, () =>
+        drainWindow({ sport, live: 'true', include_stale: 'true', market: BOARD_MARKET },
+          { from: w.date_from, to: w.date_to }),
+      ).catch(() => []),
+    ]);
+    const now = Date.now();
+    const byId = new Map();
+    for (const r of [...liveAll, ...closing]) {
+      if (!r.optic_fixture_id || byId.has(r.optic_fixture_id)) continue;
+      // No live set: this index makes no claim about what is in play.
+      byId.set(r.optic_fixture_id, fixtureFromPivot(r, sport, now, NO_LIVE));
+    }
+    return [...byId.values()];
+  });
+}
+
+const NO_LIVE = new Set();
 
 export async function apiFixtures(sport) {
   return buildFixtures(sport, boardWindow());

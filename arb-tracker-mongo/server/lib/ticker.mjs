@@ -1,5 +1,5 @@
 import { coll, mongoConfigured } from './mongo.mjs';
-import { apiFixtures, apiOddsForFixture, apiOddsForSport } from './sportApi.mjs';
+import { apiFixtureIndex, apiOddsForFixture, apiOddsForSport } from './sportApi.mjs';
 import { betsConfigured, betsDb } from './betsMongo.mjs';
 import { betInstant, COUNTER_ENTRY, VOID_BET } from './bets.mjs';
 
@@ -391,13 +391,13 @@ async function fixturesFor(bets, timings) {
    * Which sports to drain depends only on the bets, which are already in hand,
    * while the mapping query and the satellite pass are a couple of seconds of
    * Mongo that used to run entirely before the first fixture byte was asked
-   * for. apiFixtures is single-flight cached, so this is also the only call
+   * for. apiFixtureIndex is single-flight cached, so this is also the only call
    * made: the satellite pass and the filter below both join this promise
    * instead of queueing behind each other.
    */
   const drains = mongoConfigured
     ? null
-    : apiSportsIn(bets).map((sport) => [sport, apiFixtures(sport).catch(() => [])]);
+    : apiSportsIn(bets).map((sport) => [sport, apiFixtureIndex(sport).catch(() => [])]);
 
   const maps = await timed(timings, 'mapping', async () => (await coll('eventMapping'))
     .find({ gutsy_event_id: { $in: ids } })
@@ -611,7 +611,7 @@ async function resolveSatelliteEvents(bets, byEventId) {
   } else {
     await Promise.all(
       apiSportsIn(orphans).map(async (sport) => {
-        for (const f of await apiFixtures(sport).catch(() => [])) {
+        for (const f of await apiFixtureIndex(sport).catch(() => [])) {
           if (candidateFixtures.has(f.fixture_id)) teams.set(f.fixture_id, f);
         }
       }),
@@ -686,7 +686,7 @@ async function resolveByNameAndStart(bets, byEventId, fixtures) {
       .catch(() => []);
   } else {
     const perSport = await Promise.all(
-      apiSportsIn(orphans).map((sport) => apiFixtures(sport).catch(() => [])),
+      apiSportsIn(orphans).map((sport) => apiFixtureIndex(sport).catch(() => [])),
     );
     candidates = perSport.flat().filter((f) => {
       const t = new Date(f.scheduled_start).getTime();
@@ -1170,10 +1170,16 @@ export async function betTicker() {
     .sort((a, b) => String(b.placedAt).localeCompare(String(a.placedAt)))
     .slice(0, LIMIT);
 
-  await timed(timings, 'segments', () => classifyLeadSegments(bets).catch(() => {}));
-  const { bets: enriched, pricesError } = await timed(timings, 'enrich', () =>
-    enrich(bets, timings),
-  );
+  /*
+   * The segment pass touches only the bets, so it has no reason to hold up
+   * enrichment -- it ran first purely because it was written first, and that
+   * put its quarter-second on the critical path of every cold build.
+   */
+  const segments = timed(timings, 'segments', () => classifyLeadSegments(bets).catch(() => {}));
+  const [{ bets: enriched, pricesError }] = await Promise.all([
+    timed(timings, 'enrich', () => enrich(bets, timings)),
+    segments,
+  ]);
   return {
     configured: true,
     source: mongoConfigured ? 'mongo' : 'odds-surface',
