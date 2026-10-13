@@ -44,7 +44,9 @@ const startLabel = (v: string | null) => {
 const fmt = (n: number | null | undefined) => (n != null ? n.toFixed(2) : '–');
 
 /** Matches the server's own cap, so the table holds what the feed holds. */
-const LIMIT = 150;
+/** Must match LIMIT in server/lib/ticker.mjs, or a pushed bet trims the
+ *  fetched feed back down to this. */
+const LIMIT = 200;
 
 /**
  * How long ago, short enough to sit in a header.
@@ -156,11 +158,28 @@ function TagChip({ tags }: { tags: string[] }) {
   );
 }
 
+/**
+ * Stake thresholds for the filter.
+ *
+ * Taken from the real spread over a 3-day window rather than round numbers for
+ * their own sake: median stake $71, p75 $240, p90 $676, p99 $6,148. So $100 is
+ * roughly the halfway mark, $500 is the top sixth and $1,000 the top twelfth.
+ *
+ * Filtered HERE and not in the query, which is the one design choice in this.
+ * Bets also arrive on a change stream, and a server-side filter would govern
+ * the fetched batch while every pushed bet walked straight past it. Doing it on
+ * the client covers both paths with one rule, needs no second cache key per
+ * threshold, and costs nothing on 200 rows. It only works because the stakes
+ * are not long-tailed: at $1,000 there are still ~16 rows of 200 to look at.
+ */
+const STAKES = [0, 100, 500, 1000];
+
 export default function TickerPage() {
   const [bets, setBets] = useState<TickerBet[]>([]);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [brand, setBrand] = useState<'all' | 'swiftbet' | 'mybet' | 'multis'>('all');
   const [sport, setSport] = useState<string>('all');
+  const [minStake, setMinStake] = useState(0);
   const [live, setLive] = useState(false);
   // Ids that arrived on the stream in the last few seconds. The table is
   // newest-first already, so without this a bet landing at the top is
@@ -262,9 +281,14 @@ export default function TickerPage() {
   const shown = useMemo(
     () =>
       bets.filter(
-        (b) => (brand === 'all' || b.brand === brand) && (sport === 'all' || b.sport === sport),
+        (b) =>
+          (brand === 'all' || b.brand === brand) &&
+          (sport === 'all' || b.sport === sport) &&
+          // A missing stake is not a small stake — it fails the filter rather
+          // than being counted as zero and silently dropped at every threshold.
+          (minStake === 0 || (typeof b.stake === 'number' && b.stake >= minStake)),
       ),
-    [bets, brand, sport],
+    [bets, brand, sport, minStake],
   );
 
   const columns = useMemo(() => bookColumns(bets), [bets]);
@@ -278,6 +302,17 @@ export default function TickerPage() {
     for (const b of bets) c[b.brand] = (c[b.brand] ?? 0) + 1;
     return c;
   }, [bets]);
+
+  // What each threshold would leave, under the brand and sport filters already
+  // on — a chip that promises 16 rows and delivers 2 is worse than no count.
+  const stakeCounts = useMemo(() => {
+    const base = bets.filter(
+      (b) => (brand === 'all' || b.brand === brand) && (sport === 'all' || b.sport === sport),
+    );
+    return STAKES.map(
+      (t) => base.filter((b) => t === 0 || (typeof b.stake === 'number' && b.stake >= t)).length,
+    );
+  }, [bets, brand, sport]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface">
@@ -368,6 +403,25 @@ export default function TickerPage() {
             >
               {s}
               <span className="ml-1.5 tabular-nums opacity-60">{n}</span>
+            </button>
+          ))}
+          <span className="mx-1 h-4 w-px bg-surface-border" />
+          <span className="text-[11px] text-slate-600" title="Stake on the bet, before any bonus">
+            stake ≥
+          </span>
+          {STAKES.map((t, i) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setMinStake(t)}
+              className={`rounded-md px-2.5 py-1 text-[11px] font-medium tabular-nums transition ${
+                minStake === t
+                  ? 'bg-emerald-500/15 text-emerald-300'
+                  : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+              }`}
+            >
+              {t === 0 ? 'Any' : money(t)}
+              <span className="ml-1.5 tabular-nums opacity-60">{stakeCounts[i]}</span>
             </button>
           ))}
         </div>

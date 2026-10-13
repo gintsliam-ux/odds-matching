@@ -145,7 +145,17 @@ const timed = async (into, name, fn) => {
 };
 
 /** How many bets the feed carries. The table is a glance, not an export. */
-const LIMIT = 150;
+/*
+ * Raised from 150. Even one hour of trade overflows it: the 3-day window holds
+ * 2,275 qualifying sport singles (1,478 swiftbet, 797 multis+mybet), so the cap
+ * is what decides how far back the feed reaches — 150 covered about 9 hours.
+ *
+ * The ceiling is the per-fixture price work, not this: FULL_FIXTURE_CAP bounds
+ * how many fixtures get fetched whole for a handicap or period market, so more
+ * bets here means proportionally more of the long tail going unpriced rather
+ * than a proportionally slower build.
+ */
+const LIMIT = 200;
 
 /** Only look back this far — an empty feed beats a slow one. */
 const WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
