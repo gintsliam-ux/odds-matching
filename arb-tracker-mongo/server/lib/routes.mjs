@@ -176,7 +176,13 @@ const ROUTES = {
 
   'POST /api/h2h': (_url, body) => h2hPrices(body?.fixtureIds ?? []),
 
-  'GET /api/pulse': () => cached('pulse', TTL.pulse, fetchPulse),
+  /*
+   * The one payload that must not be served stale: it reports how fresh every
+   * other feed is, so an old copy of it is not slightly out of date, it is
+   * wrong. Ten seconds is enough to still share one computation across a burst
+   * of callers.
+   */
+  'GET /api/pulse': () => cached('pulse', TTL.pulse, fetchPulse, { maxStaleMs: 10_000 }),
 
   'GET /api/meta': () => cached('meta', TTL.meta, meta),
 

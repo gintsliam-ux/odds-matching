@@ -12,15 +12,23 @@
  */
 const entries = new Map();
 
-export function cached(key, ttlMs, produce) {
+/**
+ * @param {string} key
+ * @param {number} ttlMs How long a value is served without a refresh.
+ * @param {() => Promise<any>} produce
+ * @param {{maxStaleMs?: number}} [opts] How old a value may be and still be
+ *   handed back while the refresh runs. Unbounded by default, which is right
+ *   for anything whose meaning does not decay — but see the pulse.
+ */
+export function cached(key, ttlMs, produce, { maxStaleMs = Infinity } = {}) {
   let e = entries.get(key);
   if (!e) {
     e = { value: undefined, at: 0, inflight: null };
     entries.set(key, e);
   }
 
-  const fresh = e.value !== undefined && Date.now() - e.at < ttlMs;
-  if (fresh) return Promise.resolve(e.value);
+  const age = e.value !== undefined ? Date.now() - e.at : Infinity;
+  if (age < ttlMs) return Promise.resolve(e.value);
 
   if (!e.inflight) {
     e.inflight = Promise.resolve()
@@ -38,7 +46,18 @@ export function cached(key, ttlMs, produce) {
     e.inflight.catch(() => {});
   }
 
-  // Serve stale immediately if we have anything; otherwise wait for the first fill.
+  /*
+   * Serve stale immediately, unless the caller said how stale is too stale.
+   *
+   * Unbounded staleness is what made the pulse bar lie. An instance that
+   * computed a pulse and then sat idle handed that same reading back on its
+   * next request, so the bar reported Optic 47 minutes and Live 104 minutes
+   * while every feed was seconds old, then snapped back to 30s on the next
+   * poll because a different instance answered. For a payload whose entire
+   * content is "how fresh is this", being served an hour-old copy of the
+   * answer is worse than waiting for a new one.
+   */
+  if (age > maxStaleMs) return e.inflight;
   return e.value !== undefined ? Promise.resolve(e.value) : e.inflight;
 }
 
