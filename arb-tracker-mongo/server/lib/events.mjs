@@ -325,6 +325,48 @@ async function fixtureEntities(fixtures) {
  * Some events exist under both an Optic id and a `syn_` archive id, splitting
  * their odds. Keep one per (sport, name, start), preferring the Optic id.
  */
+/** Tokens that say nothing about WHICH sides are playing. */
+const PAIR_STOP = new Set([
+  'the', 'and', 'women', 'womens', 'men', 'mens', 'national', 'team', 'reserves',
+]);
+
+/** The significant words in a fixture's two sides, for comparing one against another. */
+function pairTokens(f) {
+  return new Set(
+    `${f.home_team ?? ''} ${f.away_team ?? ''} ${f.event_name ?? ''}`
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .split(/[^a-z0-9]+/)
+      .filter((t) => t.length > 2 && !PAIR_STOP.has(t)),
+  );
+}
+
+const isTabSourced = (f) =>
+  f.source === 'tab' || String(f.fixture_id ?? '').startsWith('TAB');
+
+/**
+ * One row per fixture, even when two feeds disagree about its name.
+ *
+ * The exact key below catches a feed repeating itself. It does NOT catch the
+ * same game arriving from two different scrapers, which is what happened the
+ * moment Optic picked up the Rugby League World Cup: the board carried all nine
+ * games twice, at the identical kick-off, differing only in spelling —
+ *
+ *     Australia vs New Zealand        TABCF2D5F4AEBB73   40 rows, all suspended
+ *     Australia v New Zealand         202610158F7856A6  255 rows, all active
+ *     PNG vs Lebanon            /     Papua New Guinea v Lebanon
+ *     England (W) vs Wales (W)  /     England Women vs Wales Women
+ *
+ * — and the TAB copy is the dead one, because once Optic carries a competition
+ * the TAB scraper stops being the thing that keeps it fresh.
+ *
+ * So a TAB-sourced row is dropped when a non-TAB row describes the same game:
+ * same sport, same kick-off to the minute, and at least one significant word in
+ * common. Deliberately scoped to TAB-against-Optic rather than applied to every
+ * pair — "Manchester United v X" and "Leeds United v Y" kicking off together
+ * share a word, and a general rule at this strength would merge them.
+ */
 function dedupeFixtures(rows) {
   const byKey = new Map();
   for (const r of rows) {
@@ -335,7 +377,33 @@ function dedupeFixtures(rows) {
       byKey.set(key, r);
     }
   }
-  return [...byKey.values()];
+  const out = [...byKey.values()];
+
+  // Index the non-TAB rows by sport and kick-off, so each TAB row is only ever
+  // compared against the handful that could possibly be the same game.
+  const slots = new Map();
+  for (const f of out) {
+    if (isTabSourced(f)) continue;
+    const at = new Date(f.scheduled_start ?? NaN).getTime();
+    if (!Number.isFinite(at)) continue;
+    const k = `${f.sport}|${at}`;
+    slots.set(k, [...(slots.get(k) ?? []), f]);
+  }
+  if (!slots.size) return out;
+
+  return out.filter((f) => {
+    if (!isTabSourced(f)) return true;
+    const at = new Date(f.scheduled_start ?? NaN).getTime();
+    if (!Number.isFinite(at)) return true;
+    const rivals = slots.get(`${f.sport}|${at}`);
+    if (!rivals?.length) return true;
+    const mine = pairTokens(f);
+    if (!mine.size) return true;
+    return !rivals.some((other) => {
+      for (const t of pairTokens(other)) if (mine.has(t)) return true;
+      return false;
+    });
+  });
 }
 
 function toSportEvent(f, compLogos, entities) {
