@@ -65,6 +65,9 @@ function fmt(n: number | null): string {
 
 type HoverFn = (t: HoverTarget | null) => void;
 
+/** Swallows hover for a role with no price history to put in the card. */
+const noHover: HoverFn = () => {};
+
 // A pulled market keeps its last price on screen, tinted red so it's obvious
 // the number isn't live. Overrides the column's own tint and the best-price
 // highlight — "you can't take this" outranks "this is the top price". The
@@ -193,6 +196,14 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
   // and no mapping tables. Those tabs are dropped rather than shown empty.
   const caps = useCapabilities();
   const { user } = useAuth();
+  /*
+   * A trading account is served the current price and nothing behind it — the
+   * ladder is stripped from the payload, not merely hidden — so the hover card
+   * would open onto an empty panel. `priceHistory` is false for that role; see
+   * the capabilities route.
+   */
+  const canHover = caps.priceHistory;
+
 
   // Every event opens on Markets. Adjusting state during render (rather than in
   // an effect) is React's own idiom for resetting on a prop change: it re-runs
@@ -433,7 +444,7 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
                 group={group}
                 totalCols={totalCols}
                 showExchange={showExchange}
-                onHover={setHover}
+                onHover={canHover ? setHover : noHover}
                 countryFor={countryFor}
                 logoFor={logoFor}
                 sport={event.sport}
@@ -443,7 +454,7 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
         </div>
       ))}
 
-      {hover && <PriceCard target={hover} now={now} />}
+      {canHover && hover && <PriceCard target={hover} now={now} />}
     </div>
   );
 }

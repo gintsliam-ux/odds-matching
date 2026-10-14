@@ -14,6 +14,7 @@ import { coll, mirrorConfigured } from './mongo.mjs';
 import { betTicker } from './ticker.mjs';
 import { CAPABILITIES, DATA_SOURCE, isMongo } from './source.mjs';
 import { marketMovers } from './movers.mjs';
+import { delayedSettlements, lateBets } from './exposure.mjs';
 import { apiHealth } from './sportApi.mjs';
 import { betsForFixture } from './bets.mjs';
 import {
@@ -182,6 +183,26 @@ const ROUTES = {
    * wrong. Ten seconds is enough to still share one computation across a burst
    * of callers.
    */
+  /*
+   * Markets the book has not resulted on a game Optic says is over, and bets
+   * taken after the game started. Both read the bets cluster, so both are
+   * mirror-served and unavailable where the bets database is not.
+   */
+  'GET /api/settlement': (url) => cached(
+    `settlement:${url.searchParams.get('mins') ?? ''}`,
+    TTL.bets,
+    () => delayedSettlements({ minMins: Number(url.searchParams.get('mins') ?? 30) }),
+  ),
+
+  'GET /api/late-bets': (url) => cached(
+    `late:${url.searchParams.get('after') ?? ''}:${url.searchParams.get('hours') ?? ''}`,
+    TTL.bets,
+    () => lateBets({
+      afterMins: Number(url.searchParams.get('after') ?? 1),
+      hours: Number(url.searchParams.get('hours') ?? 24),
+    }),
+  ),
+
   'GET /api/pulse': () => cached('pulse', TTL.pulse, fetchPulse, { maxStaleMs: 10_000 }),
 
   'GET /api/meta': () => cached('meta', TTL.meta, meta),
@@ -241,6 +262,8 @@ function unavailable(feature) {
 const MIRROR_SERVES = new Set([
   'GET /api/bets',
   'GET /api/ticker',
+  'GET /api/settlement',
+  'GET /api/late-bets',
   'GET /api/mapping/tournaments',
   // Writes land on the mirror and queue an intent the tailnet agent replays
   // onto gutsys_sport — see queueForNas in mapping.mjs. Without that queue a
@@ -264,6 +287,8 @@ const MIRROR_SERVES = new Set([
 const MONGO_ONLY = {
   'GET /api/bets': 'bets',
   'GET /api/ticker': 'the bet feed',
+  'GET /api/settlement': 'the bet feed',
+  'GET /api/late-bets': 'the bet feed',
   'GET /api/mapping/tournaments': 'the mapping tables',
   'POST /api/mapping/tournament': 'the mapping tables',
   'POST /api/mapping/tournaments/apply': 'the mapping tables',
@@ -308,7 +333,41 @@ const TRADING_ALLOWED = new Set([
   'GET /api/event',
   'GET /api/event/details',
   'GET /api/health',
+  // The board and the strip across the top of it, with the feed heartbeats
+  // that sit above them — without the pulse the bar never leaves its skeleton.
+  'GET /api/events',
+  'GET /api/events/day',
+  'GET /api/h2h',
+  'POST /api/h2h',
+  'GET /api/pulse',
+  // Settlement and late bets are for everyone.
+  'GET /api/settlement',
+  'GET /api/late-bets',
 ]);
+
+/**
+ * Price history a trading account does not get: the current price only.
+ *
+ * Stripped from the payload rather than hidden in the client, for the same
+ * reason the route list is enforced here — a column the browser is told not to
+ * draw is still a column it was sent. `current_price` and the per-book status
+ * survive; the ladder, the opening and closing prices and the daily series do
+ * not.
+ */
+const HISTORY_FIELDS = [
+  'flucs', 'daily_prices', 'open_price', 'open_at', 'close_price', 'closed_at',
+  'price_6h', 'price_3h', 'price_1h', 'price_30m', 'price_10m',
+];
+
+function stripHistory(body) {
+  if (!Array.isArray(body)) return body;
+  return body.map((row) => {
+    if (!row || typeof row !== 'object') return row;
+    const out = { ...row };
+    for (const f of HISTORY_FIELDS) delete out[f];
+    return out;
+  });
+}
 
 const PUBLIC = new Set(['/api/auth', '/api/auth/handoff', '/api/capabilities']);
 
@@ -387,7 +446,17 @@ export async function handleApi({ method, pathname, searchParams, body, cookies 
   const key = `${method} ${path}`;
 
   if (key === 'GET /api/capabilities') {
-    return { status: 200, body: { ...CAPABILITIES, auth: AUTH_CONFIGURED } };
+    /*
+     * Role-aware, though the route stays public: a trading account is served
+     * the current price and no history, so the UI must not offer a hover card
+     * that would open onto nothing. Read from the cookie when there is one and
+     * fall through to the instance's own answer when there is not.
+     */
+    const who = AUTH_CONFIGURED ? sessionFromCookies(cookies) : null;
+    const noHistory = who?.role === 'trading'
+      ? { priceHistory: false, priceSeries: false }
+      : null;
+    return { status: 200, body: { ...CAPABILITIES, ...noHistory, auth: AUTH_CONFIGURED } };
   }
 
   /*
@@ -421,5 +490,10 @@ export async function handleApi({ method, pathname, searchParams, body, cookies 
   }
 
   const url = { searchParams };
-  return { status: 200, body: await handler(url, body) };
+  const out = await handler(url, body);
+  // The current price only — see HISTORY_FIELDS.
+  if (me?.role === 'trading' && key === 'GET /api/odds') {
+    return { status: 200, body: stripHistory(out) };
+  }
+  return { status: 200, body: out };
 }

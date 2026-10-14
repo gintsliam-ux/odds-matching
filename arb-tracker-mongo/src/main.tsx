@@ -9,6 +9,8 @@ import MappingPage from './pages/MappingPage';
 import { CapabilitiesProvider } from './lib/capabilities';
 import UsersPage from './pages/UsersPage';
 import SearchPage from './pages/SearchPage';
+import SettlementPage from './pages/SettlementPage';
+import LateBetsPage from './pages/LateBetsPage';
 import LoginPage from './pages/LoginPage';
 import { AuthProvider } from './lib/auth';
 import { useAuth } from './lib/useAuth';
@@ -36,9 +38,10 @@ function AdminOnly({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * What the `trading` role is allowed to be looking at: the ticker, and the
- * search that shows one team's or player's prices. Everything else lands on
- * the search.
+ * Where a `trading` role may not go: the movers page and the mapping tables.
+ * It has the board, the strip across the top of it, the ticker, the search,
+ * settlement and late bets — everything but those two, and prices without any
+ * history behind them.
  *
  * Note where the real restriction lives. This redirect is so a trading user is
  * never shown a surface that will not load for them -- the server refuses the
@@ -59,7 +62,7 @@ createRoot(document.getElementById('root')!).render(
     <CapabilitiesProvider>
       <BrowserRouter>
       <Routes>
-        <Route path="/" element={<TradingHome><App /></TradingHome>}>
+        <Route path="/" element={<App />}>
           <Route index element={<EventView />} />
           <Route path="event/:slug/:fixtureId" element={<EventView />} />
         </Route>
@@ -67,6 +70,8 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/movers" element={<TradingHome><MoversPage /></TradingHome>} />
         <Route path="/ticker" element={<TickerPage />} />
         <Route path="/search" element={<SearchPage />} />
+        <Route path="/settlement" element={<SettlementPage />} />
+        <Route path="/late-bets" element={<LateBetsPage />} />
         <Route path="/mapping" element={<TradingHome><MappingPage /></TradingHome>} />
         <Route path="/users" element={<AdminOnly><UsersPage /></AdminOnly>} />
       </Routes>

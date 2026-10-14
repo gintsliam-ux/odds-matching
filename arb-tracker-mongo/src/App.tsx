@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, Link2, LogOut, Radio, TrendingDown, Users as UsersIcon } from 'lucide-react';
+import { Activity, AlertTriangle, Clock, Link2, LogOut, Radio, TrendingDown, Users as UsersIcon } from 'lucide-react';
 import { Link, Outlet, useMatch, useNavigate } from 'react-router-dom';
 import { Header } from './components/Header';
 import { FilterBar } from './components/FilterBar';
@@ -670,6 +670,26 @@ export default function App() {
               <TrendingDown size={14} />
               Movers
             </Link>
+            {/* Both read the bets cluster, so both are shown wherever the
+                ticker is — and to every role, trading included. */}
+            {caps.bets && (
+              <>
+                <Link
+                  to="/settlement"
+                  className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
+                >
+                  <Clock size={14} />
+                  Settlement
+                </Link>
+                <Link
+                  to="/late-bets"
+                  className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
+                >
+                  <AlertTriangle size={14} />
+                  Late Bets
+                </Link>
+              </>
+            )}
           </div>
           {caps.mapping && (
             <div className="shrink-0 border-t border-surface-border p-2">

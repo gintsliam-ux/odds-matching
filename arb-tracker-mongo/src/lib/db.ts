@@ -774,3 +774,75 @@ export interface Meta {
  * hook for the tables that come next.
  */
 export const fetchMeta = (): Promise<Meta> => apiGet<Meta>('/api/meta');
+
+/* ------------------------------------------------- settlement & late bets */
+
+export interface OpenBet {
+  source: string;
+  betId: string | null;
+  userId: string | null;
+  placedAt: string | null;
+  stake: number | null;
+  price: number | null;
+  market: string | null;
+  outcome: string | null;
+}
+
+export interface SettlementEvent {
+  key: string;
+  fixtureId: string | null;
+  name: string | null;
+  sport: string | null;
+  tournament: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  /** Minutes since Optic called the game finished. */
+  waitingMins: number;
+  stake: number;
+  bets: OpenBet[];
+}
+
+export interface Settlement {
+  configured: boolean;
+  thresholds?: { minMins: number; windowHours: number };
+  counts?: {
+    events: number; bets: number; stake: number;
+    openTotal: number; unjudgeable: number;
+  };
+  events: SettlementEvent[];
+}
+
+export interface LateBet {
+  source: string;
+  betId: string | null;
+  userId: string | null;
+  fixtureId: string | null;
+  event: string | null;
+  sport: string | null;
+  market: string | null;
+  outcome: string | null;
+  placedAt: string | null;
+  startedAt: string | null;
+  afterMins: number;
+  stake: number | null;
+  price: number | null;
+  settled: boolean;
+  /** Optic still has it in play, so the market may be open right now. */
+  stillLive: boolean | null;
+}
+
+export interface LateBets {
+  configured: boolean;
+  thresholds?: { afterMins: number; hours: number };
+  counts?: {
+    late: number; comparable: number; stake: number;
+    stillLive: number; events: number;
+  };
+  bets: LateBet[];
+}
+
+export const fetchSettlement = (mins: number): Promise<Settlement> =>
+  apiGet<Settlement>(`/api/settlement?mins=${mins}`);
+
+export const fetchLateBets = ({ after, hours }: { after: number; hours: number }): Promise<LateBets> =>
+  apiGet<LateBets>(`/api/late-bets?after=${after}&hours=${hours}`);
