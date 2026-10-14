@@ -103,7 +103,7 @@ export default async function handler(req, res) {
      * Nothing behind a sign-in may be cached at the edge: a shared cache would
      * hand one desk's answer — or a 401 — to the next person through.
      */
-    if (out.headers?.['set-cookie'] || url.pathname === '/api/auth' || url.pathname === '/api/users'
+    if (out.headers?.['set-cookie'] || url.pathname === '/api/auth' || url.pathname === '/api/auth/handoff' || url.pathname === '/api/users'
         || out.status === 401 || out.status === 403 || out.status === 503) {
       res.setHeader('cache-control', 'no-store');
       res.status(out.status).json(out.body);

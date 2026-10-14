@@ -185,3 +185,43 @@ export async function deleteUser(id, actingUserId) {
   }
   await col.deleteOne({ _id: new ObjectId(id) });
 }
+
+/* ---------------------------------------------------------------- handoff */
+
+/*
+ * Arriving already signed in from the Margin Comparison dashboard, which uses
+ * the same accounts but sits on another vercel.app host, so it can't share
+ * our cookie. It sends a ticket instead (margin-dashboard/lib/handoff.ts):
+ * "<b64url JSON {u, aud, exp, n}>.<b64url HMAC-SHA256 of 'sso.v1.' + payload>"
+ * under SSO_SECRET, the same value on both projects. A ticket lives 60 seconds
+ * and works once: its id is recorded in sso_used_tickets (a TTL index clears
+ * them), so a copied link can't be replayed.
+ */
+let ticketsIndexed = null;
+
+export async function verifyHandoff(token) {
+  const key = process.env.SSO_SECRET;
+  if (!key || !token) return null;
+  const [payload, sig] = String(token).split('.');
+  if (!payload || !sig) return null;
+  const expected = b64url(createHmac('sha256', key).update(`sso.v1.${payload}`).digest());
+  if (!safeEqual(sig, expected)) return null;
+  let d;
+  try { d = JSON.parse(Buffer.from(payload, 'base64url').toString()); } catch { return null; }
+  if (d.aud !== 'sports-odds-desk' || !d.u || !d.n || !(d.exp >= Math.floor(Date.now() / 1000))) return null;
+
+  const db = await betsDb();
+  if (!db) return null;
+  const used = db.collection('sso_used_tickets');
+  ticketsIndexed ??= used.createIndex({ at: 1 }, { expireAfterSeconds: 600 }).catch((e) => { ticketsIndexed = null; throw e; });
+  await ticketsIndexed;
+  try {
+    await used.insertOne({ _id: String(d.n), at: new Date() });
+  } catch (e) {
+    if (e?.code === 11000) return null; // already used
+    throw e;
+  }
+  // the account must still exist; take its current role from the collection
+  const u = await (await usersColl()).findOne(byName(d.u), { projection: { username: 1, role: 1 } });
+  return u ? { id: String(u._id), username: u.username, role: u.role ?? 'support' } : null;
+}

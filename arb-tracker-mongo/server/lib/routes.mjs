@@ -27,7 +27,7 @@ import {
   cachedBoard, eventById, eventDetails, eventsForDay, h2hPrices, oddsForFixture, searchEvents,
 } from './queries.mjs';
 import {
-  authenticate, cookieHeader, createUser, deleteUser, listUsers, sessionFromCookies,
+  authenticate, cookieHeader, createUser, deleteUser, listUsers, sessionFromCookies, verifyHandoff,
   signSession, updateUser,
 } from './auth.mjs';
 
@@ -272,10 +272,11 @@ const MONGO_ONLY = {
 /**
  * Everything behind a sign-in, with the two exceptions that cannot be.
  *
- * `/api/auth` is how you sign in, and `/api/capabilities` is what the shell
- * reads before it knows who you are. Everything else is the desk's own data.
+ * `/api/auth` is how you sign in (and `/api/auth/handoff` how you arrive signed
+ * in from the Margin Comparison dashboard), and `/api/capabilities` is what the
+ * shell reads before it knows who you are. Everything else is the desk's own data.
  */
-const PUBLIC = new Set(['/api/auth', '/api/capabilities']);
+const PUBLIC = new Set(['/api/auth', '/api/auth/handoff', '/api/capabilities']);
 
 /** Auth is on when there is a secret to sign with. */
 const AUTH_CONFIGURED = Boolean(process.env.AUTH_SECRET);
@@ -303,6 +304,23 @@ async function authRoute(method, searchParams, body, cookies) {
   // Deliberately vague — do not say which half was wrong.
   if (!user) return { status: 401, body: { error: 'Incorrect username or password' } };
   return { status: 200, body: { user }, headers: { 'set-cookie': cookieHeader(signSession(user)) } };
+}
+
+/**
+ * GET /api/auth/handoff?t=<ticket>&to=/event/...: sign in from a Margin
+ * Comparison ticket (see verifyHandoff), then go to the page. A bad, expired
+ * or reused ticket just goes to the page without a session, where the usual
+ * sign-in shows.
+ */
+async function handoffRoute(method, searchParams) {
+  if (method !== 'GET') return { status: 405, body: { error: 'GET only' } };
+  const raw = searchParams.get('to');
+  // only a path on this site, never another host
+  const to = raw && /^\/(?!\/)[\w\-./%?=&]*$/.test(raw) ? raw : '/';
+  const user = AUTH_CONFIGURED ? await verifyHandoff(searchParams.get('t')).catch(() => null) : null;
+  const headers = { location: to, 'referrer-policy': 'no-referrer' };
+  if (user) headers['set-cookie'] = cookieHeader(signSession(user));
+  return { status: 302, body: null, headers };
 }
 
 async function usersRoute(method, body, me) {
@@ -348,6 +366,7 @@ export async function handleApi({ method, pathname, searchParams, body, cookies 
   }
 
   if (path === '/api/auth') return authRoute(method, searchParams, body, cookies);
+  if (path === '/api/auth/handoff') return handoffRoute(method, searchParams);
 
   const me = AUTH_CONFIGURED ? sessionFromCookies(cookies) : null;
   if (AUTH_CONFIGURED && !me) return { status: 401, body: { error: 'not signed in' } };
