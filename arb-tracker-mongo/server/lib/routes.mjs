@@ -276,6 +276,34 @@ const MONGO_ONLY = {
  * in from the Margin Comparison dashboard), and `/api/capabilities` is what the
  * shell reads before it knows who you are. Everything else is the desk's own data.
  */
+/**
+ * What a `trading` account may read.
+ *
+ * The role exists to see one team's or player's prices and the bet ticker, and
+ * nothing that lists the market at large: not the board, not the movers page,
+ * not the mapping tables, not the bets archive.
+ *
+ * Enforced HERE rather than only in the client's routing, because a hidden link
+ * is not a restriction — the endpoints are a cookie and a curl away. The
+ * client-side redirect exists so a trading user is never shown a page that
+ * would then fail to load; this is the part that decides.
+ *
+ * An allow-list, so a route added later is denied to trading until someone
+ * decides otherwise. The opposite default would hand every new endpoint over
+ * silently.
+ */
+const TRADING_ALLOWED = new Set([
+  // The ticker, and what the page needs to render a row.
+  'GET /api/ticker',
+  'GET /api/meta',
+  // Team/player search, the prices for one fixture, and the fixture itself.
+  'GET /api/search',
+  'GET /api/odds',
+  'GET /api/event',
+  'GET /api/event/details',
+  'GET /api/health',
+]);
+
 const PUBLIC = new Set(['/api/auth', '/api/auth/handoff', '/api/capabilities']);
 
 /** Auth is on when there is a secret to sign with. */
@@ -375,6 +403,10 @@ export async function handleApi({ method, pathname, searchParams, body, cookies 
 
   const handler = ROUTES[key];
   if (!handler) return { status: 404, body: { error: 'not found' } };
+
+  if (me?.role === 'trading' && !TRADING_ALLOWED.has(key)) {
+    return { status: 403, body: { error: 'not available to this account' } };
+  }
 
   if (!isMongo && MONGO_ONLY[key] && !(mirrorConfigured && MIRROR_SERVES.has(key))) {
     // 200, not an error: the client asked a reasonable question and the honest

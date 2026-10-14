@@ -8,6 +8,7 @@ import MoversPage from './pages/MoversPage';
 import MappingPage from './pages/MappingPage';
 import { CapabilitiesProvider } from './lib/capabilities';
 import UsersPage from './pages/UsersPage';
+import SearchPage from './pages/SearchPage';
 import LoginPage from './pages/LoginPage';
 import { AuthProvider } from './lib/auth';
 import { useAuth } from './lib/useAuth';
@@ -34,6 +35,23 @@ function AdminOnly({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * What the `trading` role is allowed to be looking at: the ticker, and the
+ * search that shows one team's or player's prices. Everything else lands on
+ * the search.
+ *
+ * Note where the real restriction lives. This redirect is so a trading user is
+ * never shown a surface that will not load for them -- the server refuses the
+ * routes behind the board, the movers page and the mapping tables outright, and
+ * would do so whatever this component said. A guard that only hid links would
+ * be decoration.
+ */
+function TradingHome({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  if (user?.role === 'trading') return <Navigate to="/search" replace />;
+  return <>{children}</>;
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <AuthProvider>
@@ -41,14 +59,15 @@ createRoot(document.getElementById('root')!).render(
     <CapabilitiesProvider>
       <BrowserRouter>
       <Routes>
-        <Route path="/" element={<App />}>
+        <Route path="/" element={<TradingHome><App /></TradingHome>}>
           <Route index element={<EventView />} />
           <Route path="event/:slug/:fixtureId" element={<EventView />} />
         </Route>
         {/* Full-width: the mapping table has no use for the event rail. */}
-        <Route path="/movers" element={<MoversPage />} />
+        <Route path="/movers" element={<TradingHome><MoversPage /></TradingHome>} />
         <Route path="/ticker" element={<TickerPage />} />
-        <Route path="/mapping" element={<MappingPage />} />
+        <Route path="/search" element={<SearchPage />} />
+        <Route path="/mapping" element={<TradingHome><MappingPage /></TradingHome>} />
         <Route path="/users" element={<AdminOnly><UsersPage /></AdminOnly>} />
       </Routes>
       </BrowserRouter>

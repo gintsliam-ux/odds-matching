@@ -22,6 +22,7 @@ import { EventTabs, SubTabs, type EventTab, type SubTab } from './EventTabs';
 import { EventDetailsPanel } from './EventDetailsPanel';
 import { BetsPanel } from './BetsPanel';
 import { useCapabilities } from '../lib/capabilitiesContext';
+import { useAuth } from '../lib/useAuth';
 
 // Selection + Best (+ Betfair back/lay for two-sided events), then one column
 // per fixed-odds book. Golf outrights have no exchange, so those two drop out.
@@ -191,6 +192,7 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
   // A deployed instance reads the public odds surface, which publishes no bets
   // and no mapping tables. Those tabs are dropped rather than shown empty.
   const caps = useCapabilities();
+  const { user } = useAuth();
 
   // Every event opens on Markets. Adjusting state during render (rather than in
   // an effect) is React's own idiom for resetting on a prop change: it re-runs
@@ -337,7 +339,13 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
       <EventTabs
         tabs={[
           { key: 'markets' as const, label: 'Markets', badge: markets.length || null },
-          ...(caps.bets ? [{ key: 'bets' as const, label: 'Bets' }] : []),
+          /*
+           * A trading account is refused /api/bets by the server, so offering
+           * the tab would only route it into a 403. Its own view is the ticker.
+           */
+          ...(caps.bets && user?.role !== 'trading'
+            ? [{ key: 'bets' as const, label: 'Bets' }]
+            : []),
           ...(caps.mapping ? [{ key: 'details' as const, label: 'Details' }] : []),
         ]}
         active={tab}

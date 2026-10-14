@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Check, Copy, Gift, Loader2, Radio } from 'lucide-react';
 import { fetchTicker, subscribeTicker, type TickerBet } from '../lib/db';
+import { useAuth } from '../lib/useAuth';
 import { BookmakerLogo } from '../components/BookmakerLogo';
 import { brandById, BOOKMAKERS } from '../lib/markets';
 import { eventSlug } from '../lib/routing';
@@ -175,6 +176,7 @@ function TagChip({ tags }: { tags: string[] }) {
 const STAKES = [0, 100, 500, 1000];
 
 export default function TickerPage() {
+  const { user } = useAuth();
   const [bets, setBets] = useState<TickerBet[]>([]);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [brand, setBrand] = useState<'all' | 'swiftbet' | 'mybet' | 'multis'>('all');
@@ -319,10 +321,11 @@ export default function TickerPage() {
       <header className="shrink-0 border-b border-surface-border px-5 py-3">
         <div className="flex items-center gap-3">
           <Link
-            to="/"
+            // A trading account cannot open the board, so do not offer it one.
+            to={user?.role === 'trading' ? '/search' : '/'}
             className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
           >
-            <ArrowLeft size={12} /> Board
+            <ArrowLeft size={12} /> {user?.role === 'trading' ? 'Prices' : 'Board'}
           </Link>
           <span className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-slate-100">
             <Radio
