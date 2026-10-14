@@ -16,10 +16,13 @@ const Skeleton = ({ className }: { className?: string; delay?: number }) => (
   <Bone className={className} />
 )
 
-const ROLES: Role[] = ['admin', 'support']
+const ROLES: Role[] = ['admin', 'trading', 'support']
 
 const ROLE_PILL: Record<Role, string> = {
   admin: 'bg-emerald-500/15 text-emerald-300',
+  // Amber, because it reads as a different kind of account at a glance without
+  // competing with the admin green for "has power".
+  trading: 'bg-amber-500/15 text-amber-300',
   support: 'bg-sky-500/15 text-sky-300',
 }
 

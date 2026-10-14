@@ -5,7 +5,7 @@
  */
 const API = import.meta.env.VITE_API_BASE ?? ''
 
-export type Role = 'admin' | 'support'
+export type Role = 'admin' | 'trading' | 'support'
 
 export interface SessionUser {
   id: string

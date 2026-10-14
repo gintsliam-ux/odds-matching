@@ -138,6 +138,21 @@ export async function listUsers() {
   return docs.map(toPublic);
 }
 
+/**
+ * The roles an account can hold.
+ *
+ * Only `admin` carries any privilege — it gates user management and nothing
+ * else — so `trading` and `support` are equal in what they can do and differ
+ * in what they say. That is the point: the header and the user list show the
+ * role, and "support" on a trader's account was simply wrong.
+ *
+ * A whitelist rather than a coercion. The old `role === 'admin' ? 'admin' :
+ * 'support'` quietly turned anything unrecognised into support, which is a safe
+ * default but would have silently swallowed 'trading' and left no trace of why.
+ */
+export const ROLES = new Set(['admin', 'trading', 'support']);
+const asRole = (r) => (ROLES.has(r) ? r : 'support');
+
 export async function createUser(username, password, role) {
   const col = await usersColl();
   const name = String(username ?? '').trim();
@@ -148,7 +163,7 @@ export async function createUser(username, password, role) {
   const doc = {
     username: name,
     passwordHash: await hashPassword(password),
-    role: role === 'admin' ? 'admin' : 'support',
+    role: asRole(role),
     createdAt: now,
     updatedAt: now,
   };
@@ -160,7 +175,7 @@ export async function updateUser(id, patch) {
   const col = await usersColl();
   const set = { updatedAt: new Date() };
   if (patch.username?.trim()) set.username = patch.username.trim();
-  if (patch.role) set.role = patch.role === 'admin' ? 'admin' : 'support';
+  if (patch.role) set.role = asRole(patch.role);
   if (patch.password) {
     if (patch.password.length < 8) throw new Error('password must be at least 8 characters');
     set.passwordHash = await hashPassword(patch.password);
