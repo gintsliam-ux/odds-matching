@@ -165,6 +165,13 @@ export default function App() {
   const navigate = useNavigate();
   // The mapping page reads tables the public odds surface does not publish.
   const caps = useCapabilities();
+  /*
+   * A trading account is refused the movers page and the mapping tables by the
+   * server, so those two links are not offered to it — a link that 403s is
+   * worse than no link. Everything else in the rail is within its reach.
+   */
+  const { user } = useAuth();
+  const deskOnly = user?.role !== 'trading';
   const match = useMatch('/event/:slug/:fixtureId');
   const activeId = match?.params.fixtureId ?? null;
 
@@ -663,13 +670,15 @@ export default function App() {
           <div className="shrink-0 border-t border-surface-border p-2">
             {/* Movers reads the same price ladder the board already holds, so
                 it works on either source — no mapping tables involved. */}
-            <Link
-              to="/movers"
-              className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
-            >
-              <TrendingDown size={14} />
-              Movers
-            </Link>
+            {deskOnly && (
+              <Link
+                to="/movers"
+                className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
+              >
+                <TrendingDown size={14} />
+                Movers
+              </Link>
+            )}
             {/* Both read the bets cluster, so both are shown wherever the
                 ticker is — and to every role, trading included. */}
             {caps.bets && (
@@ -700,13 +709,15 @@ export default function App() {
                 <Radio size={14} />
                 Ticker
               </Link>
-              <Link
-                to="/mapping"
-                className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
-              >
-                <Link2 size={14} />
-                Mapping
-              </Link>
+              {deskOnly && (
+                <Link
+                  to="/mapping"
+                  className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
+                >
+                  <Link2 size={14} />
+                  Mapping
+                </Link>
+              )}
             </div>
           )}
           <SignedInAs />
