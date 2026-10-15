@@ -132,6 +132,66 @@ function localLeagueLogo(sport, cat, name) {
  * `league.category` its group — filters key on the PAIR, since a tournament name
  * alone isn't unique (Hamburg is both an ATP and a WTA event).
  */
+/**
+ * A country's own badge for a competition, if the badge looks like it belongs to
+ * that competition.
+ *
+ * The bare label used to be tried first, which is how a Mongolian fixture in
+ * "Mongolia / Premier League" wore the ENGLISH Premier League crest: the entity
+ * `premier_league` is England's, and `mongolia_premier_league` was sitting right
+ * there unused. Sixty-two countries have a `*_premier_league` entity.
+ *
+ * But preferring the qualified one outright is worse, because those entities are
+ * not all sound — `switzerland_national_league` is the NHL's logo,
+ * `colombia_primera_b` is a Bolivian flag, `russia_cup` is EuroLeague's. Flipping
+ * the order blind moved 120 leagues and broke more than it fixed.
+ *
+ * So the qualified badge has to look plausible: its FILE NAME must share a word
+ * with the competition label. "Mongolian_Premier_League_Logo" shares "premier"
+ * and "league", so Mongolia is fixed. "NHL_Logo_former" shares nothing with
+ * "National League", so Switzerland keeps what it had.
+ *
+ * Deliberately the LABEL and not the country. Matching the country instead
+ * admits exactly the trap this is for: `russia_khl` points at
+ * "Junior_Hockey_League_(Russia)" — right country, wrong competition — and the
+ * KHL would have worn the junior league's shield.
+ *
+ * An acronym yields no word long enough to match and so never overrides, which
+ * is the right answer twice over: KHL, CBA, NRL and AFL are unambiguous already.
+ */
+const LOGO_WORD_MIN = 4;
+
+function logoWords(s) {
+  return new Set(
+    String(s ?? '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .split(/[^a-z0-9]+/)
+      .filter((t) => t.length >= LOGO_WORD_MIN),
+  );
+}
+
+/** The file name, which is what says what a logo depicts — never the whole URL. */
+function logoFileName(url) {
+  try {
+    return decodeURIComponent(String(url).split('?')[0].split('/').pop() || '');
+  } catch {
+    return String(url);
+  }
+}
+
+function plausibleCompLogo(compLogos, cat, name) {
+  if (!cat || !name) return undefined;
+  const url = compLogos.get(normEntity(`${cat} ${name}`));
+  if (!url) return undefined;
+  const want = logoWords(name);
+  if (!want.size) return undefined;
+  const got = logoWords(logoFileName(url));
+  for (const w of want) if (got.has(w)) return url;
+  return undefined;
+}
+
 function deriveLeague(sport, category, tournament, stage, compLogos) {
   const id = sport;
   const label = sportLabel(sport);
@@ -183,7 +243,10 @@ function deriveLeague(sport, category, tournament, stage, compLogos) {
       id, name, category: context, code: code(name), sport: label,
       logoUrl:
         localLeagueLogo(sport, cat, name) ??
+        // The country's own badge first, when it looks like the right one.
+        plausibleCompLogo(compLogos, cat, name) ??
         compLogo(name) ??
+        // Nothing bare matched, so anything country-specific beats a code.
         (context ? compLogo(`${cat} ${name}`) : undefined),
     },
     subtitle: stage || undefined,
