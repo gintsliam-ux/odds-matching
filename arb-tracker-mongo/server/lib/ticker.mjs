@@ -2,6 +2,7 @@ import { coll, mongoConfigured } from './mongo.mjs';
 import { apiFixtureIndex, apiOddsForFixture, apiOddsForSport } from './sportApi.mjs';
 import { betsConfigured, betsDb } from './betsMongo.mjs';
 import { betInstant, COUNTER_ENTRY, SATELLITE_SKEW_MS, VOID_BET } from './bets.mjs';
+import { fairsFor, groupKey } from './fair.mjs';
 
 /**
  * The bet ticker: the latest single bets across every brand, side by side with
@@ -1161,6 +1162,12 @@ async function pricesFor(bets, byEventId, fixtures, timings) {
       .project({
         _id: 0, fixture_id: 1, market_id: 1, selection: 1, line: 1,
         sportsbook: 1, is_lay: 1, current_price: 1,
+        // The three the fairs need on top of a price: `pair_key` is the outcome
+        // group to de-vig over, `outcome_no` says which side of it the bet is
+        // on, and `status` keeps a suspended price out of the average. Without
+        // them in the projection every fair came back null while the price
+        // columns beside them filled in normally.
+        pair_key: 1, outcome_no: 1, status: 1,
       })
       .toArray();
   } else {
@@ -1230,8 +1237,29 @@ async function pricesFor(bets, byEventId, fixtures, timings) {
     byFixture.set(r.fixture_id, list);
   }
 
+  /*
+   * Outcome groups per fixture, built once.
+   *
+   * The fairs need the whole market — every outcome at this line, from every
+   * book — where the price columns only need the bet's own selection. Indexing
+   * by `pair_key` up front rather than re-scanning the fixture's rows for each
+   * of up to 200 bets.
+   */
+  const groupsFor = (all) => {
+    const m = new Map();
+    for (const r of all) {
+      const k = groupKey(r);
+      if (!k) continue;
+      const list = m.get(k) ?? [];
+      list.push(r);
+      m.set(k, list);
+    }
+    return m;
+  };
+
   for (const [fixtureId, list] of wanted) {
     const all = byFixture.get(fixtureId) ?? [];
+    const groups = groupsFor(all);
     for (const b of list) {
       const w = want.get(b);
       if (!w) continue;
@@ -1269,6 +1297,24 @@ async function pricesFor(bets, byEventId, fixtures, timings) {
         if (prev == null || p > prev) best.set(r.sportsbook, p);
       }
       if (best.size) b.prices = Object.fromEntries([...best.entries()].sort());
+
+      /*
+       * The fairs, off the same rows the price columns came from.
+       *
+       * `hits` are the bet's own selection across books, so they share an
+       * outcome and a pair_key — the group they belong to is the market this
+       * bet is in, and that is what gets de-vigged. See fair.mjs for why a
+       * missing pair_key means no fair rather than a guessed grouping.
+       */
+      const group = groups.get(groupKey(hits[0]));
+      if (group) {
+        const f = fairsFor(group, hits[0].outcome_no);
+        if (f.fairPinnacle != null) b.fairPinnacle = f.fairPinnacle;
+        if (f.fairBlend != null) {
+          b.fairBlend = f.fairBlend;
+          b.fairBooks = f.fairBooks;
+        }
+      }
     }
   }
 }

@@ -274,6 +274,16 @@ export interface TickerBet {
    *  board does not price, so a blank column is never mistaken for agreement. */
   prices: Record<string, number> | null;
   /**
+   * The same outcome priced at 100% — the book's margin divided out across the
+   * market, so these are always LONGER than anything quoted. `fairPinnacle` is
+   * the reference book alone; `fairBlend` averages every book that prices the
+   * whole market, over `fairBooks` of them. Null whenever the market was not
+   * complete enough to divide honestly — see server/lib/fair.mjs.
+   */
+  fairPinnacle?: number | null;
+  fairBlend?: number | null;
+  fairBooks?: number;
+  /**
    * The risk tag the book keeps against this bettor — "Monitor", "Good
    * client|Tier 4", "barring order". Empty when the book holds none.
    */

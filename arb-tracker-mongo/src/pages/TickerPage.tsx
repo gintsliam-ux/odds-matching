@@ -107,6 +107,55 @@ function priceStandout(b: TickerBet): { best: number | null; out: boolean; byPct
   return { best, out, byPct: out && best ? (b.price! / best - 1) * 100 : 0 };
 }
 
+/** The reference book, looked up once rather than per row. */
+const pinnacle = brandById('pinnacle');
+
+/**
+ * A 100% price, and how the struck price compares to it.
+ *
+ * The number itself is the market with the book's margin divided out, so it is
+ * always longer than anything quoted — which means the comparison that matters
+ * is not "did we beat the field" but "did this bet get a price better than the
+ * true one". That is the edge, and it goes in the title rather than on the face
+ * of the cell: these two columns are a reference the eye checks against, and
+ * tinting them would make the row shout twice about the same thing.
+ *
+ * An em-dash means the market could not be divided honestly — usually a book
+ * that has pulled one side — and never that the fair is 0 or that the bet was
+ * fine. See server/lib/fair.mjs.
+ */
+function FairCell({
+  fair,
+  price,
+  what,
+}: {
+  fair: number | null | undefined;
+  price: number | null;
+  what: string;
+}) {
+  if (fair == null) {
+    return (
+      <span className="text-slate-700" title={`No 100% price from ${what} — the market was not complete enough to divide`}>
+        –
+      </span>
+    );
+  }
+  const edge = price != null ? (price / fair - 1) * 100 : null;
+  return (
+    <span
+      title={
+        edge == null
+          ? `${what} at 100%: ${fmt(fair)}`
+          : `${what} at 100%: ${fmt(fair)} — struck at ${fmt(price)}, ${
+              edge >= 0 ? `${edge.toFixed(1)}% over` : `${(-edge).toFixed(1)}% under`
+            } the fair price`
+      }
+    >
+      {fmt(fair)}
+    </span>
+  );
+}
+
 /**
  * How far over the odds is worth looking at. Measured across a live feed: of
  * 200 bets, 140 had something to compare against and 21 were out — a median of
@@ -695,6 +744,28 @@ export default function TickerPage() {
                   Stake
                 </th>
                 <th className="px-2 py-2 text-center font-medium">Price</th>
+                {/*
+                  The two 100% prices, between the struck price and the field.
+                  They are a different KIND of number from the columns to the
+                  right — nothing you could have bet, the market with the
+                  book's margin divided out — so they sit in their own bordered
+                  block rather than reading as two more bookmakers.
+                */}
+                <th
+                  className="border-l border-surface-border px-2 py-2 font-medium"
+                  title="Pinnacle's price on this outcome with its margin divided out across the market — the market at 100%"
+                >
+                  <div className="flex items-center justify-center gap-1">
+                    {pinnacle ? <BookmakerLogo brand={pinnacle} size={15} /> : 'Pinn'}
+                    <span>Fair</span>
+                  </div>
+                </th>
+                <th
+                  className="px-2 py-2 text-center font-medium"
+                  title="Every book that prices the whole market, de-vigged individually and averaged — also 100%"
+                >
+                  Blend Fair
+                </th>
                 {columns.map((id) => {
                   const brandInfo = brandById(id);
                   return (
@@ -817,6 +888,16 @@ export default function TickerPage() {
                       title={beatsField ? 'Longer than any book we hold on this outcome' : undefined}
                     >
                       {fmt(b.price)}
+                    </td>
+                    <td className="border-l border-surface-border px-2 py-1.5 text-center tabular-nums text-slate-400">
+                      <FairCell fair={b.fairPinnacle} price={b.price} what="Pinnacle" />
+                    </td>
+                    <td className="px-2 py-1.5 text-center tabular-nums text-slate-400">
+                      <FairCell
+                        fair={b.fairBlend}
+                        price={b.price}
+                        what={b.fairBooks ? `a blend of ${b.fairBooks} books` : 'the blend'}
+                      />
                     </td>
                     {columns.map((id) => {
                       const p = b.prices?.[id] ?? null;
