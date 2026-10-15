@@ -57,20 +57,27 @@ const GLOW: Partial<Record<Level, string>> = {
 /** Shared by the live bar and its loading state, so neither can drift. */
 const BAR =
   'flex shrink-0 items-stretch overflow-x-auto border-b border-surface-border bg-surface text-[11px] leading-none whitespace-nowrap';
-/** One slot. 132px is the ticker cell's width — the two strips line up. */
-const SLOT = 'flex min-w-[132px] flex-1 items-center justify-center gap-1.5 px-3 py-1.5';
+/**
+ * One slot, narrower than it was.
+ *
+ * It used to be 132px to line up with the ticker cell beneath it, which worked
+ * when the bar had four slots. There is now a dot per brand we scrape — fourteen
+ * — and at the old width that is 1,848px and a scrollbar on any normal monitor.
+ * At 88px the whole bar fits inside 1,250px, and `flex-1` still spreads them
+ * when there is room.
+ */
+const SLOT = 'flex min-w-[88px] flex-1 items-center justify-center gap-1.5 px-2 py-1.5';
 const DIVIDER = 'border-l border-surface-border';
 
 /**
- * The feeds that are always reported, in the order fetchPulse returns them.
+ * How many slots the skeleton holds while the first read is in flight.
  *
- * Scores is deliberately NOT here. It only exists once the store stamps score
- * changes, so on a deployed instance it never arrives — and a skeleton that
- * names a feed the bar then cannot show reads as a dead source rather than as
- * one slot fewer. Better for the bar to gain a slot than to promise one it
- * does not have.
+ * It used to name them, which stopped being possible once the book list came
+ * from the roster rather than a constant: the bar cannot know what it is about
+ * to show. Unnamed bones are the honest version, and the count only has to be
+ * close enough to hold the bar's height.
  */
-const SLOT_LABELS = ['Optic', 'TAB', 'Pinnacle', 'Live'];
+const SKELETON_SLOTS = 8;
 
 export function PulseBar({ pulses, now }: { pulses: Pulse[]; now: number }) {
   // Hold the bar's height and its five slots while the first read is in
@@ -80,11 +87,10 @@ export function PulseBar({ pulses, now }: { pulses: Pulse[]; now: number }) {
   if (pulses.length === 0) {
     return (
       <div className={BAR} role="status" aria-label="Checking feeds">
-        {SLOT_LABELS.map((label, i) => (
-          <span key={label} className={`${SLOT} ${i ? DIVIDER : ''}`}>
+        {Array.from({ length: SKELETON_SLOTS }, (_, i) => (
+          <span key={i} className={`${SLOT} ${i ? DIVIDER : ''}`}>
             <span className="h-2 w-2 shrink-0 rounded-full bg-slate-700" />
-            <span className="text-slate-600">{label}</span>
-            <Bone className="h-2.5 w-6" />
+            <Bone className="h-2.5 w-10" />
           </span>
         ))}
       </div>

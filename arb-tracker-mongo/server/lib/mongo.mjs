@@ -42,6 +42,9 @@ const MIRRORED = new Set([
   // fixture list so a game nobody has priced yet still appears -- see allEvents.
   'fixtures',
   'tabOdds',
+  // The book roster: the pulse bar's slots, and the alias folding the price
+  // grid needs. Twelve rows.
+  'books',
 ]);
 
 const client = URI

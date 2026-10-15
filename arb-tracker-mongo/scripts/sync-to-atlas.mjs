@@ -65,6 +65,14 @@ const PLAN = [
    */
   { name: 'tab_competitions', mode: 'replace' },
   /*
+   * The book roster — twelve rows. Carries each book's display name, its
+   * aliases and whether it is active, which the pulse bar turns into one dot
+   * per brand and the price grid uses to fold alias spellings together. Before
+   * this it was NOT mirrored, so bookAliases() silently found nothing on a
+   * deployed instance and every alias row kept its own column.
+   */
+  { name: 'books', mode: 'replace' },
+  /*
    * The schedule itself, so the deployed board stops being a list of what is
    * priced and becomes a list of what is on.
    *

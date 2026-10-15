@@ -18,11 +18,97 @@ import { apiFixtures, apiOddsForSport } from './sportApi.mjs';
 const SCOPE_BACK_MS = 6 * 60 * 60 * 1000;
 const SCOPE_FWD_MS = 12 * 60 * 60 * 1000;
 
-/** The books whose freshness is worth a dot of its own. */
-const WATCHED_BOOKS = [
-  { key: 'tab', label: 'TAB', warn: 15, stale: 45 },
-  { key: 'pinnacle', label: 'Pinnacle', warn: 10, stale: 30 },
-];
+/**
+ * A dot for every brand we scrape, read from the `books` roster.
+ *
+ * It used to be two, hardcoded: TAB and Pinnacle. Betfair then stopped dead at
+ * 14:37 one afternoon — back and lay, every sport, inside one scrape cycle —
+ * and nothing on the bar moved, because Betfair had no dot. It was eight hours
+ * before anyone noticed, and only by opening a fixture and finding a column
+ * missing. That is precisely the question this bar exists to answer, so it now
+ * answers it for all of them.
+ *
+ * Read rather than listed, so a book added upstream appears on its own and a
+ * retired one leaves. `books` carries the canonical key, the display name and
+ * the aliases the feed also spells it by.
+ */
+const BOOK_TTL_MS = 10 * 60_000;
+let bookCache = { at: 0, rows: [] };
+
+/**
+ * How long a book may go quiet before the dot complains.
+ *
+ * Generous by default, because cadence varies a lot between them — TAB sits
+ * three to six minutes behind on a quiet night while Pinnacle is inside one —
+ * and a bar that cries wolf gets ignored, which costs more than the lag it was
+ * reporting. The two that were hardcoded keep the tighter numbers they were
+ * given; anything at twenty minutes is worth a glance and an hour is broken.
+ */
+const BOOK_THRESHOLDS = {
+  tab: { warn: 15, stale: 45 },
+  pinnacle: { warn: 10, stale: 30 },
+};
+const DEFAULT_THRESHOLD = { warn: 20, stale: 60 };
+
+/**
+ * The roster, with each book's alternative spellings folded onto its key.
+ *
+ * A lay book is NOT given a dot of its own. `betfair` and `betfair_lay` are one
+ * scrape of one exchange — they stopped at the same second — so a second dot
+ * would be a second alarm for one fault, on a bar whose whole value is that
+ * every dot means something. The lay rows still count towards the exchange's
+ * heartbeat.
+ */
+async function bookRoster() {
+  if (Date.now() - bookCache.at < BOOK_TTL_MS && bookCache.rows.length) return bookCache.rows;
+  let docs = [];
+  try {
+    docs = await (await coll('books'))
+      .find({ active: { $ne: false } })
+      .project({ _id: 0, book_key: 1, display_name: 1, aliases: 1, is_exchange: 1 })
+      .toArray();
+  } catch {
+    // No roster is survivable: fall back to the two that were always watched.
+    docs = [{ book_key: 'tab', display_name: 'TAB' }, { book_key: 'pinnacle', display_name: 'Pinnacle' }];
+  }
+  const byKey = new Map();
+  for (const d of docs) {
+    const key = String(d.book_key ?? '').trim();
+    if (!key) continue;
+    // A lay book folds into the back book it shares a scrape with.
+    const base = key.replace(/_lay$/, '');
+    const owner = byKey.get(base) ?? {
+      key: base,
+      label: null,
+      keys: new Set(),
+      ...(BOOK_THRESHOLDS[base] ?? DEFAULT_THRESHOLD),
+    };
+    owner.keys.add(key);
+    for (const a of d.aliases ?? []) if (a) owner.keys.add(String(a));
+    // The base book's own name wins over the lay variant's.
+    if (key === base) owner.label = d.display_name ?? base;
+    else if (!owner.label) owner.label = String(d.display_name ?? base).replace(/\s*Lay$/i, '');
+    byKey.set(base, owner);
+  }
+  const rows = [...byKey.values()]
+    .map((b) => ({ ...b, keys: [...b.keys], label: shortLabel(b.label ?? b.key) }))
+    // Busiest first is meaningless here; alphabetical is at least stable, and a
+    // dot that moves position between polls is one you cannot watch.
+    .sort((a, b) => a.label.localeCompare(b.label));
+  bookCache = { at: Date.now(), rows };
+  return rows;
+}
+
+/**
+ * Names that fit a dot. "Betfair Exchange (AU)" and "TABtouch (RWWA)" are
+ * right in a column header and too long for a bar of thirteen slots.
+ */
+function shortLabel(name) {
+  return String(name)
+    .replace(/\s*\((?:AU|RWWA|Australia)\)\s*/gi, '')
+    .replace(/\s*Exchange\s*/i, ' ')
+    .trim();
+}
 
 const iso = (v) => (v instanceof Date ? v.toISOString() : v ?? null);
 
@@ -110,13 +196,19 @@ async function apiPulse() {
   const opticAt = max((f) => f.updated_at);
   const scoreAt = max((f) => f.score_updated_at);
 
+  const books = await bookRoster();
+  // Every spelling a book answers to, pointing at the key its dot uses.
+  const ownerOf = new Map();
+  for (const b of books) for (const k of b.keys) ownerOf.set(k, b.key);
+
   const bookAt = new Map();
   for (const r of rows) {
     if (!scope.has(r.fixture_id)) continue;
     const at = r.current_at ? new Date(r.current_at).getTime() : null;
     if (!at) continue;
-    const prev = bookAt.get(r.sportsbook);
-    if (!prev || at > prev) bookAt.set(r.sportsbook, at);
+    const owner = ownerOf.get(r.sportsbook) ?? r.sportsbook;
+    const prev = bookAt.get(owner);
+    if (!prev || at > prev) bookAt.set(owner, at);
   }
 
   let liveAt = null;
@@ -130,12 +222,15 @@ async function apiPulse() {
   const scored = fixtures.filter((f) => f.is_live && f.score_updated_at).length;
 
   return [
-    { key: 'optic', label: 'Optic', at: stamp(opticAt), warn: 10, stale: 30 },
-    ...WATCHED_BOOKS.map((b) => ({
+    { key: 'optic', label: 'Optic', at: stamp(opticAt), detail: scope.size ? `${scope.size} fx` : undefined, warn: 10, stale: 30 },
+    ...books.map((b) => ({
       key: b.key,
       label: b.label,
       at: stamp(bookAt.get(b.key)),
-      detail: scope.size ? `${scope.size} fx` : undefined,
+      // No per-book detail now there are a dozen of them: it was the same
+      // fixture count on every slot, which is width spent saying one thing
+      // eleven times. The count lives on the Optic dot instead.
+      detail: undefined,
       // No fixtures in the window is not a fault — say so rather than alarm.
       idle: scope.size === 0,
       warn: b.warn,
@@ -202,15 +297,23 @@ export async function fetchPulse() {
   ]);
 
   const ids = scope.map((f) => f.fixture_id);
+  const books = await bookRoster();
+  const ownerOf = new Map();
+  for (const b of books) for (const k of b.keys) ownerOf.set(k, b.key);
+
   const bookAt = new Map();
   if (ids.length) {
     const rows = await (await coll('odds'))
       .aggregate([
-        { $match: { fixture_id: { $in: ids }, sportsbook: { $in: WATCHED_BOOKS.map((b) => b.key) } } },
-        { $group: { _id: '$sportsbook', at: { $max: '$updated_at' } } },
+        { $match: { fixture_id: { $in: ids }, sportsbook: { $in: [...ownerOf.keys()] } } },
+        { $group: { _id: '$sportsbook', at: { $max: '$current_at' } } },
       ])
       .toArray();
-    for (const r of rows) bookAt.set(r._id, r.at);
+    for (const r of rows) {
+      const owner = ownerOf.get(r._id) ?? r._id;
+      const prev = bookAt.get(owner);
+      if (!prev || new Date(r.at) > new Date(prev)) bookAt.set(owner, r.at);
+    }
   }
 
   // A score only counts once it carries a number — an empty `scores` object is
@@ -221,12 +324,12 @@ export async function fetchPulse() {
   );
 
   return [
-    { key: 'optic', label: 'Optic', at: iso(optic[0]?.at), warn: 10, stale: 30 },
-    ...WATCHED_BOOKS.map((b) => ({
+    { key: 'optic', label: 'Optic', at: iso(optic[0]?.at), detail: ids.length ? `${ids.length} fx` : undefined, warn: 10, stale: 30 },
+    ...books.map((b) => ({
       key: b.key,
       label: b.label,
       at: iso(bookAt.get(b.key)),
-      detail: ids.length ? `${ids.length} fx` : undefined,
+      detail: undefined,
       // No fixtures in the window is not a fault — say so rather than alarm.
       idle: ids.length === 0,
       warn: b.warn,
