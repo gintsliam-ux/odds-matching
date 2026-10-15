@@ -140,6 +140,14 @@ function swiftSelection(bet, gutsyEventId) {
  * Matched on the status, not a zero stake, which does not separate them: 65
  * counter-entries carry a non-zero amount and 13 real bets carry none.
  */
+/**
+ * How far a market-specific mybet event may sit from its own match event.
+ *
+ * Shared with the ticker's satellite resolver, which pairs them the other way
+ * round, so the two cannot disagree about what counts as the same game.
+ */
+export const SATELLITE_SKEW_MS = 90 * 60_000;
+
 export const COUNTER_ENTRY = /^(Return of|Cancellation of)/;
 
 /**
@@ -293,10 +301,40 @@ async function siblingEventIds(db, baseId, fixtureId) {
     .catch(() => null);
   if (!base?.suspendAt) return { ids: [baseId], satellites: new Set() };
 
+  /*
+   * A WINDOW, not an exact instant.
+   *
+   * Siblings mostly share a suspension time to the second, and requiring that
+   * silently lost the ones that do not: across four days, 101 of 693 matches
+   * carrying both a base and satellites had at least one satellite at a
+   * different `suspendAt` — 554 of them. Tennis is the worst, drifting 5 to 35
+   * minutes (every satellite on Davidovich Fokina v Tiafoe sat 35 minutes
+   * early, all five on Medvedev v Svrcina fifteen minutes early), and the cost
+   * was the whole side-market half of a fixture's bets missing from this page:
+   * De Minaur v Khachanov showed 0 mybet bets and two multis while the ticker
+   * had First Set Winner bets on it.
+   *
+   * Ninety minutes, because the thing a wider window would wrongly catch is a
+   * REMATCH — the same two sides meeting again, whose description matches
+   * perfectly and which only the clock separates. Those are hours or days
+   * apart: the same survey found cricket satellites 4,320 minutes out and
+   * baseball 1,260, which are a later session and the second of a doubleheader,
+   * not this match. Ninety covers every tennis drift observed and reaches
+   * neither of those.
+   *
+   * The name check below is what makes the window safe at all, and stays.
+   */
+  const at = new Date(base.suspendAt).getTime();
   const slot = await db.collection('mybet_events')
-    .find({ sport: base.sport, suspendAt: base.suspendAt })
+    .find({
+      sport: base.sport,
+      suspendAt: {
+        $gte: new Date(at - SATELLITE_SKEW_MS),
+        $lte: new Date(at + SATELLITE_SKEW_MS),
+      },
+    })
     .project({ _id: 1, description: 1, league: 1 })
-    .limit(300)
+    .limit(400)
     .toArray()
     .catch(() => []);
   const satellites = slot.filter(

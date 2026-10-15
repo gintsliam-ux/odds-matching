@@ -1,7 +1,7 @@
 import { coll, mongoConfigured } from './mongo.mjs';
 import { apiFixtureIndex, apiOddsForFixture, apiOddsForSport } from './sportApi.mjs';
 import { betsConfigured, betsDb } from './betsMongo.mjs';
-import { betInstant, COUNTER_ENTRY, VOID_BET } from './bets.mjs';
+import { betInstant, COUNTER_ENTRY, SATELLITE_SKEW_MS, VOID_BET } from './bets.mjs';
 
 /**
  * The bet ticker: the latest single bets across every brand, side by side with
@@ -558,10 +558,13 @@ async function classifyLeadSegments(bets) {
  * with no fixture and therefore no prices -- while the identical bet on "Set
  * Betting" resolved fine.
  *
- * Twenty minutes covers that drift. It is only safe because the player names
- * are then checked against the candidate fixture; see the loop below.
+ * The window is SATELLITE_SKEW_MS, shared with the bets page so the two cannot
+ * disagree about what counts as the same game. It was twenty minutes here,
+ * which covered this case and not the worst of them — tennis satellites drift
+ * up to 35 minutes. It is only safe at any width because the player names are
+ * then checked against the candidate fixture; see the loop below.
  */
-const SATELLITE_SLOT_SKEW_MS = 20 * 60_000;
+const SATELLITE_SLOT_SKEW_MS = SATELLITE_SKEW_MS;
 
 /**
  * mybet mints a SEPARATE event id for every market on a match, and only the
