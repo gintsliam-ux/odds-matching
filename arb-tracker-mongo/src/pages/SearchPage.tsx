@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useAuth } from '../lib/useAuth';
 import { SignOut } from '../components/SignOut';
 import { Link } from 'react-router-dom';
 import { Loader2, Radio, Search as SearchIcon, X } from 'lucide-react';
@@ -33,6 +34,7 @@ function startsIn(iso: string, now: number): string {
 }
 
 export default function SearchPage() {
+  const { user } = useAuth();
   const [term, setTerm] = useState('');
   const [hits, setHits] = useState<SportEvent[]>([]);
   const [searching, setSearching] = useState(false);
@@ -116,13 +118,15 @@ export default function SearchPage() {
           >
             <Radio size={12} /> Ticker
           </Link>
-          <Link
-            to="/"
-            state={{ board: true }}
-            className="rounded-md px-2 py-1 text-[11px] text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
-          >
-            Board
-          </Link>
+          {/* Not offered to a trading account: it cannot open the board. */}
+          {user?.role !== 'trading' && (
+            <Link
+              to="/"
+              className="rounded-md px-2 py-1 text-[11px] text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
+            >
+              Board
+            </Link>
+          )}
           <span className="ml-auto">
             <SignOut />
           </span>

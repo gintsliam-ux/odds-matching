@@ -371,15 +371,14 @@ export default function TickerPage() {
         <div className="flex items-center gap-3">
           <Link
             /*
-             * `state` is what tells the index route this was deliberate. A
-             * trading account is sent here from `/`, so a bare link back would
-             * be bounced straight to the ticker again — see TickerFirst.
+             * A trading account has the ticker and the prices page and nothing
+             * else, so Board would be a link straight back to here. The two
+             * cross-link instead.
              */
-            to="/"
-            state={{ board: true }}
+            to={user?.role === 'trading' ? '/search' : '/'}
             className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
           >
-            <ArrowLeft size={12} /> Board
+            <ArrowLeft size={12} /> {user?.role === 'trading' ? 'Prices' : 'Board'}
           </Link>
           <span className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-slate-100">
             <Radio

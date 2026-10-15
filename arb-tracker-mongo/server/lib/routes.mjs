@@ -310,9 +310,13 @@ const MONGO_ONLY = {
 /**
  * What a `trading` account may read.
  *
- * The role exists to see one team's or player's prices and the bet ticker, and
- * nothing that lists the market at large: not the board, not the movers page,
- * not the mapping tables, not the bets archive.
+ * Two pages: the bet ticker, and the prices for one team or player. Nothing
+ * that lists the market at large — not the board, not its live strip, not the
+ * movers page, the mapping tables, settlement, late bets or the bets archive.
+ *
+ * It was briefly wider, carrying the board and the strip above it. Narrowed
+ * back on the desk's word: the role is for watching what we have taken and
+ * checking a price, and a board is neither.
  *
  * Enforced HERE rather than only in the client's routing, because a hidden link
  * is not a restriction — the endpoints are a cookie and a curl away. The
@@ -333,16 +337,6 @@ const TRADING_ALLOWED = new Set([
   'GET /api/event',
   'GET /api/event/details',
   'GET /api/health',
-  // The board and the strip across the top of it, with the feed heartbeats
-  // that sit above them — without the pulse the bar never leaves its skeleton.
-  'GET /api/events',
-  'GET /api/events/day',
-  'GET /api/h2h',
-  'POST /api/h2h',
-  'GET /api/pulse',
-  // Settlement and late bets are for everyone.
-  'GET /api/settlement',
-  'GET /api/late-bets',
 ]);
 
 /**

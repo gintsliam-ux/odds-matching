@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import App from './App';
 import EventView from './EventView';
 import TickerPage from './pages/TickerPage';
@@ -38,10 +38,12 @@ function AdminOnly({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * Where a `trading` role may not go: the movers page and the mapping tables.
- * It has the board, the strip across the top of it, the ticker, the search,
- * settlement and late bets — everything but those two, and prices without any
- * history behind them.
+ * A `trading` account has two pages: the ticker, and the prices for one team or
+ * player. Everything else lands it on the ticker.
+ *
+ * The whole layout is guarded and not just its index, so `/event/:slug/:id`
+ * goes the same way — the event page is reached through the board's rail, and
+ * the rail lists the market at large.
  *
  * Note where the real restriction lives. This redirect is so a trading user is
  * never shown a surface that will not load for them -- the server refuses those
@@ -50,28 +52,7 @@ function AdminOnly({ children }: { children: React.ReactNode }) {
  */
 function DeskOnly({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
-  if (user?.role === 'trading') return <Navigate to="/search" replace />;
-  return <>{children}</>;
-}
-
-/**
- * The ticker is where a trading account starts.
- *
- * On the INDEX route only, and bypassed when the navigation says `board` —
- * which is what every in-app Board link passes. Both halves matter: wrapping
- * the whole layout would catch `/event/:id` and bounce someone out of the
- * board the moment they clicked a fixture in the rail, and redirecting
- * unconditionally would make the Board link a loop back to the ticker, leaving
- * no way to reach the board at all.
- *
- * So a cold load of `/` lands on the ticker, and a deliberate click reaches the
- * board — without a second URL for it.
- */
-function TickerFirst({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
-  const location = useLocation();
-  const wanted = (location.state as { board?: boolean } | null)?.board;
-  if (user?.role === 'trading' && !wanted) return <Navigate to="/ticker" replace />;
+  if (user?.role === 'trading') return <Navigate to="/ticker" replace />;
   return <>{children}</>;
 }
 
@@ -82,16 +63,17 @@ createRoot(document.getElementById('root')!).render(
     <CapabilitiesProvider>
       <BrowserRouter>
       <Routes>
-        <Route path="/" element={<App />}>
-          <Route index element={<TickerFirst><EventView /></TickerFirst>} />
+        <Route path="/" element={<DeskOnly><App /></DeskOnly>}>
+          <Route index element={<EventView />} />
           <Route path="event/:slug/:fixtureId" element={<EventView />} />
         </Route>
         {/* Full-width: the mapping table has no use for the event rail. */}
         <Route path="/movers" element={<DeskOnly><MoversPage /></DeskOnly>} />
+        {/* The two a trading account has. */}
         <Route path="/ticker" element={<TickerPage />} />
         <Route path="/search" element={<SearchPage />} />
-        <Route path="/settlement" element={<SettlementPage />} />
-        <Route path="/late-bets" element={<LateBetsPage />} />
+        <Route path="/settlement" element={<DeskOnly><SettlementPage /></DeskOnly>} />
+        <Route path="/late-bets" element={<DeskOnly><LateBetsPage /></DeskOnly>} />
         <Route path="/mapping" element={<DeskOnly><MappingPage /></DeskOnly>} />
         <Route path="/users" element={<AdminOnly><UsersPage /></AdminOnly>} />
       </Routes>
