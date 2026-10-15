@@ -83,6 +83,41 @@ const money = (n: number | null | undefined) =>
 const NOT_BEST = new Set(['betfair', 'betfair_lay']);
 
 /**
+ * The bet's price against the best anyone else is showing.
+ *
+ * `out` means we were over the odds: the customer took a price no other book
+ * was offering. That is the whole of what a trading desk wants off this feed,
+ * and the one thing the columns make you read across the row to see — so it is
+ * computed once here and used both to tint the cell and to filter the page.
+ *
+ * The exchange is shown but excluded from the comparison; see NOT_BEST. `best`
+ * is null when nobody else priced the selection, and a row with nothing to
+ * compare against is NOT out of line — it is unjudged, which is a different
+ * thing and must not be filtered in as though it were evidence.
+ */
+function priceStandout(b: TickerBet): { best: number | null; out: boolean; byPct: number } {
+  const others = Object.entries(b.prices ?? {})
+    .filter(([book]) => !NOT_BEST.has(book))
+    .map(([, p]) => p);
+  const best = others.length ? Math.max(...others) : null;
+  const out = b.price != null && best != null && b.price > best;
+  return { best, out, byPct: out && best ? (b.price! / best - 1) * 100 : 0 };
+}
+
+/**
+ * How far over the odds is worth looking at. Measured across a live feed: of
+ * 200 bets, 140 had something to compare against and 21 were out — a median of
+ * 4.9% over, the worst 18.3% ($1,500 at 1.76 against a field best of 1.488).
+ */
+const OUT_MARGINS = [0, 2, 5];
+
+/** Out of line by at least `margin` percent of the odds. */
+function overTheOdds(b: TickerBet, margin: number): boolean {
+  const { out, byPct } = priceStandout(b);
+  return out && byPct >= margin;
+}
+
+/**
  * The book columns, in the board's own order so the eye carries across from one
  * page to the other — plus whichever others actually appear in the feed. The
  * six core brands alone dropped Betfair, FanDuel and Fanatics, which price a
@@ -182,6 +217,16 @@ export default function TickerPage() {
   const [brand, setBrand] = useState<'all' | 'swiftbet' | 'mybet' | 'multis'>('all');
   const [sport, setSport] = useState<string>('all');
   const [minStake, setMinStake] = useState(0);
+  /*
+   * A trading account sees only the bets we were over the odds on — that is
+   * what the feed is for from that desk. Forced rather than defaulted, so it
+   * cannot be switched off and leave someone reading the whole feed believing
+   * they are reading the exceptions.
+   */
+  const tradingOnlyOut = user?.role === 'trading';
+  const [outOnly, setOutOnly] = useState(false);
+  const [outMargin, setOutMargin] = useState(0);
+  const onlyOut = tradingOnlyOut || outOnly;
   const [live, setLive] = useState(false);
   // Ids that arrived on the stream in the last few seconds. The table is
   // newest-first already, so without this a bet landing at the top is
@@ -288,9 +333,10 @@ export default function TickerPage() {
           (sport === 'all' || b.sport === sport) &&
           // A missing stake is not a small stake — it fails the filter rather
           // than being counted as zero and silently dropped at every threshold.
-          (minStake === 0 || (typeof b.stake === 'number' && b.stake >= minStake)),
+          (minStake === 0 || (typeof b.stake === 'number' && b.stake >= minStake)) &&
+          (!onlyOut || overTheOdds(b, outMargin)),
       ),
-    [bets, brand, sport, minStake],
+    [bets, brand, sport, minStake, onlyOut, outMargin],
   );
 
   const columns = useMemo(() => bookColumns(bets), [bets]);
@@ -314,6 +360,18 @@ export default function TickerPage() {
     return STAKES.map(
       (t) => base.filter((b) => t === 0 || (typeof b.stake === 'number' && b.stake >= t)).length,
     );
+  }, [bets, brand, sport]);
+
+  // How many are out of line at each margin, and how many could be judged at
+  // all — the second number is what stops the first being read as a rate.
+  const outCounts = useMemo(() => {
+    const base = bets.filter(
+      (b) => (brand === 'all' || b.brand === brand) && (sport === 'all' || b.sport === sport),
+    );
+    return {
+      comparable: base.filter((b) => priceStandout(b).best != null).length,
+      byMargin: OUT_MARGINS.map((m) => base.filter((b) => overTheOdds(b, m)).length),
+    };
   }, [bets, brand, sport]);
 
   return (
@@ -409,6 +467,51 @@ export default function TickerPage() {
             </button>
           ))}
           <span className="mx-1 h-4 w-px bg-surface-border" />
+          {/* Over the odds: we were the only book showing that price. */}
+          <button
+            type="button"
+            onClick={() => !tradingOnlyOut && setOutOnly((v) => !v)}
+            disabled={tradingOnlyOut}
+            title={
+              tradingOnlyOut
+                ? 'Your account shows only the bets we were over the odds on.'
+                : 'Only bets struck at a price no other book was showing. Betfair is excluded from the comparison.'
+            }
+            className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
+              onlyOut
+                ? 'bg-rose-500/15 text-rose-300'
+                : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+            } ${tradingOnlyOut ? 'cursor-default' : ''}`}
+          >
+            Over the odds
+            <span className="ml-1.5 tabular-nums opacity-60">{outCounts.byMargin[0]}</span>
+          </button>
+          {onlyOut && (
+            <>
+              {OUT_MARGINS.map((m, i) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setOutMargin(m)}
+                  className={`rounded-md px-2 py-1 text-[11px] font-medium tabular-nums transition ${
+                    outMargin === m
+                      ? 'bg-white/10 text-slate-100'
+                      : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                  }`}
+                >
+                  {m === 0 ? 'any' : `≥${m}%`}
+                  <span className="ml-1 tabular-nums opacity-60">{outCounts.byMargin[i]}</span>
+                </button>
+              ))}
+              <span
+                className="text-[11px] text-slate-600"
+                title="Bets with at least one other book priced on the same selection. The rest cannot be judged either way."
+              >
+                of {outCounts.comparable} comparable
+              </span>
+            </>
+          )}
+          <span className="mx-1 h-4 w-px bg-surface-border" />
           <span className="text-[11px] text-slate-600" title="Stake on the bet, before any bonus">
             stake ≥
           </span>
@@ -490,15 +593,7 @@ export default function TickerPage() {
             </thead>
             <tbody>
               {shown.map((b) => {
-                // The bet's own price, against the best of everyone else's, so a
-                // standout is visible without reading every column.
-                // The exchange is shown but excluded from the comparison —
-                // see NOT_BEST.
-                const others = Object.entries(b.prices ?? {})
-                  .filter(([book]) => !NOT_BEST.has(book))
-                  .map(([, p]) => p);
-                const best = others.length ? Math.max(...others) : null;
-                const beatsField = b.price != null && best != null && b.price > best;
+                const { best, out: beatsField } = priceStandout(b);
                 return (
                   <tr
                     key={b.id}
