@@ -127,8 +127,20 @@ export default async function handler(req, res) {
       '/api/bets', '/api/ticker', '/api/pulse', '/api/events', '/api/event',
     ]);
     const PER_FIXTURE = new Set(['/api/odds', '/api/event/details']);
+    /*
+     * The bet feed is watched, not visited.
+     *
+     * Everything else on this list is something you look at; the ticker is
+     * something someone sits in front of waiting for a row to appear. A 30s
+     * browser window on top of the function's own cache meant a poll could be
+     * answered from the browser twice over before anything new could reach it,
+     * so five seconds here — the response is cheap to serve and the only
+     * question it answers is "what has just come through".
+     */
+    const LIVE_FEED = new Set(['/api/ticker']);
     const statusful = CHEAP_AND_LIVE.has(url.pathname);
     const perFixture = PER_FIXTURE.has(url.pathname);
+    const liveFeed = LIVE_FEED.has(url.pathname);
     /*
      * Behind a sign-in these become PRIVATE.
      *
@@ -142,7 +154,9 @@ export default async function handler(req, res) {
      * cache (see TTL in routes.mjs) is what spares the sixteen-sport drain,
      * not the CDN.
      */
-    const window = statusful
+    const window = liveFeed
+      ? [5, 15]
+      : statusful
       ? [30, 60]
       : perFixture
         ? [60, 120]

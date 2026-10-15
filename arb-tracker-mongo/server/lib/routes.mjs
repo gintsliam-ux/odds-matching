@@ -37,7 +37,14 @@ import {
 // The board and the pulse are polled on a 60s timer by every open tab, so they
 // are cached just under that. Per-fixture odds are cheap (one indexed read) but
 // get hammered when you click through a list, so they get a short TTL too.
-const TTL = { board: 45_000, pulse: 45_000, odds: 10_000, day: 5 * 60_000, meta: 10 * 60_000, bets: 60_000, mapping: 5 * 60_000 };
+/*
+ * `bets` is 20s rather than 60s because the ticker is watched rather than
+ * visited, and a client polling faster than this cache cannot see anything
+ * newer — the same stored payload comes back. Dropping it is what makes a
+ * quicker poll mean anything. It costs a rebuild every 20s on a busy instance,
+ * which stale-while-revalidate hands over instantly and refreshes behind.
+ */
+const TTL = { board: 45_000, pulse: 45_000, odds: 10_000, day: 5 * 60_000, meta: 10 * 60_000, bets: 20_000, mapping: 5 * 60_000 };
 
 /* ---------------------------------------------------------------- routes */
 

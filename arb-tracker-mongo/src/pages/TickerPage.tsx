@@ -310,11 +310,15 @@ export default function TickerPage() {
      * live, with a connection that is open and delivering nothing. Nobody
      * watching a bet feed can afford to find that out late.
      *
-     * So it keeps polling, slowly, while the stream is up: 60s as a backstop
-     * against 30s when the stream is the only thing arriving. In place, with no
-     * loading toggle, so the table never flashes while someone is reading it.
+     * 10s when the poll is the only thing arriving, 20s as a backstop while
+     * the stream is up. Both are below the server's own 20s cache on this
+     * route and its 5s browser window, so a poll can actually return something
+     * newer — faster than either of those would just re-read the same payload.
+     *
+     * In place, with no loading toggle, so the table never flashes while
+     * someone is reading it.
      */
-    const startPolling = (ms = 30_000) => {
+    const startPolling = (ms = 10_000) => {
       if (poll) clearInterval(poll);
       poll = setInterval(load, ms);
     };
@@ -356,7 +360,7 @@ export default function TickerPage() {
       () => {
         if (cancelled) return;
         setLive(true);
-        startPolling(60_000);
+        startPolling(20_000);
         // A reopen means the previous connection ended — a serverless host
         // closes it at the duration cap — so anything struck in the gap was
         // never pushed. One refetch closes it.
