@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { SignOut } from '../components/SignOut';
 import { Link } from 'react-router-dom';
 import { Loader2, Radio, Search as SearchIcon, X } from 'lucide-react';
 import { EventDetail } from '../components/EventDetail';
@@ -125,9 +126,8 @@ export default function SearchPage() {
               Board
             </Link>
           )}
-          <span className="ml-auto text-[11px] text-slate-600">
-            {user?.username}
-            <span className="ml-1.5 uppercase tracking-wide text-slate-700">{user?.role}</span>
+          <span className="ml-auto">
+            <SignOut />
           </span>
         </div>
 

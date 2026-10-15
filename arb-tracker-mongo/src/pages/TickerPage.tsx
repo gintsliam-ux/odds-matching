@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { SignOut } from '../components/SignOut';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Check, Copy, Gift, Loader2, Radio } from 'lucide-react';
 import { fetchTicker, subscribeTicker, type TickerBet } from '../lib/db';
@@ -411,6 +412,9 @@ export default function TickerPage() {
             </span>
           </span>
           {state === 'loading' && <Loader2 size={13} className="animate-spin text-slate-600" />}
+          <span className="ml-auto">
+            <SignOut />
+          </span>
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-1.5">

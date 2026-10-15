@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { SignOut } from '../components/SignOut';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Loader2, TrendingDown } from 'lucide-react';
 import { fetchMovers, type Mover, type Movers } from '../lib/db';
@@ -213,7 +214,7 @@ export function MoversPage() {
           </div>
 
           {c && (
-            <div className="ml-auto flex flex-wrap items-center gap-4 text-[11px] text-slate-500">
+            <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-500">
               <span>
                 <b className="text-slate-300 tabular-nums">{c.movers}</b> movers
               </span>
@@ -231,6 +232,9 @@ export function MoversPage() {
               </span>
             </div>
           )}
+          <span className="ml-auto">
+            <SignOut />
+          </span>
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 border-t border-surface-border/60 px-4 py-2">

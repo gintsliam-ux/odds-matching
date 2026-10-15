@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { SignOut } from '../components/SignOut';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, ArrowLeft, CheckCircle2, Loader2 } from 'lucide-react';
 import { fetchLateBets, type LateBets } from '../lib/db';
@@ -85,7 +86,7 @@ export default function LateBetsPage() {
           </div>
 
           {c && (
-            <div className="ml-auto flex flex-wrap items-center gap-4 text-[11px] text-slate-500">
+            <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-500">
               <span>
                 <b className="text-rose-300 tabular-nums">{c.late}</b> late
               </span>
@@ -108,6 +109,9 @@ export default function LateBetsPage() {
               )}
             </div>
           )}
+          <span className="ml-auto">
+            <SignOut />
+          </span>
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 border-t border-surface-border/60 px-4 py-2">

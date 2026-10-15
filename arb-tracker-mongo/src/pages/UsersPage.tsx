@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { SignOut } from '../components/SignOut';
 import { KeyRound, Plus, Trash2, X } from 'lucide-react'
 import {
   createUser,
@@ -107,6 +108,9 @@ export default function Users() {
             Shared with the other tools on this database — changes here apply everywhere.
           </p>
         </div>
+        <span className="ml-auto mr-2 shrink-0">
+          <SignOut />
+        </span>
         <button
           onClick={() => {
             setAdding((v) => !v)

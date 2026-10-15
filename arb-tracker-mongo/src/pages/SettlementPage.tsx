@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { SignOut } from '../components/SignOut';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, CheckCircle2, Clock, Loader2 } from 'lucide-react';
 import { fetchSettlement, type Settlement } from '../lib/db';
@@ -83,7 +84,7 @@ export default function SettlementPage() {
           </div>
 
           {c && (
-            <div className="ml-auto flex flex-wrap items-center gap-4 text-[11px] text-slate-500">
+            <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-500">
               <span>
                 <b className="text-slate-300 tabular-nums">{c.events}</b> events
               </span>
@@ -101,6 +102,9 @@ export default function SettlementPage() {
               </span>
             </div>
           )}
+          <span className="ml-auto">
+            <SignOut />
+          </span>
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 border-t border-surface-border/60 px-4 py-2">

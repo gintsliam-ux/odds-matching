@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { SignOut } from '../components/SignOut';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, ArrowLeft, Check, Link2, Link2Off, Loader2, Pencil, Plus, Search, Users } from 'lucide-react';
 import { CompetitionPicker } from '../components/CompetitionPicker';
@@ -605,6 +606,7 @@ export default function MappingPage() {
               </button>
             )}
           </div>
+          <SignOut />
         </div>
 
         {/* Sports first: the coarsest useful cut, and the one that makes a
