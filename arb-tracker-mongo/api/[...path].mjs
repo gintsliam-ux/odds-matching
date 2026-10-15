@@ -164,10 +164,45 @@ export default async function handler(req, res) {
         // applied on one page load was missing from the next.
         : [300, 600];
     const [fresh, stale] = window;
+
+    /*
+     * The cache must key on WHO is asking, not just what was asked.
+     *
+     * `private` was treated as settling this, and it only settles half: it
+     * stops the CDN storing a signed-in response, but the browser's own cache
+     * keys on the URL alone, and one browser is more than one identity. Two
+     * routes now answer differently per role — `/api/capabilities` says whether
+     * the hover card may open at all, and `/api/odds` has the price history
+     * STRIPPED for a trading account — so signing out of trading and in as
+     * admin served the trading answer back from the browser for the next five
+     * minutes. The symptom was an admin with no flucs on hover and nothing
+     * wrong with the gate: the capability said false, and the odds payload that
+     * came with it genuinely had no ladder in it to draw.
+     *
+     * `Vary: Cookie` puts the session in the cache key, so a different sign-in
+     * is a different entry rather than a hit. Hit rate is unchanged within a
+     * session, which is the only place it was doing any good — the function's
+     * in-process cache is what spares the upstream drain, not this.
+     */
+    if (AUTH_CONFIGURED) res.setHeader('vary', 'Cookie');
+
+    /*
+     * Identity itself is never cached, `Vary` or no `Vary`.
+     *
+     * Only capabilities needs saying here: the session routes and everything
+     * carrying a `set-cookie` are already no-store by the early return above.
+     * This one slipped through it by being a plain 200 that looks like data and
+     * is actually an answer about WHO — it decides what the UI offers, it is
+     * computed with no I/O so caching it buys nothing, and `Vary` alone would
+     * still leave a role changed IN PLACE (or a VIEW_AS override) waiting five
+     * minutes to take hold.
+     */
     res.setHeader(
       'cache-control',
       out.status === 200 && !empty
-        ? AUTH_CONFIGURED
+        ? url.pathname === '/api/capabilities'
+          ? 'no-store'
+          : AUTH_CONFIGURED
           /*
            * `private` stops the shared cache storing a signed-in response, but
            * dropping stale-while-revalidate with it was a mistake: the CDN used
