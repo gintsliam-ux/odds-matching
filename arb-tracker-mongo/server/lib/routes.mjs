@@ -376,9 +376,40 @@ const AUTH_CONFIGURED = Boolean(process.env.AUTH_SECRET);
 
 /* ------------------------------------------------------------- auth routes */
 
+/**
+ * Look at the desk as another role, on the local build only.
+ *
+ * `VIEW_AS=trading npm run dev` serves every request as though the signed-in
+ * account held that role — the nav loses what it cannot reach, the ticker locks
+ * to the over-the-odds rows, and the price grid arrives with its history
+ * stripped. It exists because the trading view could not be reviewed any other
+ * way without someone's password, and a restricted view nobody can see is one
+ * nobody can check.
+ *
+ * Two deliberate limits, because this is a role override and those are worth
+ * being careful with:
+ *
+ *   It only ever RESTRICTS. `trading` is the one value accepted, so this cannot
+ *   hand anybody admin — the failure mode is a view that shows too little.
+ *
+ *   It is ignored unless this instance reads Mongo directly, which only the
+ *   tailnet build does. Setting it in the deployed environment does nothing at
+ *   all; `isApi` is checked, not an env flag that could be set by mistake.
+ *
+ * The COOKIE keeps the real role. Nothing is written, so unsetting the variable
+ * restores the account with no trace left behind.
+ */
+const VIEW_AS = isMongo && process.env.VIEW_AS === 'trading' ? 'trading' : null;
+
+/** The session as this instance should treat it. */
+const whoami = (cookies) => {
+  const me = sessionFromCookies(cookies);
+  return me && VIEW_AS ? { ...me, role: VIEW_AS } : me;
+};
+
 async function authRoute(method, searchParams, body, cookies) {
   if (method === 'GET') {
-    const me = sessionFromCookies(cookies);
+    const me = whoami(cookies);
     if (!me) return { status: 401, body: { error: 'not signed in' } };
     // Slide the window forward, so a desk in use never expires — only a real
     // absence long enough to outrun the cookie's life signs you out.
@@ -396,7 +427,13 @@ async function authRoute(method, searchParams, body, cookies) {
   const user = await authenticate(b.username, b.password);
   // Deliberately vague — do not say which half was wrong.
   if (!user) return { status: 401, body: { error: 'Incorrect username or password' } };
-  return { status: 200, body: { user }, headers: { 'set-cookie': cookieHeader(signSession(user)) } };
+  // The cookie carries the real role; the body carries the role being viewed,
+  // so the client does not believe it is an admin until its next session poll.
+  return {
+    status: 200,
+    body: { user: VIEW_AS ? { ...user, role: VIEW_AS } : user },
+    headers: { 'set-cookie': cookieHeader(signSession(user)) },
+  };
 }
 
 /**
@@ -452,7 +489,7 @@ export async function handleApi({ method, pathname, searchParams, body, cookies 
      * that would open onto nothing. Read from the cookie when there is one and
      * fall through to the instance's own answer when there is not.
      */
-    const who = AUTH_CONFIGURED ? sessionFromCookies(cookies) : null;
+    const who = AUTH_CONFIGURED ? whoami(cookies) : null;
     const noHistory = who?.role === 'trading'
       ? { priceHistory: false, priceSeries: false }
       : null;
@@ -471,7 +508,7 @@ export async function handleApi({ method, pathname, searchParams, body, cookies 
   if (path === '/api/auth') return authRoute(method, searchParams, body, cookies);
   if (path === '/api/auth/handoff') return handoffRoute(method, searchParams);
 
-  const me = AUTH_CONFIGURED ? sessionFromCookies(cookies) : null;
+  const me = AUTH_CONFIGURED ? whoami(cookies) : null;
   if (AUTH_CONFIGURED && !me) return { status: 401, body: { error: 'not signed in' } };
 
   if (path === '/api/users') return usersRoute(method, body, me);
