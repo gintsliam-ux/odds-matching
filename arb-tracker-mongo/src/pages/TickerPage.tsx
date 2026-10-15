@@ -714,7 +714,17 @@ export default function TickerPage() {
                     <td className="max-w-[16rem] truncate px-2 py-1.5 text-slate-200" title={b.event ?? ''}>
                       {b.fixtureId && b.event ? (
                         <Link
-                          to={`/event/${eventSlug(b.event)}/${b.fixtureId}`}
+                          /*
+                           * A trading account cannot open the event page — it
+                           * lives inside the board — so its link goes to the
+                           * prices page for the same fixture, which is the same
+                           * grid without the rail around it.
+                           */
+                          to={
+                            user?.role === 'trading'
+                              ? `/search?fixture=${encodeURIComponent(b.fixtureId)}`
+                              : `/event/${eventSlug(b.event)}/${b.fixtureId}`
+                          }
                           className="hover:text-emerald-300"
                         >
                           {b.event}

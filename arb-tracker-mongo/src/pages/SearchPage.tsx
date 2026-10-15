@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../lib/useAuth';
 import { SignOut } from '../components/SignOut';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Loader2, Radio, Search as SearchIcon, X } from 'lucide-react';
 import { EventDetail } from '../components/EventDetail';
 import { LeagueBadge } from '../components/LeagueBadge';
-import { fetchOdds, searchEvents, SEARCH_MIN_CHARS } from '../lib/db';
+import { fetchEventById, fetchOdds, searchEvents, SEARCH_MIN_CHARS } from '../lib/db';
 import { buildMarkets, type Bookmaker, type MarketGroup } from '../lib/markets';
 import type { SportEvent } from '../lib/types';
 
@@ -35,6 +35,7 @@ function startsIn(iso: string, now: number): string {
 
 export default function SearchPage() {
   const { user } = useAuth();
+  const [params] = useSearchParams();
   const [term, setTerm] = useState('');
   const [hits, setHits] = useState<SportEvent[]>([]);
   const [searching, setSearching] = useState(false);
@@ -104,8 +105,39 @@ export default function SearchPage() {
   // Land straight on the one result, so a full name is one keystroke from prices.
   useEffect(() => {
     if (hits.length === 1 && hits[0].id !== selected?.id) open(hits[0]);
-    if (hits.length === 0) setSelected(null);
-  }, [hits, selected?.id, open]);
+    if (hits.length === 0 && !params.get('fixture')) setSelected(null);
+  }, [hits, selected?.id, open, params]);
+
+  /*
+   * `?fixture=<id>` opens straight onto one fixture's prices.
+   *
+   * This is where a trading account arrives from the ticker: the bet rows link
+   * to the event page, which that role cannot open, so for them the link comes
+   * here instead and this is what makes it land somewhere useful rather than on
+   * an empty search box.
+   *
+   * Honoured ONCE per id, which the ref is for. Keying the effect on whether
+   * the id matches the open fixture instead would yank the page back the moment
+   * someone clicked a different result, since the parameter is still in the URL.
+   */
+  const honoured = useRef<string | null>(null);
+  useEffect(() => {
+    const id = params.get('fixture');
+    if (!id || honoured.current === id) return;
+    honoured.current = id;
+    fetchEventById(id)
+      .then((e) => {
+        if (!e) {
+          setError('That fixture is no longer on the board.');
+          return;
+        }
+        open(e);
+        // Seed the search with one side, so the list has their other fixtures
+        // in it rather than sitting empty beside a populated grid.
+        setTerm(e.home || e.name);
+      })
+      .catch(() => setError('Could not open that fixture.'));
+  }, [params, open]);
 
   return (
     <div className="flex h-dvh flex-col bg-surface-base text-slate-200">
