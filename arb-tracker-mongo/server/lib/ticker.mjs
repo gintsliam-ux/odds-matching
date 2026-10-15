@@ -1218,15 +1218,22 @@ export async function betTicker() {
     .slice(0, LIMIT);
 
   /*
-   * The segment pass touches only the bets, so it has no reason to hold up
-   * enrichment -- it ran first purely because it was written first, and that
-   * put its quarter-second on the critical path of every cold build.
+   * BEFORE enrich, and it has to stay that way.
+   *
+   * I moved this alongside enrich to save its quarter-second, on the reasoning
+   * that it "only touches the bets". That is the reason it cannot be moved:
+   * enrich also touches them and then PROJECTS them into new objects on the way
+   * out, so a mutation that lands after that projection is thrown away. The
+   * visible fault was a mybet bet on "First Tryscorer - Australia vs New
+   * Zealand" reporting its market as "Win" — bet_type, the fallback — because
+   * the pass that reads the market out of the event string had not finished
+   * when the row was built. It raced, so it was wrong sometimes and right
+   * others, which is worse than being wrong always.
    */
-  const segments = timed(timings, 'segments', () => classifyLeadSegments(bets).catch(() => {}));
-  const [{ bets: enriched, pricesError }] = await Promise.all([
-    timed(timings, 'enrich', () => enrich(bets, timings)),
-    segments,
-  ]);
+  await timed(timings, 'segments', () => classifyLeadSegments(bets).catch(() => {}));
+  const { bets: enriched, pricesError } = await timed(timings, 'enrich', () =>
+    enrich(bets, timings),
+  );
   return {
     configured: true,
     source: mongoConfigured ? 'mongo' : 'odds-surface',
