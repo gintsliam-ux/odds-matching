@@ -194,21 +194,15 @@ function TagChip({ tags }: { tags: string[] }) {
   );
 }
 
-/**
- * Stake thresholds for the filter.
+/*
+ * The stake filter is a typed box rather than preset buttons, so any figure
+ * can be asked for.
  *
- * Taken from the real spread over a 3-day window rather than round numbers for
- * their own sake: median stake $71, p75 $240, p90 $676, p99 $6,148. So $100 is
- * roughly the halfway mark, $500 is the top sixth and $1,000 the top twelfth.
- *
- * Filtered HERE and not in the query, which is the one design choice in this.
- * Bets also arrive on a change stream, and a server-side filter would govern
- * the fetched batch while every pushed bet walked straight past it. Doing it on
- * the client covers both paths with one rule, needs no second cache key per
- * threshold, and costs nothing on 200 rows. It only works because the stakes
- * are not long-tailed: at $1,000 there are still ~16 rows of 200 to look at.
+ * Filtered on the CLIENT, which is the one design choice in it. Bets also
+ * arrive on a change stream, and a server-side filter would govern the fetched
+ * batch while every pushed bet walked straight past it. One rule here covers
+ * both paths and costs nothing on 200 rows.
  */
-const STAKES = [0, 100, 500, 1000];
 
 export default function TickerPage() {
   const { user } = useAuth();
@@ -216,7 +210,13 @@ export default function TickerPage() {
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [brand, setBrand] = useState<'all' | 'swiftbet' | 'mybet' | 'multis'>('all');
   const [sport, setSport] = useState<string>('all');
-  const [minStake, setMinStake] = useState(0);
+  /*
+   * Kept as the typed text, not a number. Parsing on every keystroke turns "1."
+   * into 1 and then fights the caret when the next character arrives; the value
+   * is read as a number only where it is used.
+   */
+  const [stakeText, setStakeText] = useState('');
+  const minStake = Number(stakeText) > 0 ? Number(stakeText) : 0;
   /*
    * A trading account sees only the bets we were over the odds on — that is
    * what the feed is for from that desk. Forced rather than defaulted, so it
@@ -351,16 +351,6 @@ export default function TickerPage() {
     return c;
   }, [bets]);
 
-  // What each threshold would leave, under the brand and sport filters already
-  // on — a chip that promises 16 rows and delivers 2 is worse than no count.
-  const stakeCounts = useMemo(() => {
-    const base = bets.filter(
-      (b) => (brand === 'all' || b.brand === brand) && (sport === 'all' || b.sport === sport),
-    );
-    return STAKES.map(
-      (t) => base.filter((b) => t === 0 || (typeof b.stake === 'number' && b.stake >= t)).length,
-    );
-  }, [bets, brand, sport]);
 
   // How many are out of line at each margin, and how many could be judged at
   // all — the second number is what stops the first being read as a rate.
@@ -512,24 +502,30 @@ export default function TickerPage() {
             </>
           )}
           <span className="mx-1 h-4 w-px bg-surface-border" />
-          <span className="text-[11px] text-slate-600" title="Stake on the bet, before any bonus">
+          <label
+            className="flex items-center gap-1.5 text-[11px] text-slate-600"
+            title="Stake on the bet, before any bonus. Blank shows everything."
+          >
             stake ≥
-          </span>
-          {STAKES.map((t, i) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setMinStake(t)}
-              className={`rounded-md px-2.5 py-1 text-[11px] font-medium tabular-nums transition ${
-                minStake === t
-                  ? 'bg-emerald-500/15 text-emerald-300'
-                  : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-              }`}
-            >
-              {t === 0 ? 'Any' : money(t)}
-              <span className="ml-1.5 tabular-nums opacity-60">{stakeCounts[i]}</span>
-            </button>
-          ))}
+            <span className="relative">
+              <span className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-600">
+                $
+              </span>
+              <input
+                value={stakeText}
+                onChange={(e) => setStakeText(e.target.value.replace(/[^\d.]/g, ''))}
+                inputMode="decimal"
+                placeholder="0"
+                aria-label="Minimum stake"
+                className={`w-20 rounded-md border bg-surface-raised/40 py-1 pl-4 pr-1.5 text-[11px] tabular-nums text-slate-100 outline-none placeholder:text-slate-600 ${
+                  minStake > 0 ? 'border-emerald-500/40' : 'border-surface-border'
+                }`}
+              />
+            </span>
+            {minStake > 0 && (
+              <span className="tabular-nums text-slate-500">{shown.length}</span>
+            )}
+          </label>
         </div>
       </header>
 
