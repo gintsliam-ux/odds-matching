@@ -84,8 +84,43 @@ const SPORT_SINGLE = {
   },
   multi_bets: {
     // Multis are not singles; a cancellation is not a bet. See VOID_BET.
-    bet_type: { $not: /multi|cancellation/i },
-    sport_name: { $not: RACING, $nin: [null, ''] },
+    //
+    // Each field is stated TWICE, and the pair is the whole point. The regex is
+    // the rule; the `$nin` is the same rule spelled as values so the index can
+    // act on it. Mongo will not push `$not` + regex down to an index scan — it
+    // evaluates it on the FETCH stage, after reading the document — so with the
+    // regex alone this query read 15,356 documents to return 200, every one of
+    // them fetched only to be thrown away. Naming the values gets that to 292.
+    //
+    // Written this way round, rather than as a positive list of the sports we
+    // DO want, because the two fail in opposite directions. An allow-list omits
+    // whatever it has not heard of: the day a new sport is listed it is missing
+    // from the feed and nothing says so. Excluding the racing values instead
+    // means anything new is on the feed by default, which is the error you find
+    // out about immediately. And if a new RACING label appears upstream, the
+    // regex still catches it — that bet costs one wasted fetch and is filtered
+    // correctly. So the list can only ever be a performance hint; it is never
+    // what decides whether something is a bet.
+    //
+    // Both lists are every stored value its regex matches, as of 2026-10-15
+    // (37 distinct sports, 12 bet types — checked, not guessed).
+    bet_type: { $not: /multi|cancellation/i, $nin: ['Cancellation', 'Multi'] },
+    sport_name: {
+      $not: RACING,
+      $nin: [
+        'Greyhound Racing',
+        'Harness Racing',
+        // Matched by the regex, so it has always been off the ticker. Kept here
+        // to say what the rule does rather than quietly change it.
+        'Motor Racing',
+        'Racing - Gallops',
+        'Racing - Greyhounds',
+        'Racing - Harness',
+        'Racing - Other',
+        null,
+        '',
+      ],
+    },
     bet_status: { $not: COUNTER_ENTRY },
   },
 };
@@ -238,8 +273,47 @@ export function mapSwift(b) {
     eventId: (b.derived?.legs_event_ids ?? [])[0] ?? null,
   };
 }
+/**
+ * The index the query above needs, declared where the query is.
+ *
+ * `{transaction_date: -1, sport_name: 1, bet_type: 1}` — the sort on the
+ * leading key, the two `$nin` fields behind it so the scan can discard racing
+ * and multis on the index keys instead of fetching 15,000 documents to return
+ * 200.
+ *
+ * It is asked for here rather than left as something somebody typed into a
+ * shell once, because the scraper re-syncs `multi_bets` wholesale: an index
+ * created by hand is one `drop` away from gone, and the symptom would be the
+ * ticker quietly getting slower with nothing to point at. Once per process and
+ * cached, following `sso_used_tickets` in auth.mjs — `createIndex` on an index
+ * that already exists is a no-op, so the steady-state cost is one cheap command
+ * per cold start.
+ *
+ * Failure is swallowed deliberately. The index is a performance hint and the
+ * regexes are the rule, so a read-only user or a build already in progress
+ * should mean a slower ticker, never a broken one.
+ *
+ * NOT awaited, which is the part that matters. On an existing index this is one
+ * cheap command, but on a missing one it is the build — 112s when it was made,
+ * 210s the second time — and awaiting that would hang the first ticker request
+ * for three minutes to make the next one faster. The query does not need the
+ * index to be correct, only to be quick, so it is started and left to finish on
+ * its own while this read goes through the slow plan.
+ */
+let tickerIndexed;
+function ensureTickerIndex(db) {
+  tickerIndexed ??= db
+    .collection('multi_bets')
+    .createIndex(
+      { transaction_date: -1, sport_name: 1, bet_type: 1 },
+      { name: 'tick_date_sport_type' },
+    )
+    .catch(() => {});
+}
+
 /** Mybet and Multis — one collection, split on the licence it was struck under. */
 async function multiSingles(db, since) {
+  ensureTickerIndex(db);
   const rows = await db
     .collection('multi_bets')
     .find({ ...SPORT_SINGLE.multi_bets, transaction_date: { $gte: since } })

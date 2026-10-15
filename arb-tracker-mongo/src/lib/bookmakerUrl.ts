@@ -80,16 +80,16 @@ export function bookmakerUrl(
  * something the feed carries. So it is the sports page, and the click is "go
  * and look at them", not "go to this market".
  *
- * Every URL here is the one the site actually SETTLES on, checked rather than
- * typed from memory, because two of them do not go where they look:
+ * Mostly the URL here is the one the site actually SETTLES on, checked rather
+ * than typed from memory, because sportsbet does not go where it looks:
+ * `sportsbet.com.au/sports` redirects to the homepage, its sports page is
+ * `/betting/sports`, and that itself lands on `/betting/upcoming-sports`. Using
+ * the resolved address saves the hop and cannot rot the day a redirect is
+ * dropped.
  *
- *   tab.com.au/sports            redirects to /sports-betting
- *   sportsbet.com.au/sports      redirects to the homepage — its sports page
- *                                is /betting/sports, which itself lands on
- *                                /betting/upcoming-sports
- *
- * Using the resolved address saves the hop and means the link cannot rot the
- * day a redirect is dropped.
+ * TAB is the deliberate exception: its bare domain, asked for directly. The
+ * resolved sports page was `/sports-betting`, but the home page is where you
+ * want to land on that one.
  *
  * bet365 answers 403 to anything that is not a browser, so that one is their
  * published address rather than a confirmed response — and the tracking
@@ -102,7 +102,7 @@ export function bookmakerUrl(
  * book with no entry simply renders as it did before.
  */
 const BOOK_SITE: Record<string, string> = {
-  tab: 'https://www.tab.com.au/sports-betting',
+  tab: 'https://www.tab.com.au/',
   sportsbet: 'https://www.sportsbet.com.au/betting/upcoming-sports',
   pinnacle: 'https://www.pinnacle.com/en/',
   betfair: 'https://www.betfair.com.au/exchange/plus/',

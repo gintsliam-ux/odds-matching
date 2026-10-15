@@ -135,15 +135,29 @@ function bookColumns(bets: TickerBet[]): string[] {
 }
 
 /**
- * The head of an id, with the whole thing a click away.
+ * An id, as much of it as is worth reading, with the whole thing a click away.
  *
- * Three characters is not an identifier, it is a glance — enough to see that
- * two rows are the same punter without the column carrying a UUID. The copy is
- * the part that is actually useful, so the whole chip is the button.
+ * It used to show three characters of everything, on the reasoning that three
+ * is enough to see two rows are the same punter and a column cannot carry a
+ * UUID. Half right. The two sides are not the same shape:
+ *
+ *   swiftbet        36-char UUIDs       1c0a3a05-110b-4195-…
+ *   mybet / multis  5-digit user, 7-digit bet   33710 / 6608715
+ *
+ * so a blanket three characters rendered bet 6608715 as "660" — and a mybet bet
+ * id is the thing you quote when you ask why a bet mapped the way it did. The
+ * whole number is seven characters and fits. So short ids are shown whole and
+ * only UUIDs are cut, at eight, which is where a git hash settles for the same
+ * reason.
+ *
+ * The copy stays the primary action, so the chip is still the button.
  */
+const SHOW_WHOLE = 10;
+
 function IdChip({ value, title }: { value: string | null; title: string }) {
   const [copied, setCopied] = useState(false);
   if (!value) return null;
+  const long = value.length > SHOW_WHOLE;
   return (
     <button
       type="button"
@@ -158,13 +172,14 @@ function IdChip({ value, title }: { value: string | null; title: string }) {
           () => {},
         );
       }}
-      className="group inline-flex items-center gap-0.5 rounded bg-white/5 px-1 py-0.5 font-mono text-[9px] leading-none text-slate-400 transition hover:bg-white/10 hover:text-slate-200"
+      className="group inline-flex w-full items-center gap-0.5 rounded bg-white/5 px-1 py-0.5 font-mono text-[10px] leading-none text-slate-400 transition hover:bg-white/10 hover:text-slate-200"
     >
-      {value.slice(0, 3)}
+      <span className="truncate">{long ? value.slice(0, 8) : value}</span>
+      {long && <span className="shrink-0 opacity-40">…</span>}
       {copied ? (
-        <Check size={8} className="text-emerald-400" />
+        <Check size={9} className="ml-auto shrink-0 text-emerald-400" />
       ) : (
-        <Copy size={8} className="opacity-0 transition group-hover:opacity-60" />
+        <Copy size={9} className="ml-auto shrink-0 opacity-0 transition group-hover:opacity-60" />
       )}
     </button>
   );
@@ -230,10 +245,10 @@ function TagChip({ tags }: { tags: string[] }) {
   return (
     <span
       title={tags.join(' · ')}
-      className={`inline-flex max-w-[7rem] items-center gap-0.5 truncate rounded px-1 py-0.5 text-[9px] leading-none ${tone}`}
+      className={`inline-flex max-w-full items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] leading-none ${tone}`}
     >
       <span className="truncate">{first}</span>
-      {rest.length > 0 && <span className="opacity-60">+{rest.length}</span>}
+      {rest.length > 0 && <span className="shrink-0 opacity-60">+{rest.length}</span>}
     </span>
   );
 }
@@ -645,7 +660,18 @@ export default function TickerPage() {
           <table className="w-full border-collapse text-[12px]">
             <thead className="sticky top-0 z-10 bg-surface-raised text-[10px] uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-3 py-2 text-left font-medium">Brand</th>
+                {/*
+                  Brand, User, Tag and Bet were one cell under the single
+                  heading "Brand" — so the header named one of the four things
+                  in it, and the two id chips sat either side of the tag in the
+                  same grey, at the same width, with nothing to say which was
+                  the punter and which was the bet. Four columns, four headings,
+                  and each one a fixed width so the eye can run down it.
+                */}
+                <th className="w-[4.5rem] px-3 py-2 text-left font-medium">Brand</th>
+                <th className="w-[6.5rem] px-2 py-2 text-left font-medium">User</th>
+                <th className="w-[9rem] px-2 py-2 text-left font-medium">Tag</th>
+                <th className="w-[6.5rem] px-2 py-2 text-left font-medium">Bet</th>
                 <th className="px-2 py-2 text-left font-medium">Time</th>
                 <th className="px-2 py-2 text-left font-medium">Start</th>
                 <th className="px-2 py-2 text-left font-medium">Sport</th>
@@ -713,10 +739,16 @@ export default function TickerPage() {
                             <span className={tone}>{label}</span>
                           );
                         })()}
-                        <IdChip value={b.userId} title="User" />
-                        <TagChip tags={b.tags ?? []} />
-                        <IdChip value={b.betId} title="Bet" />
                       </span>
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <IdChip value={b.userId} title="User" />
+                    </td>
+                    <td className="min-w-0 px-2 py-1.5">
+                      <TagChip tags={b.tags ?? []} />
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <IdChip value={b.betId} title="Bet" />
                     </td>
                     <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-300">
                       {time(b.placedAt)}
