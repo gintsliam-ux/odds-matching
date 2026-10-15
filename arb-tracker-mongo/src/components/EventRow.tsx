@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { SportEvent } from '../lib/types';
 import { countdownFor, effectiveStatus, livePositionLabel, TONE_CLASSES } from '../lib/countdown';
 import { LeagueBadge } from './LeagueBadge';
@@ -9,7 +10,7 @@ interface Props {
   onSelect: (id: string) => void;
 }
 
-export function EventRow({ event, now, selected, onSelect }: Props) {
+function Row({ event, now, selected, onSelect }: Props) {
   const cd = countdownFor(event, now);
   // Live rows show where the game is up to instead of "LIVE"; the live tone and
   // blinker (from cd) stay.
@@ -51,3 +52,25 @@ export function EventRow({ event, now, selected, onSelect }: Props) {
     </button>
   );
 }
+
+/**
+ * Memoised, because the rail is long and the clock is fast.
+ *
+ * Nothing here is expensive on its own — a button, a crest, two lines of text —
+ * but the board carries ~2,500 of them and the page ticks every second, so React
+ * was reconciling every row sixty times a minute to redraw labels that had not
+ * changed. Most of them cannot change: `countdownFor` returns a constant for
+ * anything live, final or cancelled, and only minutes for anything more than
+ * half an hour out.
+ *
+ * Two things in App make this actually hold, and both are easy to undo by
+ * accident:
+ *   - `visible` no longer depends on the 1s tick, so `event` keeps its identity
+ *     between polls;
+ *   - `now` is QUANTISED per row to the resolution that row's own label needs,
+ *     so a row showing "3d" is handed a number that changes once a minute and a
+ *     row showing LIVE one that never changes.
+ * An inline `onSelect={() => …}` in the parent would also defeat it, which is
+ * why the callback takes the id.
+ */
+export const EventRow = memo(Row);

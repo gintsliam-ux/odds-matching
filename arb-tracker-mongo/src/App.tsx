@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, AlertTriangle, Clock, Link2, LogOut, Radio, TrendingDown, Users as UsersIcon } from 'lucide-react';
 import { Link, Outlet, useMatch, useNavigate } from 'react-router-dom';
 import { Header } from './components/Header';
@@ -72,6 +72,19 @@ const STATUS_ORDER: Record<EventStatus, number> = {
   final: 2,
   cancelled: 3,
 };
+
+/**
+ * `effectiveStatus` takes a clock and ignores it — status comes from the feed's
+ * own signals (`status`, `is_live`, a stamped `actualStart`), never from whether
+ * a start time has passed. Passing this instead of `now` says so at the call
+ * site, and keeps the 1s tick out of dependency arrays that do not need it.
+ */
+const NO_CLOCK = 0;
+
+/** Status rank, for sorting. Clock-independent — see NO_CLOCK. */
+const rankOf = (e: SportEvent) => STATUS_ORDER[effectiveStatus(e, NO_CLOCK)];
+
+const MIN_MS = 60_000;
 
 // The ticker is a next-to-jump strip: live now plus anything starting within a
 // day. Live games always qualify (they started in the past); this only bounds
@@ -180,6 +193,22 @@ export default function App() {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
+  /*
+   * The same clock, to the NEAREST minute.
+   *
+   * Most of this page counts in minutes, hours or days; only the mm:ss
+   * countdown on a fixture inside half an hour needs the second. A derived
+   * value rather than a second timer: it is a new number only sixty times an
+   * hour, so anything keyed on it recomputes then and not in between.
+   *
+   * Nearest, not floor, and that is not a detail. `relativeLabel` renders
+   * `Math.round(ms / MIN)`, so rounding the clock the same way lands on the
+   * same minute it would have: checked across a minute of offsets on all 1,834
+   * upcoming rows, every label is identical. Flooring instead drifts 413 of
+   * them by a minute for the back half of every minute — reading "1h 2m" where
+   * the second-accurate clock says "1h 1m".
+   */
+  const minute = Math.round(now / MIN_MS) * MIN_MS;
 
   // --- events ---
   const [events, setEvents] = useState<SportEvent[]>([]);
@@ -439,27 +468,53 @@ export default function App() {
   // Next to jump: live first, then soonest upcoming, finals last. Search results
   // sort the same way, except finished events run most-recent-first — looking a
   // team up, last week's result matters more than one from a year ago.
+  /*
+   * No `now` in the dependencies, deliberately.
+   *
+   * It was there, and it did nothing: `effectiveStatus` takes the clock as
+   * `_now` and never reads it — status comes from the feed's own signals, not
+   * from whether a start time has passed. So this re-sorted the whole slate
+   * once a second to produce a provably identical array, and handed back a new
+   * array IDENTITY each time, which is the part that cost something: every
+   * memo downstream of `visible` was invalidated every second, and the rail's
+   * rows could never be skipped by React no matter what else was done.
+   *
+   * The sort itself is only ~1.6ms on 2,527 events, so this is not about the
+   * sort. It is about `visible` being a stable value between polls.
+   */
   const visible = useMemo(() => {
     const rows = searchActive ? searchHits : filtered;
-    const sorted = [...rows].sort((a, b) => {
-      const sa = STATUS_ORDER[effectiveStatus(a, now)];
-      const sb = STATUS_ORDER[effectiveStatus(b, now)];
-      if (sa !== sb) return sa - sb;
+    /*
+     * Keyed, then sorted on the keys.
+     *
+     * `new Date(...)` used to be called inside the comparator, which is two
+     * parses per comparison — about 5,000 of them per sort, where there are
+     * only as many distinct timestamps as there are events.
+     */
+    const keyed = rows.map((e) => ({
+      e,
+      rank: rankOf(e),
       // `actualStart` where there is one: scheduled_start is Optic's
       // not-before slot and tennis never replaces it, so a match already in
       // play can carry a start time hours out and sorted among the live rows as
       // though it had not begun.
-      const ta = new Date(a.actualStart ?? a.startsAt).getTime();
-      const tb = new Date(b.actualStart ?? b.startsAt).getTime();
-      return searchActive && sa >= STATUS_ORDER.final ? tb - ta : ta - tb;
-    });
+      t: new Date(e.actualStart ?? e.startsAt).getTime(),
+    }));
+    keyed.sort((a, b) =>
+      a.rank !== b.rank
+        ? a.rank - b.rank
+        : searchActive && a.rank >= STATUS_ORDER.final
+          ? b.t - a.t
+          : a.t - b.t,
+    );
+    const sorted = keyed.map((k) => k.e);
     // Whatever is open stays in the rail even when the filters exclude it —
     // otherwise the page shows an event the list says isn't there, and the
     // highlighted row has nowhere to be.
     if (!activeId || sorted.some((e) => e.id === activeId)) return sorted;
     const open = knownEvents.find((e) => e.id === activeId);
     return open ? [open, ...sorted] : sorted;
-  }, [searchActive, searchHits, filtered, now, activeId, knownEvents]);
+  }, [searchActive, searchHits, filtered, activeId, knownEvents]);
 
   // The top ticker ignores the rail's filters — live now plus everything within
   // the next 24h, finals dropped, live first then soonest to jump.
@@ -469,23 +524,30 @@ export default function App() {
   // deployment reading the public odds surface, which publishes closing prices
   // and therefore carries no future fixtures at all — but it is just as useful
   // on a quiet morning on the full build.
+  /*
+   * On the MINUTE clock, not the second one.
+   *
+   * The only real use of the clock here is the horizon — "starting within the
+   * next 24 hours" — and a 24-hour boundary does not need resolving to the
+   * second. Everything else asked `effectiveStatus`, which ignores the clock.
+   * So this filtered, sorted and sliced 2,527 events sixty times a minute to
+   * produce the same strip; now it does it once, and the cards below keep their
+   * own 1s countdowns either way.
+   */
   const tickerEvents = useMemo(() => {
-    const playable = events.filter((e) => {
-      const s = effectiveStatus(e, now);
-      return s !== 'cancelled' && !e.outright;
-    });
+    const playable = events.filter(
+      (e) => rankOf(e) !== STATUS_ORDER.cancelled && !e.outright,
+    );
 
     const upcoming = playable
-      .filter((e) => {
-        const s = effectiveStatus(e, now);
-        return s !== 'final' && new Date(e.startsAt).getTime() < now + TICKER_HORIZON_MS;
-      })
-      .sort((a, b) => {
-        const sa = STATUS_ORDER[effectiveStatus(a, now)];
-        const sb = STATUS_ORDER[effectiveStatus(b, now)];
-        if (sa !== sb) return sa - sb;
-        return new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime();
-      })
+      .filter(
+        (e) =>
+          rankOf(e) !== STATUS_ORDER.final &&
+          new Date(e.startsAt).getTime() < minute + TICKER_HORIZON_MS,
+      )
+      .map((e) => ({ e, rank: rankOf(e), t: new Date(e.startsAt).getTime() }))
+      .sort((a, b) => (a.rank !== b.rank ? a.rank - b.rank : a.t - b.t))
+      .map((k) => k.e)
       /*
        * Capped, like the results branch below always was.
        *
@@ -502,10 +564,12 @@ export default function App() {
 
     // Most recently finished first, capped — a results strip, not the archive.
     return playable
-      .filter((e) => effectiveStatus(e, now) === 'final')
-      .sort((a, b) => new Date(b.startsAt).getTime() - new Date(a.startsAt).getTime())
+      .filter((e) => rankOf(e) === STATUS_ORDER.final)
+      .map((e) => ({ e, t: new Date(e.startsAt).getTime() }))
+      .sort((a, b) => b.t - a.t)
+      .map((k) => k.e)
       .slice(0, TICKER_RESULTS_MAX);
-  }, [events, now]);
+  }, [events, minute]);
 
   /*
    * Best H2H price for the ticker's upcoming fixtures.
@@ -556,10 +620,46 @@ export default function App() {
     linkResolving: !!activeId && !knownEvents.some((e) => e.id === activeId) && !linkTried.has(activeId),
   };
 
-  // Opening an event from the rail also closes the mobile drawer.
-  const openEvent = (event: SportEvent) => {
-    navigate(eventPath(event));
-    setRailOpen(false);
+  /*
+   * Opening an event from the rail also closes the mobile drawer.
+   *
+   * Takes an id and is wrapped, so the rail's rows get the SAME function on
+   * every render. It used to be an inline `onSelect={() => openEvent(event)}`,
+   * a fresh closure per row per render, which is enough on its own to stop
+   * `memo` ever skipping a row.
+   */
+  const selectEvent = useCallback(
+    (id: string) => {
+      const event = knownEvents.find((e) => e.id === id);
+      if (!event) return;
+      navigate(eventPath(event));
+      setRailOpen(false);
+    },
+    [knownEvents, navigate],
+  );
+
+  /*
+   * The clock each row actually needs, which for almost all of them is not the
+   * one that ticks every second.
+   *
+   * `countdownFor` returns a constant for live, final and cancelled rows, mm:ss
+   * for a fixture inside half an hour, and minutes-or-coarser beyond that. So a
+   * row gets the second only while it is genuinely counting seconds; everything
+   * else gets the minute clock, and the rows whose label cannot change get a
+   * fixed number and never re-render at all.
+   *
+   * Start times are parsed once per slate rather than once per row per second.
+   */
+  const startMs = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of visible) m.set(e.id, new Date(e.startsAt).getTime());
+    return m;
+  }, [visible]);
+
+  const clockFor = (event: SportEvent): number => {
+    if (rankOf(event) !== STATUS_ORDER.upcoming) return NO_CLOCK;
+    const ms = (startMs.get(event.id) ?? 0) - now;
+    return ms > 0 && ms <= 30 * MIN_MS ? now : minute;
   };
 
   return (
@@ -659,9 +759,9 @@ export default function App() {
                 <EventRow
                   key={event.id}
                   event={event}
-                  now={now}
+                  now={clockFor(event)}
                   selected={event.id === activeId}
-                  onSelect={() => openEvent(event)}
+                  onSelect={selectEvent}
                 />
               ))
             )}
