@@ -800,16 +800,28 @@ export default function App() {
               </>
             )}
           </div>
-          {caps.mapping && (
+          {/*
+            Gated per link, not per block.
+            The Ticker sat inside `caps.mapping` and so was switched by the
+            tournament mapping tables, which it has nothing to do with — it
+            reads the bets cluster, exactly like Settlement and Late Bets above.
+            It showed anyway because the mirror makes `caps.mapping` true, so
+            the two were only ever accidentally equal; the board is the admin
+            landing page and the Ticker is the tab you leave it by, which is not
+            a thing to leave resting on a coincidence.
+          */}
+          {(caps.bets || caps.mapping) && (
             <div className="shrink-0 border-t border-surface-border p-2">
-              <Link
-                to="/ticker"
-                className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
-              >
-                <Radio size={14} />
-                Ticker
-              </Link>
-              {deskOnly && (
+              {caps.bets && (
+                <Link
+                  to="/ticker"
+                  className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
+                >
+                  <Radio size={14} />
+                  Ticker
+                </Link>
+              )}
+              {caps.mapping && deskOnly && (
                 <Link
                   to="/mapping"
                   className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
