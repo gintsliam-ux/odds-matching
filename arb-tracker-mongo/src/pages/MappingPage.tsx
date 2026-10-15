@@ -503,6 +503,7 @@ export default function MappingPage() {
         <div className="flex flex-wrap items-center gap-4 px-5 pb-3 pt-4">
           <Link
             to="/"
+            state={{ board: true }}
             className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
           >
             <ArrowLeft size={14} /> Board

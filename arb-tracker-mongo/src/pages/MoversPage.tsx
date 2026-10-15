@@ -198,6 +198,7 @@ export function MoversPage() {
         <div className="flex flex-wrap items-center gap-3 px-4 py-2.5">
           <Link
             to="/"
+            state={{ board: true }}
             className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500 transition hover:text-slate-300"
           >
             <ArrowLeft size={14} /> Board

@@ -6,7 +6,6 @@ import { EventDetail } from '../components/EventDetail';
 import { LeagueBadge } from '../components/LeagueBadge';
 import { fetchOdds, searchEvents, SEARCH_MIN_CHARS } from '../lib/db';
 import { buildMarkets, type Bookmaker, type MarketGroup } from '../lib/markets';
-import { useAuth } from '../lib/useAuth';
 import type { SportEvent } from '../lib/types';
 
 /**
@@ -34,7 +33,6 @@ function startsIn(iso: string, now: number): string {
 }
 
 export default function SearchPage() {
-  const { user } = useAuth();
   const [term, setTerm] = useState('');
   const [hits, setHits] = useState<SportEvent[]>([]);
   const [searching, setSearching] = useState(false);
@@ -118,14 +116,13 @@ export default function SearchPage() {
           >
             <Radio size={12} /> Ticker
           </Link>
-          {user?.role !== 'trading' && (
-            <Link
-              to="/"
-              className="rounded-md px-2 py-1 text-[11px] text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
-            >
-              Board
-            </Link>
-          )}
+          <Link
+            to="/"
+            state={{ board: true }}
+            className="rounded-md px-2 py-1 text-[11px] text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
+          >
+            Board
+          </Link>
           <span className="ml-auto">
             <SignOut />
           </span>

@@ -370,11 +370,16 @@ export default function TickerPage() {
       <header className="shrink-0 border-b border-surface-border px-5 py-3">
         <div className="flex items-center gap-3">
           <Link
-            // A trading account cannot open the board, so do not offer it one.
-            to={user?.role === 'trading' ? '/search' : '/'}
+            /*
+             * `state` is what tells the index route this was deliberate. A
+             * trading account is sent here from `/`, so a bare link back would
+             * be bounced straight to the ticker again — see TickerFirst.
+             */
+            to="/"
+            state={{ board: true }}
             className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
           >
-            <ArrowLeft size={12} /> {user?.role === 'trading' ? 'Prices' : 'Board'}
+            <ArrowLeft size={12} /> Board
           </Link>
           <span className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-slate-100">
             <Radio
