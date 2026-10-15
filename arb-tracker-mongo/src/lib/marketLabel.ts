@@ -31,9 +31,25 @@ const titleCase = (s: string) =>
       if (ALREADY_SHOUTING.test(w)) return w;
       const lower = w.toLowerCase();
       if (i > 0 && SMALL_WORDS.has(lower)) return lower;
-      // Split on the slash too, or "half time/full time" keeps a lowercase
-      // "full" in the middle of an otherwise capitalised title.
-      return lower.split('/').map(capitalise).join('/');
+      /*
+       * Split on the slash AND the hyphen, keeping both.
+       *
+       * The slash was always split, or "half time/full time" kept a lowercase
+       * "full" in the middle of a capitalised title. The hyphen was not, and
+       * eight of the eleven hyphenated words in three weeks of slips came out
+       * wrong because of it — including the proper nouns, which is what makes
+       * it a fault rather than a style quibble: "Saint-Germain" read
+       * "Saint-germain", "Mouilleron-Le-Captif" read "Mouilleron-le-captif",
+       * and "Jackson-Cartwright" lost the C of a player's own surname.
+       *
+       * The separators are captured so they survive the rejoin, and a part
+       * that is not a letter is left alone — the "-3" of a handicap is not a
+       * hyphenated word.
+       */
+      return lower
+        .split(/([/-])/)
+        .map((part) => (part === '/' || part === '-' ? part : capitalise(part)))
+        .join('');
     })
     .join(' ');
 
