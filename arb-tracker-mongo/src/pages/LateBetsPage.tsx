@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { RowsSkeleton } from '../components/Skeleton';
+import { useNumParam } from '../lib/urlState';
 import { SignOut } from '../components/SignOut';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, ArrowLeft, CheckCircle2, Loader2 } from 'lucide-react';
@@ -37,8 +39,8 @@ export default function LateBetsPage() {
   const [data, setData] = useState<LateBets | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [error, setError] = useState<string | null>(null);
-  const [after, setAfter] = useState(1);
-  const [hours, setHours] = useState(24);
+  const [after, setAfter] = useNumParam('after', 1);
+  const [hours, setHours] = useNumParam('hours', 24);
 
   useEffect(() => {
     let cancelled = false;
@@ -149,6 +151,8 @@ export default function LateBetsPage() {
           {state === 'loading' && <Loader2 size={13} className="ml-2 animate-spin text-slate-600" />}
         </div>
       </header>
+
+      {state === 'loading' && !data && <RowsSkeleton rows={12} lead="w-20" />}
 
       {state === 'error' && (
         <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-slate-500">

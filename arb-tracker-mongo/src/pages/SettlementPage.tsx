@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { RowsSkeleton } from '../components/Skeleton';
+import { useNumParam } from '../lib/urlState';
 import { SignOut } from '../components/SignOut';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, CheckCircle2, Clock, Loader2 } from 'lucide-react';
@@ -35,7 +37,7 @@ export default function SettlementPage() {
   const [data, setData] = useState<Settlement | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [error, setError] = useState<string | null>(null);
-  const [mins, setMins] = useState(30);
+  const [mins, setMins] = useNumParam('mins', 30);
   const [open, setOpen] = useState<string | null>(null);
 
   useEffect(() => {
@@ -126,6 +128,8 @@ export default function SettlementPage() {
           {state === 'loading' && <Loader2 size={13} className="ml-2 animate-spin text-slate-600" />}
         </div>
       </header>
+
+      {state === 'loading' && !data && <RowsSkeleton rows={10} lead="w-14" />}
 
       {state === 'error' && (
         <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-slate-500">

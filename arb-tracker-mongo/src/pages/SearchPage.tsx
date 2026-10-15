@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { MarketsSkeleton, PricesSkeleton } from '../components/Skeleton';
+import { useParam } from '../lib/urlState';
 import { useAuth } from '../lib/useAuth';
 import { SignOut } from '../components/SignOut';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -36,7 +38,7 @@ function startsIn(iso: string, now: number): string {
 export default function SearchPage() {
   const { user } = useAuth();
   const [params] = useSearchParams();
-  const [term, setTerm] = useState('');
+  const [term, setTerm] = useParam('q', '');
   const [hits, setHits] = useState<SportEvent[]>([]);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<SportEvent | null>(null);
@@ -137,7 +139,7 @@ export default function SearchPage() {
         setTerm(e.home || e.name);
       })
       .catch(() => setError('Could not open that fixture.'));
-  }, [params, open]);
+  }, [params, open, setTerm]);
 
   return (
     <div className="flex h-dvh flex-col bg-surface-base text-slate-200">
@@ -190,6 +192,11 @@ export default function SearchPage() {
         </div>
       </header>
 
+      {/* Arriving on a ?fixture= link: both panes at once, since neither the
+          list nor the grid has anything in it yet. */}
+      {params.get('fixture') && !selected && !error ? (
+        <PricesSkeleton />
+      ) : (
       <div className="flex min-h-0 flex-1">
         {/* The hits. Only ever what was asked for. */}
         <aside className="w-72 shrink-0 overflow-y-auto border-r border-surface-border">
@@ -236,7 +243,10 @@ export default function SearchPage() {
         {/* And their prices — the same grid the event page draws. */}
         <main className="min-w-0 flex-1 overflow-hidden">
           {error && <p className="p-4 text-sm text-rose-300">{error}</p>}
-          {!selected ? (
+          {oddsLoading && !markets.length && selected ? (
+            // Just the grid: the pane on the left is already drawn beside it.
+            <MarketsSkeleton groups={3} />
+          ) : !selected ? (
             <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
               <p className="text-sm text-slate-500">Search a team or player.</p>
               <p className="max-w-sm text-xs text-slate-600">
@@ -255,6 +265,7 @@ export default function SearchPage() {
           )}
         </main>
       </div>
+      )}
     </div>
   );
 }

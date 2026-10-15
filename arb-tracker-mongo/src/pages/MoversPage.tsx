@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
+import { RowsSkeleton } from '../components/Skeleton';
+import { useFlagParam, useNumParam, useParam } from '../lib/urlState';
 import { SignOut } from '../components/SignOut';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Loader2, TrendingDown } from 'lucide-react';
+import { ArrowLeft, TrendingDown } from 'lucide-react';
 import { fetchMovers, type Mover, type Movers } from '../lib/db';
 import { BookmakerLogo } from '../components/BookmakerLogo';
 import { brandById } from '../lib/markets';
@@ -154,10 +156,10 @@ export function MoversPage() {
   const [data, setData] = useState<Movers | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [error, setError] = useState<string | null>(null);
-  const [win, setWin] = useState('open');
-  const [minMove, setMinMove] = useState(2);
-  const [sport, setSport] = useState('all');
-  const [onlyLagging, setOnlyLagging] = useState(false);
+  const [win, setWin] = useParam('window', 'open');
+  const [minMove, setMinMove] = useNumParam('move', 2);
+  const [sport, setSport] = useParam('sport', 'all');
+  const [onlyLagging, setOnlyLagging] = useFlagParam('lagging', false);
 
   useEffect(() => {
     let cancelled = false;
@@ -273,7 +275,7 @@ export function MoversPage() {
           <span className="mx-1 h-4 w-px bg-surface-border" />
           <button
             type="button"
-            onClick={() => setOnlyLagging((v) => !v)}
+            onClick={() => setOnlyLagging(!onlyLagging)}
             className={`${CHIP} ${
               onlyLagging
                 ? 'bg-emerald-500/15 text-emerald-300'
@@ -298,12 +300,7 @@ export function MoversPage() {
         </div>
       </header>
 
-      {state === 'loading' && (
-        <div className="flex flex-1 items-center justify-center gap-2 text-sm text-slate-500">
-          <Loader2 size={15} className="animate-spin" />
-          Reading the price ladder across every head-to-head market…
-        </div>
-      )}
+      {state === 'loading' && <RowsSkeleton rows={11} lead="w-16" />}
 
       {state === 'error' && (
         <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-slate-500">

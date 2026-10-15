@@ -14,6 +14,7 @@ import {
 } from '../lib/markets';
 import { LeagueBadge } from './LeagueBadge';
 import { BookmakerLogo } from './BookmakerLogo';
+import { bookmakerSite } from '../lib/bookmakerUrl';
 import { TeamLogo } from './TeamLogo';
 import { PriceCard, type HoverTarget } from './PriceCard';
 import { MarketsSkeleton } from './Skeleton';
@@ -432,7 +433,7 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
                     className="sticky top-0 z-30 border-b border-l border-surface-border bg-surface-raised px-1.5"
                   >
                     <div className="flex justify-center">
-                      <BookmakerLogo brand={book} />
+                      <BookHead brand={book} />
                     </div>
                   </th>
                 ))}
@@ -459,10 +460,37 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
   );
 }
 
+/**
+ * The book's logo, linking to its own site when we have an address for it.
+ *
+ * Wrapped rather than changed inside BookmakerLogo, because the same logo is
+ * drawn in places where a link would be wrong — the Best column names whichever
+ * book happens to be top, and that is a label, not a destination.
+ *
+ * `noreferrer` with the `noopener`: these are competitors, and the referrer
+ * would tell them which of our pages someone came from.
+ */
+function BookHead({ brand, size }: { brand: Bookmaker; size?: number }) {
+  const href = bookmakerSite(brand.id);
+  const logo = <BookmakerLogo brand={brand} size={size} />;
+  if (!href) return logo;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={`Open ${brand.name}`}
+      className="transition hover:opacity-80"
+    >
+      {logo}
+    </a>
+  );
+}
+
 function BetfairHead({ label }: { label: string }) {
   return (
     <div className="flex flex-col items-center gap-0.5">
-      <BookmakerLogo brand={BETFAIR} size={18} />
+      <BookHead brand={BETFAIR} size={18} />
       <span className="text-[10px] uppercase tracking-wide text-slate-500">{label}</span>
     </div>
   );

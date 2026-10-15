@@ -68,3 +68,54 @@ export function bookmakerUrl(
   if (!code) return null;
   return `https://${host}/odds/${code}/${eventId}/`;
 }
+
+/* ------------------------------------------------- the other books' own sites */
+
+/**
+ * Where a bookmaker lives on the web, for the logos above the price columns.
+ *
+ * A different question from everything above, which deep-links one of OUR
+ * brands to one event. This is the competitor whose price is in that column,
+ * and there is no per-event URL to build: their own id for the fixture is not
+ * something the feed carries. So it is the sports page, and the click is "go
+ * and look at them", not "go to this market".
+ *
+ * Every URL here is the one the site actually SETTLES on, checked rather than
+ * typed from memory, because two of them do not go where they look:
+ *
+ *   tab.com.au/sports            redirects to /sports-betting
+ *   sportsbet.com.au/sports      redirects to the homepage — its sports page
+ *                                is /betting/sports, which itself lands on
+ *                                /betting/upcoming-sports
+ *
+ * Using the resolved address saves the hop and means the link cannot rot the
+ * day a redirect is dropped.
+ *
+ * bet365 answers 403 to anything that is not a browser, so that one is their
+ * published address rather than a confirmed response — and the tracking
+ * parameters it is usually copied with (`gclid`, `gbraid`) are an ad-click id
+ * belonging to whoever copied it, so they are not carried here.
+ *
+ * The American books — DraftKings, FanDuel, Fanatics, BetMGM — are absent on
+ * purpose. Their prices appear in the grid but nobody has given an address for
+ * them, and a guessed one looks fine and 404s, which is worse than no link. A
+ * book with no entry simply renders as it did before.
+ */
+const BOOK_SITE: Record<string, string> = {
+  tab: 'https://www.tab.com.au/sports-betting',
+  sportsbet: 'https://www.sportsbet.com.au/betting/upcoming-sports',
+  pinnacle: 'https://www.pinnacle.com/en/',
+  betfair: 'https://www.betfair.com.au/exchange/plus/',
+  // One exchange, one site: the lay column is the same book seen from the
+  // other side.
+  betfair_lay: 'https://www.betfair.com.au/exchange/plus/',
+  bet365: 'https://www.bet365.com.au/#/HO/',
+  tabtouch: 'https://www.tabtouch.com.au/sports',
+  ladbrokes: 'https://www.ladbrokes.com.au/sports',
+};
+
+/** The bookmaker's own site, or null when we have not been given one. */
+export function bookmakerSite(bookKey: string | null | undefined): string | null {
+  if (!bookKey) return null;
+  return BOOK_SITE[String(bookKey).toLowerCase()] ?? null;
+}

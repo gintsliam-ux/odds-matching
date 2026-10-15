@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
+import { BetsTableSkeleton } from '../components/Skeleton';
+import { useNumParam, useParam } from '../lib/urlState';
 import { SignOut } from '../components/SignOut';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Check, Copy, Gift, Loader2, Radio } from 'lucide-react';
@@ -250,14 +252,15 @@ export default function TickerPage() {
   const { user } = useAuth();
   const [bets, setBets] = useState<TickerBet[]>([]);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [brand, setBrand] = useState<'all' | 'swiftbet' | 'mybet' | 'multis'>('all');
-  const [sport, setSport] = useState<string>('all');
+  const [brandParam, setBrand] = useParam('brand', 'all');
+  const brand = brandParam as 'all' | 'swiftbet' | 'mybet' | 'multis';
+  const [sport, setSport] = useParam('sport', 'all');
   /*
    * Kept as the typed text, not a number. Parsing on every keystroke turns "1."
    * into 1 and then fights the caret when the next character arrives; the value
    * is read as a number only where it is used.
    */
-  const [stakeText, setStakeText] = useState('');
+  const [stakeText, setStakeText] = useParam('stake', '');
   const minStake = Number(stakeText) > 0 ? Number(stakeText) : 0;
   /*
    * Overs or All, defaulting to Overs for a trading account: the bets we were
@@ -268,8 +271,17 @@ export default function TickerPage() {
    * The label says which it is at all times, so nobody reads the filtered feed
    * believing it is everything.
    */
-  const [onlyOut, setOnlyOut] = useState(user?.role === 'trading');
-  const [outMargin, setOutMargin] = useState(0);
+  /*
+   * `?view=overs` / `?view=all`, with the role deciding what an absent value
+   * means — Overs for a trading account, All for everyone else. Written only
+   * when it differs from that, so the URL carries a choice rather than a
+   * restatement of the default.
+   */
+  const defaultView = user?.role === 'trading' ? 'overs' : 'all';
+  const [view, setView] = useParam('view', defaultView);
+  const onlyOut = view === 'overs';
+  const setOnlyOut = (v: boolean) => setView(v ? 'overs' : 'all');
+  const [outMargin, setOutMargin] = useNumParam('margin', 0);
   const [live, setLive] = useState(false);
   // Ids that arrived on the stream in the last few seconds. The table is
   // newest-first already, so without this a bet landing at the top is
@@ -431,7 +443,7 @@ export default function TickerPage() {
              * else, so Board would be a link straight back to here. The two
              * cross-link instead.
              */
-            to={user?.role === 'trading' ? '/search' : '/'}
+            to={user?.role === 'trading' ? '/prices' : '/'}
             className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
           >
             <ArrowLeft size={12} /> {user?.role === 'trading' ? 'Prices' : 'Board'}
@@ -623,7 +635,9 @@ export default function TickerPage() {
       )}
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {state === 'error' ? (
+        {state === 'loading' && bets.length === 0 ? (
+          <BetsTableSkeleton rows={14} cols={columns.length || 6} />
+        ) : state === 'error' ? (
           <p className="px-5 py-8 text-sm text-rose-300">The bet feed could not be loaded.</p>
         ) : shown.length === 0 && state === 'ready' ? (
           <p className="px-5 py-8 text-sm text-slate-500">No single bets in the last few days.</p>
@@ -726,7 +740,7 @@ export default function TickerPage() {
                            */
                           to={
                             user?.role === 'trading'
-                              ? `/search?fixture=${encodeURIComponent(b.fixtureId)}`
+                              ? `/prices?fixture=${encodeURIComponent(b.fixtureId)}`
                               : `/event/${eventSlug(b.event)}/${b.fixtureId}`
                           }
                           className="hover:text-emerald-300"

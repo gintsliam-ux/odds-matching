@@ -130,3 +130,95 @@ export function EventPageSkeleton() {
     </div>
   );
 }
+
+/**
+ * A list page's rows, at the dimensions the real ones take.
+ *
+ * Movers, Settlement and Late Bets all draw the same shape — a leading figure,
+ * a name, some trailing numbers — and all three used to say "Reading the price
+ * ladder…" in the middle of an empty page. A sentence tells you nothing about
+ * how much is coming and the layout jumps when it lands.
+ *
+ * `lead` is the width of the figure each page puts first: the move, the wait,
+ * how late the bet was.
+ */
+export function RowsSkeleton({ rows = 12, lead = 'w-16' }: { rows?: number; lead?: string }) {
+  return (
+    <div role="status" aria-label="Loading" className="min-h-0 flex-1 overflow-hidden">
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="flex items-center gap-3 border-t border-surface-border px-3 py-2.5">
+          <Bone className={`h-4 shrink-0 ${lead}`} />
+          <Bone className="h-3.5 w-14 shrink-0" />
+          <Bone className={`h-3.5 ${widths[i % widths.length]}`} />
+          <Bone className="ml-auto h-3.5 w-20 shrink-0" />
+          <Bone className="h-3.5 w-12 shrink-0" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** The filter bar under a page header, so the chips do not pop in. */
+export function ChipsSkeleton({ chips = 5 }: { chips?: number }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 border-t border-surface-border/60 px-4 py-2">
+      {Array.from({ length: chips }, (_, i) => (
+        <Bone key={i} className={`h-6 rounded-md ${i === 0 ? 'w-24' : 'w-16'}`} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The prices page: a list of hits on the left, a market grid on the right.
+ *
+ * Reuses MarketsSkeleton for the grid, so the two pages that draw that table
+ * stand in for it identically.
+ */
+export function PricesSkeleton({ rows = 9 }: { rows?: number }) {
+  return (
+    <div role="status" aria-label="Loading prices" className="flex min-h-0 flex-1">
+      <aside className="w-72 shrink-0 border-r border-surface-border">
+        {Array.from({ length: rows }, (_, i) => (
+          <div key={i} className="border-b border-surface-border/60 px-3 py-2">
+            <div className="flex items-center gap-1.5">
+              <Bone className="h-[13px] w-[13px] shrink-0 rounded" />
+              <Bone className="h-2.5 w-20" />
+            </div>
+            <Bone className={`mt-1 h-3.5 ${widths[i % widths.length]}`} />
+            <Bone className="mt-1 h-2.5 w-10" />
+          </div>
+        ))}
+      </aside>
+      <main className="min-w-0 flex-1">
+        <MarketsSkeleton groups={3} />
+      </main>
+    </div>
+  );
+}
+
+/** The bet feed: a header row and then the table, at the real column widths. */
+export function BetsTableSkeleton({ rows = 14, cols = 6 }: { rows?: number; cols?: number }) {
+  return (
+    <div role="status" aria-label="Loading bets" className="min-h-0 flex-1 overflow-hidden">
+      <div className="flex items-center gap-3 border-b border-surface-border px-3 py-2">
+        <Bone className="h-2.5 w-10 shrink-0" />
+        <Bone className="h-2.5 w-14 shrink-0" />
+        <Bone className="h-2.5 w-28" />
+        {Array.from({ length: cols }, (_, i) => (
+          <Bone key={i} className="h-2.5 w-12 shrink-0" />
+        ))}
+      </div>
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="flex items-center gap-3 border-b border-surface-border/40 px-3 py-2">
+          <Bone className="h-3 w-10 shrink-0" />
+          <Bone className="h-3 w-14 shrink-0" />
+          <Bone className={`h-3.5 ${widths[i % widths.length]}`} />
+          {Array.from({ length: cols }, (_, j) => (
+            <Bone key={j} className="h-3 w-12 shrink-0" />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}

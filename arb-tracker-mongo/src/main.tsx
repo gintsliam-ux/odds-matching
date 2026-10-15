@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import App from './App';
 import EventView from './EventView';
 import TickerPage from './pages/TickerPage';
@@ -50,6 +50,12 @@ function AdminOnly({ children }: { children: React.ReactNode }) {
  * routes outright and would do so whatever this component said. A guard that
  * only hid links would be decoration.
  */
+/** `/search` -> `/prices`, query and all. */
+function LegacySearch() {
+  const { search } = useLocation();
+  return <Navigate to={`/prices${search}`} replace />;
+}
+
 function DeskOnly({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   if (user?.role === 'trading') return <Navigate to="/ticker" replace />;
@@ -71,7 +77,14 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/movers" element={<DeskOnly><MoversPage /></DeskOnly>} />
         {/* The two a trading account has. */}
         <Route path="/ticker" element={<TickerPage />} />
-        <Route path="/search" element={<SearchPage />} />
+        {/*
+          * `/prices` is what the page is called, in its own heading and in the
+          * link that reaches it. `/search` was the name of the box on it, not
+          * of the page, and is kept as a redirect so older links and anything
+          * bookmarked still land — carrying the query string with them.
+          */}
+        <Route path="/prices" element={<SearchPage />} />
+        <Route path="/search" element={<LegacySearch />} />
         <Route path="/settlement" element={<DeskOnly><SettlementPage /></DeskOnly>} />
         <Route path="/late-bets" element={<DeskOnly><LateBetsPage /></DeskOnly>} />
         <Route path="/mapping" element={<DeskOnly><MappingPage /></DeskOnly>} />
