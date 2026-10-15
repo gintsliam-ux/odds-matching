@@ -171,23 +171,64 @@ function IdChip({ value, title }: { value: string | null; title: string }) {
 /**
  * The book's own risk tag on this bettor, beside their id.
  *
- * Several are common on the swiftbet side ("Good client|Tier 4"), so the first
- * one shows and the rest are counted, with all of them on hover. The ones that
- * mean trouble get a colour; everything else stays quiet, because most rows
- * carry a tag and a table where every row shouts says nothing.
+ * Several are common on the swiftbet side ("Good client|Tier 4"), so the
+ * highest-priority one shows and the rest are counted, with all of them on
+ * hover.
+ *
+ * Colours are per the desk's own scheme, matched against the 46 tag values that
+ * actually occur rather than guessed at:
+ *
+ *   Monitor                            yellow
+ *   Good client / normal               blue — deeper than the sky the swiftbet
+ *                                      brand chip uses, so the two do not read
+ *                                      as the same thing in one row
+ *   Bonus hunter                       aqua
+ *   Sharp / hard                       red
+ *   small                              orange
+ *
+ * Everything else — watch, the Tiers, vip, no bonus, Not eligible for promos,
+ * Potential bowler — stays grey. Most rows carry a tag, and a table where every
+ * row shouts says nothing.
  */
-const LOUD = /monitor|sharp|bonus hunter|barring|arb|bowler|not eligible|duplicate|test account/i;
+const TAG_TONES: { test: RegExp; tone: string; rank: number }[] = [
+  // Red first: when a punter is both sharp and small, sharp is the point.
+  { test: /\bsharp\b|\bhard\b/i, tone: 'bg-rose-500/15 text-rose-300', rank: 0 },
+  { test: /\bmonitor\b/i, tone: 'bg-yellow-500/15 text-yellow-300', rank: 1 },
+  { test: /bonus hunter/i, tone: 'bg-cyan-500/15 text-cyan-300', rank: 2 },
+  { test: /\bsmall\b/i, tone: 'bg-orange-500/15 text-orange-300', rank: 3 },
+  { test: /good client|\bnormal\b/i, tone: 'bg-blue-600/25 text-blue-300', rank: 4 },
+];
+
+const QUIET = 'bg-white/5 text-slate-500';
+
+/**
+ * A tag's colour, or none.
+ *
+ * "Not sharp, milks offers" is why this cannot be a plain substring match: it
+ * contains "sharp" and means the opposite, so a negation is checked first. It
+ * is a rare tag, and a punter wrongly painted red is the one mistake this
+ * colouring must not make.
+ */
+const NEGATED = /\bnot\s+sharp\b/i;
+
+function toneOf(tag: string): { tone: string; rank: number } {
+  if (!NEGATED.test(tag)) {
+    for (const t of TAG_TONES) if (t.test.test(tag)) return { tone: t.tone, rank: t.rank };
+  }
+  return { tone: QUIET, rank: 99 };
+}
 
 function TagChip({ tags }: { tags: string[] }) {
   if (!tags.length) return null;
-  const [first, ...rest] = tags;
-  const loud = tags.some((t) => LOUD.test(t));
+  // The most serious tag leads, so a row's colour is its worst news and the
+  // label beside it is the tag that earned the colour.
+  const ranked = [...tags].sort((a, b) => toneOf(a).rank - toneOf(b).rank);
+  const [first, ...rest] = ranked;
+  const { tone } = toneOf(first);
   return (
     <span
       title={tags.join(' · ')}
-      className={`inline-flex max-w-[7rem] items-center gap-0.5 truncate rounded px-1 py-0.5 text-[9px] leading-none ${
-        loud ? 'bg-amber-500/15 text-amber-300' : 'bg-white/5 text-slate-500'
-      }`}
+      className={`inline-flex max-w-[7rem] items-center gap-0.5 truncate rounded px-1 py-0.5 text-[9px] leading-none ${tone}`}
     >
       <span className="truncate">{first}</span>
       {rest.length > 0 && <span className="opacity-60">+{rest.length}</span>}
@@ -219,15 +260,16 @@ export default function TickerPage() {
   const [stakeText, setStakeText] = useState('');
   const minStake = Number(stakeText) > 0 ? Number(stakeText) : 0;
   /*
-   * A trading account sees only the bets we were over the odds on — that is
-   * what the feed is for from that desk. Forced rather than defaulted, so it
-   * cannot be switched off and leave someone reading the whole feed believing
-   * they are reading the exceptions.
+   * Overs or All, defaulting to Overs for a trading account: the bets we were
+   * over the odds on are what the feed is for from that desk, but it is a
+   * choice now rather than a lock — being unable to see the rest meant being
+   * unable to tell whether the exceptions were the whole story.
+   *
+   * The label says which it is at all times, so nobody reads the filtered feed
+   * believing it is everything.
    */
-  const tradingOnlyOut = user?.role === 'trading';
-  const [outOnly, setOutOnly] = useState(false);
+  const [onlyOut, setOnlyOut] = useState(user?.role === 'trading');
   const [outMargin, setOutMargin] = useState(0);
-  const onlyOut = tradingOnlyOut || outOnly;
   const [live, setLive] = useState(false);
   // Ids that arrived on the stream in the last few seconds. The table is
   // newest-first already, so without this a bet landing at the top is
@@ -260,11 +302,21 @@ export default function TickerPage() {
         })
         .catch(() => !cancelled && setState('error'));
 
-    // Polling is the floor, not the plan: it covers the first paint and any
-    // stretch where the stream is not up. In place, with no loading toggle, so
-    // the table never flashes while someone is reading it.
-    const startPolling = () => {
-      if (!poll) poll = setInterval(load, 30_000);
+    /*
+     * The poll runs ALONGSIDE the stream, not only in its absence.
+     *
+     * It used to stop the moment the stream opened, which is correct right up
+     * until the stream dies quietly — and then the page sits there looking
+     * live, with a connection that is open and delivering nothing. Nobody
+     * watching a bet feed can afford to find that out late.
+     *
+     * So it keeps polling, slowly, while the stream is up: 60s as a backstop
+     * against 30s when the stream is the only thing arriving. In place, with no
+     * loading toggle, so the table never flashes while someone is reading it.
+     */
+    const startPolling = (ms = 30_000) => {
+      if (poll) clearInterval(poll);
+      poll = setInterval(load, ms);
     };
     const stopPolling = () => {
       if (poll) clearInterval(poll);
@@ -304,7 +356,7 @@ export default function TickerPage() {
       () => {
         if (cancelled) return;
         setLive(true);
-        stopPolling();
+        startPolling(60_000);
         // A reopen means the previous connection ended — a serverless host
         // closes it at the duration cap — so anything struck in the gap was
         // never pushed. One refetch closes it.
@@ -465,25 +517,30 @@ export default function TickerPage() {
             </button>
           ))}
           <span className="mx-1 h-4 w-px bg-surface-border" />
-          {/* Over the odds: we were the only book showing that price. */}
-          <button
-            type="button"
-            onClick={() => !tradingOnlyOut && setOutOnly((v) => !v)}
-            disabled={tradingOnlyOut}
-            title={
-              tradingOnlyOut
-                ? 'Your account shows only the bets we were over the odds on.'
-                : 'Only bets struck at a price no other book was showing. Betfair is excluded from the comparison.'
-            }
-            className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
-              onlyOut
-                ? 'bg-rose-500/15 text-rose-300'
-                : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-            } ${tradingOnlyOut ? 'cursor-default' : ''}`}
-          >
-            Over the odds
-            <span className="ml-1.5 tabular-nums opacity-60">{outCounts.byMargin[0]}</span>
-          </button>
+          {/* Over the odds, or everything. The one on the left is the default
+              for a trading account. */}
+          {([true, false] as const).map((v) => (
+            <button
+              key={String(v)}
+              type="button"
+              onClick={() => setOnlyOut(v)}
+              title={
+                v
+                  ? 'Only bets struck at a price no other book was showing. Betfair is excluded from the comparison.'
+                  : 'Every bet on the feed.'
+              }
+              className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
+                onlyOut === v
+                  ? 'bg-rose-500/15 text-rose-300'
+                  : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+              }`}
+            >
+              {v ? 'Overs' : 'All'}
+              <span className="ml-1.5 tabular-nums opacity-60">
+                {v ? outCounts.byMargin[0] : bets.length}
+              </span>
+            </button>
+          ))}
           {onlyOut && (
             <>
               {OUT_MARGINS.map((m, i) => (
