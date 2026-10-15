@@ -196,6 +196,7 @@ function IdChip({ value, title }: { value: string | null; title: string }) {
  * actually occur rather than guessed at:
  *
  *   Monitor                            yellow
+ *   VIP                                green
  *   Good client / normal               blue — deeper than the sky the swiftbet
  *                                      brand chip uses, so the two do not read
  *                                      as the same thing in one row
@@ -203,7 +204,7 @@ function IdChip({ value, title }: { value: string | null; title: string }) {
  *   Sharp / hard                       red
  *   small                              orange
  *
- * Everything else — watch, the Tiers, vip, no bonus, Not eligible for promos,
+ * Everything else — watch, the Tiers, no bonus, Not eligible for promos,
  * Potential bowler — stays grey. Most rows carry a tag, and a table where every
  * row shouts says nothing.
  */
@@ -213,7 +214,17 @@ const TAG_TONES: { test: RegExp; tone: string; rank: number }[] = [
   { test: /\bmonitor\b/i, tone: 'bg-yellow-500/15 text-yellow-300', rank: 1 },
   { test: /bonus hunter/i, tone: 'bg-cyan-500/15 text-cyan-300', rank: 2 },
   { test: /\bsmall\b/i, tone: 'bg-orange-500/15 text-orange-300', rank: 3 },
-  { test: /good client|\bnormal\b/i, tone: 'bg-blue-600/25 text-blue-300', rank: 4 },
+  /*
+   * Above "Good client" and below every warning. A VIP who is also flagged
+   * Monitor is still a Monitor row — the warning is the thing you need to see —
+   * but a VIP who is also a good client is a VIP, which is the more specific of
+   * the two and the one worth the colour.
+   *
+   * Word-anchored because the tag arrives as "vip", "VIP" and "vip (no
+   * promos)", and the parenthesised half must not change what it is.
+   */
+  { test: /\bvip\b/i, tone: 'bg-emerald-500/15 text-emerald-300', rank: 4 },
+  { test: /good client|\bnormal\b/i, tone: 'bg-blue-600/25 text-blue-300', rank: 5 },
 ];
 
 const QUIET = 'bg-white/5 text-slate-500';
