@@ -552,7 +552,7 @@ function MarketRows({
           </span>
         </td>
       </tr>
-      {group.selections.map((row) => {
+      {group.selections.map((row, i) => {
         const bestBrand = row.bestBookId ? brandById(row.bestBookId) : undefined;
         // The sticky Selection cell has to be opaque, or the price columns show
         // through it as they scroll underneath. So the pick'em tint is painted
@@ -564,9 +564,20 @@ function MarketRows({
         return (
           <tr
             key={row.key}
+            /*
+             * `groupStart` divides a ladder into its lines.
+             *
+             * It has been set on the first row of every line since the ladder
+             * was written — the home side of each handicap, the Over of each
+             * total — and read by nothing, so a three-way handicap came out as
+             * eighteen rows in a single column of text with its six lines
+             * running into each other. The rule borders are deliberately
+             * uneven: a full-strength line between lines, a half-strength one
+             * between the sides within a line.
+             */
             className={`border-b border-surface-border/50 hover:bg-white/[0.02] ${
-              row.isMain ? 'bg-emerald-500/[0.06]' : ''
-            }`}
+              row.groupStart && i > 0 ? 'border-t border-surface-border' : ''
+            } ${row.isMain ? 'bg-emerald-500/[0.06]' : ''}`}
           >
             <td className={`sticky left-0 z-10 px-3 py-2 text-slate-200 ${cellBg}`}>
               <span className="flex items-center gap-2">
