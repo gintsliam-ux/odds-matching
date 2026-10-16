@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { SportEvent } from '../lib/types';
 import { breakLabel, countdownFor, effectiveStatus, PERIOD_PREFIX, TONE_CLASSES } from '../lib/countdown';
 import {
@@ -517,6 +518,9 @@ function MarketRows({
   /** Display sport, for the draw row's stand-in icon. */
   sport: string;
 }) {
+  // `?debug=markets` only — off for everyone who has not asked for it.
+  const [params] = useSearchParams();
+  const showDiag = params.get('debug') === 'markets';
   // Each market is its own <tbody> so its sticky name is bounded by the market
   // — the next market's name pushes it out and replaces it.
   return (
@@ -527,8 +531,24 @@ function MarketRows({
           colSpan={totalCols}
           className="sticky top-14 z-20 border-b border-surface-border bg-surface p-0"
         >
-          <span className="sticky left-0 inline-block px-3 py-1.5 text-xs font-semibold text-slate-300">
+          <span className="sticky left-0 inline-flex items-baseline gap-2 px-3 py-1.5 text-xs font-semibold text-slate-300">
             {group.label}
+            {/*
+              `?debug=markets` prints what the rows behind this market looked
+              like. A market reported as showing one outcome could not be
+              reproduced from any source reachable off the tailnet, and the
+              numbers that would settle it — how many outcomes the feed sent,
+              and which identity told them apart — were only ever in a payload
+              somebody had to go and read. Now they are on the page.
+            */}
+            {showDiag && group.diag && (
+              <span className="font-normal text-[11px] tabular-nums text-amber-300/80">
+                {group.selections.length} shown · {group.diag.rows} rows ·{' '}
+                {group.diag.books} books · legs {group.diag.legs} · oc{' '}
+                {group.diag.ocs} · names {group.diag.names} · keyed on{' '}
+                {group.diag.keyedOn}
+              </span>
+            )}
           </span>
         </td>
       </tr>

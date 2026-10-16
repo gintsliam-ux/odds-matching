@@ -276,6 +276,24 @@ export interface MarketGroup {
   /** Ladder shape — also what the Markets sub-tabs bucket on. */
   kind: MarketKind;
   selections: SelectionRow[];
+  /**
+   * What the rows behind this market looked like, for `?debug=markets`.
+   *
+   * Added because a market reported as showing one outcome could not be
+   * reproduced from any source reachable off the tailnet, and three rounds of
+   * inferring the feed's shape from a screenshot got nowhere. These are counts
+   * of data the page already holds, so the answer is on the page rather than in
+   * a JSON payload somebody has to go and read.
+   */
+  diag?: {
+    rows: number;
+    /** Distinct non-null values of each identity — see chooseFlatIdentity. */
+    legs: number;
+    ocs: number;
+    names: number;
+    books: number;
+    keyedOn: string;
+  };
 }
 
 /** One row from the unified `odds` table. */
@@ -921,6 +939,7 @@ export function buildMarkets(
     }
 
     let selections: SelectionRow[];
+    let keyedOn: string = def.kind;
 
     if (def.kind === 'outright') {
       // A flat field, one row per player, shortest price first. Merge a player's
@@ -941,6 +960,7 @@ export function buildMarkets(
     } else if (def.kind === 'flat') {
       // Named outcomes (Yes/No, 1X/12/X2), ordered by outcome_no.
       const identity = chooseFlatIdentity(marketRows, home, away, def.id);
+      keyedOn = ['leg', 'outcome_no', 'name'][FLAT_IDENTITIES.indexOf(identity)] ?? 'leg';
       const flatKeyOf = (r: OddsRow) => identity(r, home, away, def.id) ?? r.selection ?? '';
       const order = new Map<string, number>();
       for (const r of marketRows) {
@@ -1029,7 +1049,22 @@ export function buildMarkets(
       selections.push(makeSelectionRow(books, away, away, awayRows, away));
     }
 
-    groups.push({ key: def.id, label: def.label, kind: def.kind, selections });
+    const nd = <T,>(f: (r: OddsRow) => T) =>
+      new Set(marketRows.map(f).filter((v) => v != null && v !== '')).size;
+    groups.push({
+      key: def.id,
+      label: def.label,
+      kind: def.kind,
+      selections,
+      diag: {
+        rows: marketRows.length,
+        legs: nd((r) => r.normalized_selection),
+        ocs: nd((r) => r.outcome_no),
+        names: nd((r) => r.selection),
+        books: nd((r) => r.sportsbook),
+        keyedOn,
+      },
+    });
   }
 
   return { groups, books };
