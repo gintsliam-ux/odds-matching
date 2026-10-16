@@ -21,22 +21,33 @@ export const BOOKMAKERS: Bookmaker[] = [
   { id: 'ladbrokes', name: 'Ladbrokes', color: '#dc2626', mark: 'LAD', logoUrl: '/logos/brands/ladbrokes.png' },
 ];
 
-// Optional books that only some sports fetch — shown as a column only when the
-// event actually prices them, so a sport that never fetches one has no dead
-// column. Appended after the core books, in this order.
-const OPTIONAL_BOOKS: Bookmaker[] = [
-  { id: 'fanduel', name: 'FanDuel', color: '#1493ff', mark: 'FD', logoUrl: '/logos/brands/fanduel.png' },
-];
+// The US books, defined once. They were listed inside GOLF_BOOKS only, which
+// is how three of them came to have a brand, a colour and a logo but no column
+// anywhere except golf.
+const FANDUEL: Bookmaker = { id: 'fanduel', name: 'FanDuel', color: '#1493ff', mark: 'FD', logoUrl: '/logos/brands/fanduel.png' };
+const DRAFTKINGS: Bookmaker = { id: 'draftkings', name: 'DraftKings', color: '#53d337', mark: 'DK', logoUrl: '/logos/brands/draftkings.png' };
+const BETMGM: Bookmaker = { id: 'betmgm', name: 'BetMGM', color: '#c8a15a', mark: 'MGM', logoUrl: '/logos/brands/betmgm.png' };
+const FANATICS: Bookmaker = { id: 'fanatics', name: 'Fanatics', color: '#1a1a2e', mark: 'FAN', logoUrl: '/logos/brands/fanatics.png' };
+const TAB_BOOK: Bookmaker = { id: 'tab', name: 'TAB', color: '#009845', mark: 'TAB', logoUrl: '/logos/brands/tab.png' };
+
+/*
+ * Optional books that only some sports fetch — shown as a column only when the
+ * event actually prices them, so a sport that never fetches one has no dead
+ * column. Appended after the core books, in this order.
+ *
+ * FanDuel was the only one here, and the other three were invisible outside
+ * golf as a result: measured over the whole odds collection, Fanatics prices
+ * 363,209 outcomes across 1,885 fixtures and DraftKings 277,137 across 1,533,
+ * and every one of them was dropped from the event grid because no column
+ * existed to put it in. It showed up as a Double Chance market rendering 12 of
+ * its 15 prices. The gating is what makes this safe: a book with nothing on
+ * the fixture still gets no column.
+ */
+const OPTIONAL_BOOKS: Bookmaker[] = [FANDUEL, DRAFTKINGS, FANATICS, BETMGM];
 
 // Golf outrights are priced by mostly-US books plus TAB — a different set from
 // the core AU columns, so golf uses its own list.
-const GOLF_BOOKS: Bookmaker[] = [
-  { id: 'tab', name: 'TAB', color: '#009845', mark: 'TAB', logoUrl: '/logos/brands/tab.png' },
-  { id: 'draftkings', name: 'DraftKings', color: '#53d337', mark: 'DK', logoUrl: '/logos/brands/draftkings.png' },
-  { id: 'fanduel', name: 'FanDuel', color: '#1493ff', mark: 'FD', logoUrl: '/logos/brands/fanduel.png' },
-  { id: 'betmgm', name: 'BetMGM', color: '#c8a15a', mark: 'MGM', logoUrl: '/logos/brands/betmgm.png' },
-  { id: 'fanatics', name: 'Fanatics', color: '#1a1a2e', mark: 'FAN', logoUrl: '/logos/brands/fanatics.png' },
-];
+const GOLF_BOOKS: Bookmaker[] = [TAB_BOOK, DRAFTKINGS, FANDUEL, BETMGM, FANATICS];
 
 /**
  * Canonical key for a golf player across books that spell them differently —
@@ -721,6 +732,81 @@ function prettyOutcome(sel: string): string {
   return sel.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/**
+ * Canonical key and display order for a `flat` market's outcomes.
+ *
+ * The grid keyed these on `normalized_selection || selection`, which has two
+ * faults. The order was whatever order the rows arrived in, because the rank
+ * came from `outcome_no` and that is null on most of the collection — 17,622
+ * `double_chance` rows carry a canonical `draw_away` with no outcome number
+ * against 7,383 that have both. So Double Chance listed 12, X2, 1X. And the
+ * key is not stable where the surface writes the outcome as team names rather
+ * than canonically: the same fixture's full-match market comes through as
+ * `home_draw` while its first-half twin is `sydney_fc_or_draw`, so the two
+ * markets grouped on different things and only one of them could be ordered.
+ *
+ * The mapping below is the surface's OWN, read off the 21 groups that carry
+ * both a normalized name and an outcome number: home_draw is 1, draw_away is
+ * 2, home_away is 3, yes is 1 and no is 2. It is not a convention invented
+ * here.
+ */
+const FLAT_RANK: Record<string, number> = {
+  home_draw: 1,
+  draw_away: 2,
+  home_away: 3,
+  yes: 1,
+  no: 2,
+  home: 1,
+  away: 2,
+  draw: 3,
+};
+
+/** The slug shape `normalized_selection` uses: lowercase, non-alphanumerics to _. */
+const slug = (s: string) =>
+  s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+/**
+ * Fold a double chance outcome written as team names into the canonical key.
+ *
+ * "Sydney FC Or Draw" normalizes to `sydney_fc_or_draw` on one market and
+ * `home_draw` on another, for the same two teams in the same fixture. Reading
+ * the home and away names — which the grid is already given — turns the first
+ * into the second, so both markets group and sort the same way, and so a book
+ * that spells a team differently from its neighbour cannot split one outcome
+ * into two rows.
+ *
+ * Returns null when it is not recognisably one of the three, which leaves the
+ * original key alone rather than guessing.
+ */
+function canonicalFlatKey(normalized: string, home: string, away: string): string | null {
+  const h = slug(home);
+  const a = slug(away);
+  if (!h || !a) return null;
+  const parts = normalized.split('_or_');
+  if (parts.length !== 2) return null;
+  const has = (want: string) => parts.some((x) => x === want);
+  if (has(h) && has('draw')) return 'home_draw';
+  if (has(a) && has('draw')) return 'draw_away';
+  if (has(h) && has(a)) return 'home_away';
+  return null;
+}
+
+/** The grouping key for one outcome of a flat market, canonical where possible. */
+function flatKeyOf(r: OddsRow, home: string, away: string): string {
+  const n = r.normalized_selection;
+  if (n) return canonicalFlatKey(n, home, away) ?? n;
+  // No normalized name: the outcome NUMBER is the other canonical identity, and
+  // the surface populates one or the other. Raw text is the last resort, and it
+  // is the only one of the three that is not stable across books.
+  if (r.outcome_no != null) return `oc${r.outcome_no}`;
+  return r.selection ?? '';
+}
+
 export interface BuiltMarkets {
   groups: MarketGroup[];
   /** Book columns in display order (no-odds books pushed to the far right). */
@@ -778,14 +864,18 @@ export function buildMarkets(
       // Named outcomes (Yes/No, 1X/12/X2), ordered by outcome_no.
       const order = new Map<string, number>();
       for (const r of marketRows) {
-        const k = r.normalized_selection || r.selection;
-        if (!order.has(k)) order.set(k, r.outcome_no ?? 99);
+        const k = flatKeyOf(r, home, away);
+        // The outcome number where the row has one, else the canonical rank for
+        // the key — so a market whose rows carry neither still sorts the way
+        // the same market does elsewhere, instead of by arrival.
+        const rank = r.outcome_no ?? FLAT_RANK[k] ?? 99;
+        if (!order.has(k) || rank < (order.get(k) ?? 99)) order.set(k, rank);
       }
       selections = [...order.keys()]
         .sort((a, b) => (order.get(a) ?? 99) - (order.get(b) ?? 99))
         .map((k) => {
-          const rs = marketRows.filter((r) => (r.normalized_selection || r.selection) === k);
-          return makeSelectionRow(books, k, prettyOutcome(rs[0].selection), rs);
+          const rs = marketRows.filter((r) => flatKeyOf(r, home, away) === k);
+          return makeSelectionRow(books, k, prettyOutcome(rs[0].selection ?? k), rs);
         });
     } else if (def.kind === 'total') {
       const main = mainLine(marketRows, (r) => r.line ?? NaN, isOverRow);
