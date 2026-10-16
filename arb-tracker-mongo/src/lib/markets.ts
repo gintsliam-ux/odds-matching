@@ -796,15 +796,51 @@ function canonicalFlatKey(normalized: string, home: string, away: string): strin
   return null;
 }
 
-/** The grouping key for one outcome of a flat market, canonical where possible. */
-function flatKeyOf(r: OddsRow, home: string, away: string): string {
+/** Outcome number -> canonical double chance key, the inverse of FLAT_RANK. */
+const DC_BY_OUTCOME: Record<number, string> = { 1: 'home_draw', 2: 'draw_away', 3: 'home_away' };
+
+const isDoubleChance = (marketId: string) => /double_chance/.test(marketId);
+
+/**
+ * The grouping key for one outcome of a flat market, canonical where possible.
+ *
+ * Three identities, in order of how much they can be trusted. The normalized
+ * name is stable across books and is what the Mongo source carries. The outcome
+ * NUMBER is the other canonical identity and is what the odds surface carries
+ * instead — it nulls `normalized_selection` on every row. Raw selection text is
+ * the last resort, and the only one of the three that is not stable: it is the
+ * same market written out by each book in its own words, so two books
+ * disagreeing split one outcome in two, and a surface that repeats one outcome's
+ * name across all three merges three outcomes into one.
+ *
+ * That last case is not hypothetical. It is what a Double Chance showing a
+ * single row called "Western Sydney Wanderers FC Or Draw" looks like.
+ */
+function flatKeyOf(r: OddsRow, home: string, away: string, marketId: string): string {
   const n = r.normalized_selection;
   if (n) return canonicalFlatKey(n, home, away) ?? n;
-  // No normalized name: the outcome NUMBER is the other canonical identity, and
-  // the surface populates one or the other. Raw text is the last resort, and it
-  // is the only one of the three that is not stable across books.
-  if (r.outcome_no != null) return `oc${r.outcome_no}`;
+  if (r.outcome_no != null) {
+    // Double chance has a known outcome order — see FLAT_RANK, measured from
+    // the rows that carry both identities — so the number resolves to the same
+    // key the other source would have given, and the two sources agree.
+    return (isDoubleChance(marketId) ? DC_BY_OUTCOME[r.outcome_no] : null) ?? `oc${r.outcome_no}`;
+  }
   return r.selection ?? '';
+}
+
+/**
+ * What to call a canonical outcome when its own text cannot be trusted.
+ *
+ * Only used when the rows' selection strings do not distinguish the outcomes —
+ * see the uniqueness check at the call site. The grouping is fixed by the key
+ * alone; this is so the three rows are not all labelled with the one name the
+ * surface repeated.
+ */
+function canonicalFlatLabel(key: string, home: string, away: string): string | null {
+  if (key === 'home_draw') return `${home} Or Draw`;
+  if (key === 'draw_away') return `${away} Or Draw`;
+  if (key === 'home_away') return `${home} Or ${away}`;
+  return null;
 }
 
 export interface BuiltMarkets {
@@ -864,19 +900,36 @@ export function buildMarkets(
       // Named outcomes (Yes/No, 1X/12/X2), ordered by outcome_no.
       const order = new Map<string, number>();
       for (const r of marketRows) {
-        const k = flatKeyOf(r, home, away);
+        const k = flatKeyOf(r, home, away, def.id);
         // The outcome number where the row has one, else the canonical rank for
         // the key — so a market whose rows carry neither still sorts the way
         // the same market does elsewhere, instead of by arrival.
         const rank = r.outcome_no ?? FLAT_RANK[k] ?? 99;
         if (!order.has(k) || rank < (order.get(k) ?? 99)) order.set(k, rank);
       }
-      selections = [...order.keys()]
-        .sort((a, b) => (order.get(a) ?? 99) - (order.get(b) ?? 99))
-        .map((k) => {
-          const rs = marketRows.filter((r) => flatKeyOf(r, home, away) === k);
-          return makeSelectionRow(books, k, prettyOutcome(rs[0].selection ?? k), rs);
-        });
+      const keys = [...order.keys()].sort(
+        (a, b) => (order.get(a) ?? 99) - (order.get(b) ?? 99),
+      );
+      const grouped = keys.map((k) => ({
+        k,
+        rs: marketRows.filter((r) => flatKeyOf(r, home, away, def.id) === k),
+      }));
+      /*
+       * Does the rows' own text actually tell the outcomes apart?
+       *
+       * Where the surface repeats one outcome's name across all three, it does
+       * not, and labelling from it would print the same line three times. The
+       * key has already done the grouping; this only decides what to call it.
+       */
+      const texts = grouped.map((g) => g.rs[0]?.selection ?? '');
+      const textsDistinguish =
+        texts.every(Boolean) && new Set(texts).size === grouped.length;
+      selections = grouped.map(({ k, rs }) => {
+        const label = textsDistinguish
+          ? prettyOutcome(rs[0].selection)
+          : canonicalFlatLabel(k, home, away) ?? prettyOutcome(rs[0].selection ?? k);
+        return makeSelectionRow(books, k, label, rs);
+      });
     } else if (def.kind === 'total') {
       const main = mainLine(marketRows, (r) => r.line ?? NaN, isOverRow);
       const lines = [...new Set(marketRows.map((r) => r.line).filter((l): l is number => l != null))];
