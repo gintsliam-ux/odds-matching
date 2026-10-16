@@ -111,6 +111,57 @@ function priceStandout(b: TickerBet): { best: number | null; out: boolean; byPct
 const pinnacle = brandById('pinnacle');
 
 /**
+ * A mark for the blend, where the other column has a bookmaker's logo.
+ *
+ * The blend has no logo because it is not a book — it is every book that
+ * priced the whole market, averaged — but the two columns are the same kind of
+ * number and belong in the same shape. So it gets a badge the size of a logo
+ * and sits in the same stack above the same word.
+ *
+ * Deliberately NOT in a brand colour: those are reserved for actual brands
+ * across this page and the board, and a coloured chip here would read as a
+ * ninth bookmaker.
+ */
+function BlendBadge({ label = 'BLEND' }: { label?: string }) {
+  return (
+    <span
+      className="rounded border border-surface-border bg-white/5 px-1 py-px text-[8px] font-semibold uppercase leading-[1.3] tracking-wide text-slate-400"
+      style={{ minHeight: 15 }}
+    >
+      {label}
+    </span>
+  );
+}
+
+/**
+ * The tournament, without the category repeated inside it.
+ *
+ * The two sit in adjacent columns and the feed sometimes puts the category in
+ * both: bet 6616894 is category "International" and tournament "International
+ * - Rugby League World Cup", so the row read "International · International -
+ * Rugby League World Cup". Also "Chile LNB" under Chile and "Guatemala Liga
+ * Nacional" under Guatemala — nine of 200 bets on one feed.
+ *
+ * Only a LEADING category on a word boundary is removed, which is what keeps
+ * this from eating real names: "English Premier League" under England survives
+ * because "English" is not "England", and "UEFA - Europa League" keeps its
+ * prefix because UEFA is not the category. If stripping would leave nothing,
+ * the original stands — a tournament that IS its category is still a label.
+ */
+function tournamentLabel(tournament: string | null, category: string | null): string | null {
+  if (!tournament || !category) return tournament;
+  const t = tournament.trim();
+  const c = category.trim();
+  if (!c || t.length <= c.length) return tournament;
+  if (t.slice(0, c.length).toLowerCase() !== c.toLowerCase()) return tournament;
+  const rest = t.slice(c.length);
+  // The boundary matters: without it a category of "Chile" would also strip
+  // the front of a tournament called "Chilean Cup".
+  const trimmed = rest.replace(/^\s*[-–—·|]?\s*/, '');
+  return trimmed && trimmed !== rest ? trimmed : tournament;
+}
+
+/**
  * A 100% price, and how the struck price compares to it.
  *
  * The number itself is the market with the book's margin divided out, so it is
@@ -751,20 +802,28 @@ export default function TickerPage() {
                   book's margin divided out — so they sit in their own bordered
                   block rather than reading as two more bookmakers.
                 */}
+                {/*
+                  Both stacked, mark above the word, so the two read as a pair
+                  of the same thing from two sources rather than as a logo
+                  column beside a text one.
+                */}
                 <th
                   className="border-l border-surface-border px-2 py-2 font-medium"
                   title="Pinnacle's price on this outcome with its margin divided out across the market — the market at 100%"
                 >
-                  <div className="flex items-center justify-center gap-1">
-                    {pinnacle ? <BookmakerLogo brand={pinnacle} size={15} /> : 'Pinn'}
+                  <div className="flex flex-col items-center gap-1">
+                    {pinnacle ? <BookmakerLogo brand={pinnacle} size={15} /> : <BlendBadge label="Pinn" />}
                     <span>Fair</span>
                   </div>
                 </th>
                 <th
-                  className="px-2 py-2 text-center font-medium"
+                  className="px-2 py-2 font-medium"
                   title="Every book that prices the whole market, de-vigged individually and averaged — also 100%"
                 >
-                  Blend Fair
+                  <div className="flex flex-col items-center gap-1">
+                    <BlendBadge />
+                    <span>Fair</span>
+                  </div>
                 </th>
                 {columns.map((id) => {
                   const brandInfo = brandById(id);
@@ -841,7 +900,7 @@ export default function TickerPage() {
                     <td className="px-2 py-1.5 text-slate-400">{b.sport ?? '–'}</td>
                     <td className="px-2 py-1.5 text-slate-500">{b.category ?? '–'}</td>
                     <td className="max-w-[12rem] truncate px-2 py-1.5 text-slate-400" title={b.tournament ?? ''}>
-                      {b.tournament ?? '–'}
+                      {tournamentLabel(b.tournament, b.category) ?? '–'}
                     </td>
                     <td className="max-w-[16rem] truncate px-2 py-1.5 text-slate-200" title={b.event ?? ''}>
                       {b.fixtureId && b.event ? (
