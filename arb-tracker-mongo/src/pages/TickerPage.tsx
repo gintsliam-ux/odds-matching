@@ -86,25 +86,53 @@ const money = (n: number | null | undefined) =>
 const NOT_BEST = new Set(['betfair', 'betfair_lay']);
 
 /**
- * The bet's price against the best anyone else is showing.
+ * The best price any other book is showing — for marking the winning column.
  *
- * `out` means we were over the odds: the customer took a price no other book
- * was offering. That is the whole of what a trading desk wants off this feed,
- * and the one thing the columns make you read across the row to see — so it is
- * computed once here and used both to tint the cell and to filter the page.
+ * This used to be the measure of "over the odds" as well, and is not any more:
+ * see `overFair`. It still answers which book column holds the best number on
+ * the row, which is a question about the field and nothing else.
  *
- * The exchange is shown but excluded from the comparison; see NOT_BEST. `best`
- * is null when nobody else priced the selection, and a row with nothing to
- * compare against is NOT out of line — it is unjudged, which is a different
- * thing and must not be filtered in as though it were evidence.
+ * The exchange is shown but excluded; see NOT_BEST. `best` is null when nobody
+ * else priced the selection.
  */
-function priceStandout(b: TickerBet): { best: number | null; out: boolean; byPct: number } {
+function priceStandout(b: TickerBet): { best: number | null } {
   const others = Object.entries(b.prices ?? {})
     .filter(([book]) => !NOT_BEST.has(book))
     .map(([, p]) => p);
-  const best = others.length ? Math.max(...others) : null;
-  const out = b.price != null && best != null && b.price > best;
-  return { best, out, byPct: out && best ? (b.price! / best - 1) * 100 : 0 };
+  return { best: others.length ? Math.max(...others) : null };
+}
+
+/**
+ * The bet's price against the TRUE price, which is the question worth asking.
+ *
+ * This was the best price any other book was showing, and that measure has a
+ * floor built into it: every book's quote already includes its own margin, so
+ * beating the field means beating a number that was never fair to begin with.
+ * A bet can sit under every book on the row and still be a bad bet to have
+ * taken. Judging against the 100% price asks the real thing — was this struck
+ * at better than the market's own estimate of the chance — and it catches the
+ * bets that the field comparison cannot see at all.
+ *
+ * Pinnacle first and the blend as the fallback. Pinnacle is the reference book,
+ * so when it has priced the market its de-vigged number is the one to answer
+ * to; when it has not, the blend of everyone who priced the whole market is a
+ * better answer than none. Which one was used is reported, because a 4% edge
+ * over Pinnacle and a 4% edge over a two-book blend are not the same claim.
+ *
+ * `fair` null means UNJUDGED, not fine — the market was not complete enough to
+ * divide (see server/lib/fair.mjs) — and an unjudged bet must never filter in
+ * as though it were evidence.
+ */
+function overFair(b: TickerBet): {
+  fair: number | null;
+  source: 'Pinnacle' | 'blend' | null;
+  out: boolean;
+  byPct: number;
+} {
+  const fair = b.fairPinnacle ?? b.fairBlend ?? null;
+  const source = b.fairPinnacle != null ? 'Pinnacle' : b.fairBlend != null ? 'blend' : null;
+  const out = b.price != null && fair != null && b.price > fair;
+  return { fair, source, out, byPct: out && fair ? (b.price! / fair - 1) * 100 : 0 };
 }
 
 /**
@@ -241,15 +269,18 @@ function FairCell({
 }
 
 /**
- * How far over the odds is worth looking at. Measured across a live feed: of
- * 200 bets, 140 had something to compare against and 21 were out — a median of
- * 4.9% over, the worst 18.3% ($1,500 at 1.76 against a field best of 1.488).
+ * How far over the fair price is worth looking at.
+ *
+ * The thresholds are unchanged but they now mean more: against the field, 0%
+ * was already a strong claim because a book's quote carries its margin. Against
+ * a 100% price, a couple of percent is ordinary variance between books and 5%
+ * is a market we were plainly wrong on.
  */
 const OUT_MARGINS = [0, 2, 5];
 
-/** Out of line by at least `margin` percent of the odds. */
+/** Struck at least `margin` percent above the fair price. */
 function overTheOdds(b: TickerBet, margin: number): boolean {
-  const { out, byPct } = priceStandout(b);
+  const { out, byPct } = overFair(b);
   return out && byPct >= margin;
 }
 
@@ -604,7 +635,10 @@ export default function TickerPage() {
       (b) => (brand === 'all' || b.brand === brand) && (sport === 'all' || b.sport === sport),
     );
     return {
-      comparable: base.filter((b) => priceStandout(b).best != null).length,
+      // Judgeable means there IS a fair to answer to, not that a book priced
+      // it — the two differ, and the gap is markets where a book had pulled a
+      // side and the fair was refused rather than guessed.
+      comparable: base.filter((b) => overFair(b).fair != null).length,
       byMargin: OUT_MARGINS.map((m) => base.filter((b) => overTheOdds(b, m)).length),
     };
   }, [bets, brand, sport]);
@@ -718,7 +752,7 @@ export default function TickerPage() {
               onClick={() => setOnlyOut(v)}
               title={
                 v
-                  ? 'Only bets struck at a price no other book was showing. Betfair is excluded from the comparison.'
+                  ? 'Only bets struck ABOVE the fair price — the market with the margin divided out, Pinnacle where it priced the market and the blend otherwise. A bet can be under every book on the row and still be over the fair.'
                   : 'Every bet on the feed.'
               }
               className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
@@ -752,9 +786,9 @@ export default function TickerPage() {
               ))}
               <span
                 className="text-[11px] text-slate-600"
-                title="Bets with at least one other book priced on the same selection. The rest cannot be judged either way."
+                title="Bets with a fair price to answer to. The rest are unjudged — the market was not complete enough to divide to 100%, usually a book having pulled one side."
               >
-                of {outCounts.comparable} comparable
+                of {outCounts.comparable} judgeable
               </span>
             </>
           )}
@@ -889,7 +923,11 @@ export default function TickerPage() {
             </thead>
             <tbody>
               {shown.map((b) => {
-                const { best, out: beatsField } = priceStandout(b);
+                const { best } = priceStandout(b);
+                // Over the FAIR price is what tints the cell now, not over the
+                // field — see overFair. A row can beat every book and still be
+                // under the fair, and that row is not the one to look at.
+                const { out: overTrue, byPct: overPct, fair, source: fairFrom } = overFair(b);
                 return (
                   <tr
                     key={b.id}
@@ -992,9 +1030,17 @@ export default function TickerPage() {
                     </td>
                     <td
                       className={`px-2 py-1.5 text-center font-semibold tabular-nums ${
-                        beatsField ? 'text-amber-300' : 'text-slate-100'
+                        overTrue ? 'text-amber-300' : 'text-slate-100'
                       }`}
-                      title={beatsField ? 'Longer than any book we hold on this outcome' : undefined}
+                      title={
+                        overTrue
+                          ? `${overPct.toFixed(1)}% above the fair price of ${fmt(fair)} (${fairFrom})`
+                          : fair != null && b.price != null
+                            ? `${((1 - b.price / fair) * 100).toFixed(1)}% under the fair price of ${fmt(fair)} (${fairFrom})`
+                            : fair != null
+                              ? `Fair price ${fmt(fair)} (${fairFrom}); this bet carries no price`
+                              : 'No fair price for this market — unjudged'
+                      }
                     >
                       {fmt(b.price)}
                     </td>
