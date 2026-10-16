@@ -90,6 +90,15 @@ const MARKET_IDS = {
   spreads: 'spread',
   spread: 'spread',
   game_spread: 'spread',
+  /*
+   * The surface calls the European handicap `spread_3way`; the collection on
+   * the NAS calls the same market `handicap_3way`. Unmapped, it passed through
+   * under the surface's name, matched no market definition, and so never
+   * rendered on a deployed instance — while the identical market rendered fine
+   * on the tailnet. Mapped to the NAS name because that is what the market
+   * definitions use, exactly as `h2h` is mapped to `moneyline`.
+   */
+  spread_3way: 'handicap_3way',
   set_spread: 'set_spread',
   totals: 'total',
   total: 'total',
@@ -668,13 +677,22 @@ function explode(row, { live, unsettled }) {
       market_id: mid,
       market_name: row.market_display_name ?? null,
       selection: row[`oc${rec.outcome}_name`] ?? null,
-      // Null for everything it cannot resolve, exactly as before — see
-      // canonicalLeg for why only this shape is derived.
-      normalized_selection: canonicalLeg(
-        row[`oc${rec.outcome}_name`],
-        row.home_team,
-        row.away_team,
-      ),
+      /*
+       * `ocN_selection` is the canonical leg, and it was here the whole time.
+       *
+       * This field was hard-coded null on the belief that the pivot had no
+       * such column. It does: beside `oc1_name: "Eintracht Frankfurt"` sits
+       * `oc1_selection: "home"`, and beside `oc3_name: "Draw"` sits
+       * `oc3_selection: "draw"` — the same vocabulary the NAS collection
+       * stores. Every market read through this surface was therefore served
+       * with no leg at all, leaving the grid to group outcomes on their
+       * display names and collapsing any market whose names were not distinct.
+       *
+       * `canonicalLeg` stays as the fallback for a row that lacks the column.
+       */
+      normalized_selection:
+        row[`oc${rec.outcome}_selection`] ??
+        canonicalLeg(row[`oc${rec.outcome}_name`], row.home_team, row.away_team),
       line,
       // Grouped on magnitude, so the two sides of one handicap stay one row.
       line_group: line == null ? null : Math.abs(line),
