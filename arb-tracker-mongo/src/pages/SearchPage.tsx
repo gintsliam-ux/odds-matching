@@ -142,13 +142,13 @@ export default function SearchPage() {
   }, [params, open, setTerm]);
 
   return (
-    <div className="flex h-dvh flex-col bg-surface-base text-slate-200">
+    <div className="flex h-dvh flex-col bg-surface text-slate-200">
       <header className="shrink-0 border-b border-surface-border bg-surface px-4 py-2.5">
         <div className="flex flex-wrap items-center gap-3">
           <span className="text-[15px] font-semibold tracking-tight text-slate-100">Prices</span>
           <Link
             to="/ticker"
-            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
+            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
           >
             <Radio size={12} /> Ticker
           </Link>
@@ -156,7 +156,7 @@ export default function SearchPage() {
           {user?.role !== 'trading' && (
             <Link
               to="/"
-              className="rounded-md px-2 py-1 text-[11px] text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
+              className="rounded-md px-2 py-1 text-xs text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
             >
               Board
             </Link>
@@ -229,7 +229,7 @@ export default function SearchPage() {
                 <span className="truncate text-xs text-slate-500">{e.league.name}</span>
               </span>
               <span className="mt-0.5 block truncate text-sm text-slate-200">{e.name}</span>
-              <span className="mt-0.5 block text-[11px] tabular-nums text-slate-600">
+              <span className="mt-0.5 block text-xs tabular-nums text-slate-600">
                 {e.status === 'live'
                   ? 'live'
                   : e.status === 'final'

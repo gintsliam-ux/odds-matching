@@ -168,6 +168,40 @@ function mergeFeed(existing: TickerBet[], authoritative: TickerBet[]): TickerBet
     .slice(0, LIMIT);
 }
 
+/**
+ * The secondary line of a stacked cell.
+ *
+ * One class, used everywhere a cell has a line under its main one, so the
+ * hierarchy is a single decision rather than a per-cell guess. `text-xs` is the
+ * board's own secondary size — the ticker used to sit two points below the rest
+ * of the site on the theory that a dense table needs it, which only made the
+ * densest page the hardest to read.
+ */
+const SUB = 'text-xs text-slate-500';
+
+/**
+ * Where a fixture sits: sport, country or region, competition.
+ *
+ * Three columns' worth of context on one line under the event, de-duplicated
+ * case-insensitively — the feed repeats itself often enough that without this
+ * the line reads "Rugby League · International · International - Rugby League
+ * World Cup". `tournamentLabel` has already taken the category off the front of
+ * the tournament; this catches the rest.
+ */
+function contextLine(b: TickerBet): string {
+  const parts = [b.sport, b.category, tournamentLabel(b.tournament, b.category)];
+  const seen = new Set<string>();
+  return parts
+    .filter((x): x is string => !!x)
+    .filter((x) => {
+      const k = x.toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    })
+    .join(' · ');
+}
+
 /** The reference book, looked up once rather than per row. */
 const pinnacle = brandById('pinnacle');
 
@@ -186,7 +220,7 @@ const pinnacle = brandById('pinnacle');
 function BlendBadge({ label = 'BLEND' }: { label?: string }) {
   return (
     <span
-      className="rounded border border-surface-border bg-white/5 px-1 py-px text-[8px] font-semibold uppercase leading-[1.3] tracking-wide text-slate-400"
+      className="rounded border border-surface-border bg-white/5 px-1 py-px text-[10px] font-semibold uppercase leading-[1.3] tracking-wide text-slate-400"
       style={{ minHeight: 15 }}
     >
       {label}
@@ -336,7 +370,7 @@ function IdChip({ value, title }: { value: string | null; title: string }) {
           () => {},
         );
       }}
-      className="group inline-flex w-full items-center gap-0.5 rounded bg-white/5 px-1 py-0.5 font-mono text-[10px] leading-none text-slate-400 transition hover:bg-white/10 hover:text-slate-200"
+      className="group inline-flex w-full items-center gap-0.5 rounded bg-white/5 px-1 py-0.5 font-mono text-xs leading-none text-slate-400 transition hover:bg-white/10 hover:text-slate-200"
     >
       <span className="truncate">{long ? value.slice(0, 8) : value}</span>
       {long && <span className="shrink-0 opacity-40">…</span>}
@@ -420,7 +454,7 @@ function TagChip({ tags }: { tags: string[] }) {
   return (
     <span
       title={tags.join(' · ')}
-      className={`inline-flex max-w-full items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] leading-none ${tone}`}
+      className={`inline-flex max-w-full items-center gap-0.5 rounded px-1.5 py-0.5 text-xs leading-none ${tone}`}
     >
       <span className="truncate">{first}</span>
       {rest.length > 0 && <span className="shrink-0 opacity-60">+{rest.length}</span>}
@@ -654,7 +688,7 @@ export default function TickerPage() {
              * cross-link instead.
              */
             to={user?.role === 'trading' ? '/prices' : '/'}
-            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
+            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
           >
             <ArrowLeft size={12} /> {user?.role === 'trading' ? 'Prices' : 'Board'}
           </Link>
@@ -678,7 +712,7 @@ export default function TickerPage() {
             * healthy state. While the stream is up it is the load; only when
             * the stream is down is polling the thing keeping the table current.
             */}
-          <span className="flex items-center gap-2 text-[11px] tabular-nums text-slate-600">
+          <span className="flex items-center gap-2 text-xs tabular-nums text-slate-600">
             <span title={lastPush ? new Date(lastPush).toLocaleString() : 'no bet struck since this page opened'}>
               pushed <span className="text-slate-400">{ago(lastPush)}</span>
             </span>
@@ -705,7 +739,7 @@ export default function TickerPage() {
               key={b}
               type="button"
               onClick={() => setBrand(b)}
-              className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
                 brand === b
                   ? 'bg-white/10 text-slate-100'
                   : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
@@ -719,7 +753,7 @@ export default function TickerPage() {
           <button
             type="button"
             onClick={() => setSport('all')}
-            className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
+            className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
               sport === 'all'
                 ? 'bg-white/10 text-slate-100'
                 : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
@@ -732,7 +766,7 @@ export default function TickerPage() {
               key={s}
               type="button"
               onClick={() => setSport(s)}
-              className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
                 sport === s
                   ? 'bg-white/10 text-slate-100'
                   : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
@@ -755,7 +789,7 @@ export default function TickerPage() {
                   ? 'Only bets struck ABOVE the fair price — the market with the margin divided out, Pinnacle where it priced the market and the blend otherwise. A bet can be under every book on the row and still be over the fair.'
                   : 'Every bet on the feed.'
               }
-              className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
                 onlyOut === v
                   ? 'bg-rose-500/15 text-rose-300'
                   : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
@@ -774,7 +808,7 @@ export default function TickerPage() {
                   key={m}
                   type="button"
                   onClick={() => setOutMargin(m)}
-                  className={`rounded-md px-2 py-1 text-[11px] font-medium tabular-nums transition ${
+                  className={`rounded-md px-2 py-1 text-xs font-medium tabular-nums transition ${
                     outMargin === m
                       ? 'bg-white/10 text-slate-100'
                       : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
@@ -785,7 +819,7 @@ export default function TickerPage() {
                 </button>
               ))}
               <span
-                className="text-[11px] text-slate-600"
+                className="text-xs text-slate-600"
                 title="Bets with a fair price to answer to. The rest are unjudged — the market was not complete enough to divide to 100%, usually a book having pulled one side."
               >
                 of {outCounts.comparable} judgeable
@@ -794,7 +828,7 @@ export default function TickerPage() {
           )}
           <span className="mx-1 h-4 w-px bg-surface-border" />
           <label
-            className="flex items-center gap-1.5 text-[11px] text-slate-600"
+            className="flex items-center gap-1.5 text-xs text-slate-600"
             title="Stake on the bet, before any bonus. Blank shows everything."
           >
             stake ≥
@@ -808,7 +842,7 @@ export default function TickerPage() {
                 inputMode="decimal"
                 placeholder="0"
                 aria-label="Minimum stake"
-                className={`w-20 rounded-md border bg-surface-raised/40 py-1 pl-4 pr-1.5 text-[11px] tabular-nums text-slate-100 outline-none placeholder:text-slate-600 ${
+                className={`w-20 rounded-md border bg-surface-raised/40 py-1 pl-4 pr-1.5 text-xs tabular-nums text-slate-100 outline-none placeholder:text-slate-600 ${
                   minStake > 0 ? 'border-emerald-500/40' : 'border-surface-border'
                 }`}
               />
@@ -822,10 +856,10 @@ export default function TickerPage() {
 
       {latest && (
         <div className="shrink-0 border-b border-surface-border bg-surface-raised/60 px-5 py-2">
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[12px]">
-            <span className="text-[10px] uppercase tracking-wide text-slate-500">Latest</span>
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs">
+            <span className="text-[11px] uppercase tracking-wide text-slate-500">Latest</span>
             <span
-              className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+              className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${
                 BRAND_TONE[latest.brand] ?? 'bg-white/10 text-slate-300'
               }`}
             >
@@ -852,8 +886,8 @@ export default function TickerPage() {
         ) : shown.length === 0 && state === 'ready' ? (
           <p className="px-5 py-8 text-sm text-slate-500">No single bets in the last few days.</p>
         ) : (
-          <table className="w-full border-collapse text-[12px]">
-            <thead className="sticky top-0 z-10 bg-surface-raised text-[10px] uppercase tracking-wide text-slate-500">
+          <table className="w-full border-collapse text-sm">
+            <thead className="sticky top-0 z-10 bg-surface-raised text-[11px] uppercase tracking-wide text-slate-500">
               <tr>
                 {/*
                   Brand, User, Tag and Bet were one cell under the single
@@ -863,18 +897,22 @@ export default function TickerPage() {
                   the punter and which was the bet. Four columns, four headings,
                   and each one a fixed width so the eye can run down it.
                 */}
-                <th className="w-[4.5rem] px-3 py-2 text-left font-medium">Brand</th>
-                <th className="w-[6.5rem] px-2 py-2 text-left font-medium">User</th>
-                <th className="w-[9rem] px-2 py-2 text-left font-medium">Tag</th>
-                <th className="w-[6.5rem] px-2 py-2 text-left font-medium">Bet</th>
-                <th className="px-2 py-2 text-left font-medium">Time</th>
-                <th className="px-2 py-2 text-left font-medium">Start</th>
-                <th className="px-2 py-2 text-left font-medium">Sport</th>
-                <th className="px-2 py-2 text-left font-medium">Category</th>
-                <th className="px-2 py-2 text-left font-medium">Tournament</th>
+                <th className="w-[5rem] px-3 py-2 text-left font-medium">Brand</th>
+                <th className="w-[7.5rem] px-2 py-2 text-left font-medium">User</th>
+                <th className="w-[9.5rem] px-2 py-2 text-left font-medium">Tag</th>
+                <th className="w-[7.5rem] px-2 py-2 text-left font-medium">Bet</th>
+                {/*
+                  Eight columns folded into three, each one two lines.
+                  The table was wider than any screen and the text was set two
+                  points smaller than the board to try to compensate, which
+                  made it both hard to read AND still too wide. Stacking what
+                  belongs together costs a line of height per row and buys back
+                  five columns of width, so the type can come up to the size the
+                  rest of the site uses. Primary above, context below.
+                */}
+                <th className="w-[7rem] px-2 py-2 text-left font-medium">Placed</th>
                 <th className="px-2 py-2 text-left font-medium">Event</th>
-                <th className="px-2 py-2 text-left font-medium">Market</th>
-                <th className="px-2 py-2 text-left font-medium">Outcome</th>
+                <th className="px-2 py-2 text-left font-medium">Selection</th>
                 <th className="border-l border-surface-border px-2 py-2 text-right font-medium">
                   Stake
                 </th>
@@ -949,7 +987,7 @@ export default function TickerPage() {
                           // where we can build the URL, and is inert where we
                           // cannot — see bookmakerUrl.
                           const href = bookmakerUrl(b.brand, b.sport, b.eventId);
-                          const tone = `rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                          const tone = `rounded px-1.5 py-0.5 text-xs font-medium ${
                             BRAND_TONE[b.brand] ?? 'bg-white/10 text-slate-300'
                           }`;
                           const label = BRAND_LABEL[b.brand] ?? b.brand;
@@ -979,44 +1017,50 @@ export default function TickerPage() {
                     <td className="px-2 py-1.5">
                       <IdChip value={b.betId} title="Bet" />
                     </td>
-                    <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-300">
-                      {time(b.placedAt)}
+                    {/* Placed above, kick-off below. */}
+                    <td className="whitespace-nowrap px-2 py-1.5 tabular-nums">
+                      <div className="text-slate-200">{time(b.placedAt)}</div>
+                      <div className={SUB}>{startLabel(b.startsAt)}</div>
                     </td>
-                    <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-500">
-                      {startLabel(b.startsAt)}
+                    {/* The fixture, with the competition that places it under. */}
+                    <td className="max-w-[15rem] px-2 py-1.5" title={b.event ?? ''}>
+                      <div className="truncate text-slate-200">
+                        {b.fixtureId && b.event ? (
+                          <Link
+                            /*
+                             * A trading account cannot open the event page — it
+                             * lives inside the board — so its link goes to the
+                             * prices page for the same fixture, which is the same
+                             * grid without the rail around it.
+                             */
+                            to={
+                              user?.role === 'trading'
+                                ? `/prices?fixture=${encodeURIComponent(b.fixtureId)}`
+                                : `/event/${eventSlug(b.event)}/${b.fixtureId}`
+                            }
+                            className="hover:text-emerald-300"
+                          >
+                            {b.event}
+                          </Link>
+                        ) : (
+                          b.event ?? '–'
+                        )}
+                      </div>
+                      <div className={`truncate ${SUB}`} title={contextLine(b)}>
+                        {contextLine(b) || '–'}
+                      </div>
                     </td>
-                    <td className="px-2 py-1.5 text-slate-400">{b.sport ?? '–'}</td>
-                    <td className="px-2 py-1.5 text-slate-500">{b.category ?? '–'}</td>
-                    <td className="max-w-[12rem] truncate px-2 py-1.5 text-slate-400" title={b.tournament ?? ''}>
-                      {tournamentLabel(b.tournament, b.category) ?? '–'}
-                    </td>
-                    <td className="max-w-[16rem] truncate px-2 py-1.5 text-slate-200" title={b.event ?? ''}>
-                      {b.fixtureId && b.event ? (
-                        <Link
-                          /*
-                           * A trading account cannot open the event page — it
-                           * lives inside the board — so its link goes to the
-                           * prices page for the same fixture, which is the same
-                           * grid without the rail around it.
-                           */
-                          to={
-                            user?.role === 'trading'
-                              ? `/prices?fixture=${encodeURIComponent(b.fixtureId)}`
-                              : `/event/${eventSlug(b.event)}/${b.fixtureId}`
-                          }
-                          className="hover:text-emerald-300"
-                        >
-                          {b.event}
-                        </Link>
-                      ) : (
-                        b.event ?? '–'
-                      )}
-                    </td>
-                    <td className="max-w-[10rem] truncate px-2 py-1.5 text-slate-400" title={b.market ?? ''}>
-                      {marketLabel(b.market)}
-                    </td>
-                    <td className="max-w-[14rem] truncate px-2 py-1.5 text-slate-200" title={b.outcome ?? ''}>
-                      {b.outcome ?? '–'}
+                    {/*
+                      What was backed, above what market it was backed in. The
+                      outcome leads because it is the thing a person reads first
+                      — "Papua New Guinea" tells you more at a glance than
+                      "Win" does.
+                    */}
+                    <td className="max-w-[14rem] px-2 py-1.5" title={b.outcome ?? ''}>
+                      <div className="truncate text-slate-200">{b.outcome ?? '–'}</div>
+                      <div className={`truncate ${SUB}`} title={b.market ?? ''}>
+                        {marketLabel(b.market) || '–'}
+                      </div>
                     </td>
                     <td className="whitespace-nowrap border-l border-surface-border px-2 py-1.5 text-right tabular-nums text-slate-300">
                       <span className="inline-flex items-center justify-end gap-1">

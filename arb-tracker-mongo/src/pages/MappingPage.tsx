@@ -508,7 +508,7 @@ export default function MappingPage() {
             <ArrowLeft size={14} /> Board
           </Link>
           <div className="min-w-0">
-            <h1 className="flex items-center gap-2 text-base font-semibold tracking-tight text-slate-100">
+            <h1 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-slate-100">
               <Link2 size={16} className="text-emerald-400" />
               Tournament mapping
             </h1>

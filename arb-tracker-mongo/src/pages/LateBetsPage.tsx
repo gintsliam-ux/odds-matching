@@ -68,7 +68,7 @@ export default function LateBetsPage() {
   const c = data?.counts;
 
   return (
-    <div className="flex h-dvh flex-col bg-surface-base text-slate-200">
+    <div className="flex h-dvh flex-col bg-surface text-slate-200">
       <header className="shrink-0 border-b border-surface-border bg-surface">
         <div className="flex flex-wrap items-center gap-3 px-4 py-2.5">
           <Link
@@ -78,17 +78,17 @@ export default function LateBetsPage() {
             <ArrowLeft size={14} /> Board
           </Link>
           <div className="min-w-0">
-            <h1 className="flex items-center gap-2 text-base font-semibold tracking-tight text-slate-100">
+            <h1 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-slate-100">
               <AlertTriangle size={16} className="text-rose-400" />
               Late Bets
             </h1>
-            <p className="mt-0.5 text-[11px] text-slate-500">
+            <p className="mt-0.5 text-xs text-slate-500">
               Bets accepted after Optic had the game under way
             </p>
           </div>
 
           {c && (
-            <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-500">
+            <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
               <span>
                 <b className="text-rose-300 tabular-nums">{c.late}</b> late
               </span>
@@ -117,7 +117,7 @@ export default function LateBetsPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 border-t border-surface-border/60 px-4 py-2">
-          <span className="text-[11px] text-slate-600">later than</span>
+          <span className="text-xs text-slate-600">later than</span>
           {AFTER.map((m) => (
             <button
               key={m}
@@ -133,7 +133,7 @@ export default function LateBetsPage() {
             </button>
           ))}
           <span className="mx-1 h-4 w-px bg-surface-border" />
-          <span className="text-[11px] text-slate-600">last</span>
+          <span className="text-xs text-slate-600">last</span>
           {HOURS.map((h) => (
             <button
               key={h}
@@ -207,7 +207,7 @@ export default function LateBetsPage() {
                 {b.outcome ? ` · ${b.outcome}` : ''}
               </span>
 
-              <span className="ml-auto flex shrink-0 items-center gap-2 text-[11px] text-slate-600">
+              <span className="ml-auto flex shrink-0 items-center gap-2 text-xs text-slate-600">
                 {b.stillLive && (
                   <span className="rounded bg-rose-500/15 px-1.5 py-0.5 font-medium text-rose-300">
                     in play now

@@ -90,7 +90,7 @@ function Row({ m }: { m: Mover }) {
 
         <span className="ml-auto flex shrink-0 items-center gap-2">
           {m.market === 'moneyline_3way' && (
-            <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-500">3-way</span>
+            <span className="rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-slate-500">3-way</span>
           )}
           <span className="text-xs text-slate-400">{m.selection}</span>
         </span>
@@ -117,7 +117,7 @@ function Row({ m }: { m: Mover }) {
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="ml-auto text-[11px] text-slate-500 hover:text-slate-300"
+          className="ml-auto text-xs text-slate-500 hover:text-slate-300"
         >
           {open ? 'hide' : `all ${m.books.length} books`}
         </button>
@@ -195,7 +195,7 @@ export function MoversPage() {
   const c = data?.counts;
 
   return (
-    <div className="flex h-dvh flex-col bg-surface-base text-slate-200">
+    <div className="flex h-dvh flex-col bg-surface text-slate-200">
       <header className="shrink-0 border-b border-surface-border bg-surface">
         <div className="flex flex-wrap items-center gap-3 px-4 py-2.5">
           <Link
@@ -205,18 +205,18 @@ export function MoversPage() {
             <ArrowLeft size={14} /> Board
           </Link>
           <div className="min-w-0">
-            <h1 className="flex items-center gap-2 text-base font-semibold tracking-tight text-slate-100">
+            <h1 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-slate-100">
               <TrendingDown size={16} className="text-emerald-400" />
               Movers
             </h1>
-            <p className="mt-0.5 text-[11px] text-slate-500">
+            <p className="mt-0.5 text-xs text-slate-500">
               Head-to-head markets that have come in, and who has not followed —
               measured as a change in implied probability
             </p>
           </div>
 
           {c && (
-            <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-500">
+            <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
               <span>
                 <b className="text-slate-300 tabular-nums">{c.movers}</b> movers
               </span>
@@ -255,7 +255,7 @@ export function MoversPage() {
             </button>
           ))}
           <span className="mx-1 h-4 w-px bg-surface-border" />
-          <span className="text-[11px] text-slate-600" title="Change in implied probability: (1/before − 1/now) × 100">
+          <span className="text-xs text-slate-600" title="Change in implied probability: (1/before − 1/now) × 100">
             move ≥
           </span>
           {MOVES.map((v) => (
@@ -296,7 +296,7 @@ export function MoversPage() {
               </option>
             ))}
           </select>
-          <span className="ml-auto text-[11px] text-slate-600">{visible.length} shown</span>
+          <span className="ml-auto text-xs text-slate-600">{visible.length} shown</span>
         </div>
       </header>
 

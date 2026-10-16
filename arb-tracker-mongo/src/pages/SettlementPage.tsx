@@ -66,7 +66,7 @@ export default function SettlementPage() {
   const c = data?.counts;
 
   return (
-    <div className="flex h-dvh flex-col bg-surface-base text-slate-200">
+    <div className="flex h-dvh flex-col bg-surface text-slate-200">
       <header className="shrink-0 border-b border-surface-border bg-surface">
         <div className="flex flex-wrap items-center gap-3 px-4 py-2.5">
           <Link
@@ -76,17 +76,17 @@ export default function SettlementPage() {
             <ArrowLeft size={14} /> Board
           </Link>
           <div className="min-w-0">
-            <h1 className="flex items-center gap-2 text-base font-semibold tracking-tight text-slate-100">
+            <h1 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-slate-100">
               <Clock size={16} className="text-amber-400" />
               Settlement
             </h1>
-            <p className="mt-0.5 text-[11px] text-slate-500">
+            <p className="mt-0.5 text-xs text-slate-500">
               Games Optic has called finished whose bets the book has not resulted
             </p>
           </div>
 
           {c && (
-            <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-500">
+            <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
               <span>
                 <b className="text-slate-300 tabular-nums">{c.events}</b> events
               </span>
@@ -110,7 +110,7 @@ export default function SettlementPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 border-t border-surface-border/60 px-4 py-2">
-          <span className="text-[11px] text-slate-600">finished at least</span>
+          <span className="text-xs text-slate-600">finished at least</span>
           {MINS.map((m) => (
             <button
               key={m}
@@ -179,7 +179,7 @@ export default function SettlementPage() {
                 <span className="ml-auto flex shrink-0 items-center gap-3 text-xs">
                   <span className="tabular-nums text-slate-400">{e.bets.length} bets</span>
                   <span className="font-semibold tabular-nums text-amber-300">{money(e.stake)}</span>
-                  <span className="text-[11px] text-slate-600">{open === e.key ? 'hide' : 'show'}</span>
+                  <span className="text-xs text-slate-600">{open === e.key ? 'hide' : 'show'}</span>
                 </span>
               </button>
 

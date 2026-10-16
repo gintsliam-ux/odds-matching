@@ -90,7 +90,7 @@ export default function Users() {
   if (me?.role !== 'admin') {
     return (
       <div>
-        <h1 className="text-2xl font-semibold text-white mb-1">Users</h1>
+        <h1 className="text-[15px] font-semibold text-slate-100 mb-1">Users</h1>
         <p className="text-sm text-slate-400">
           Only admins can manage users. You're signed in as{' '}
           <span className="text-slate-200 font-medium">{me?.username}</span> ({me?.role}).
@@ -103,7 +103,7 @@ export default function Users() {
     <div className="space-y-5">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-white mb-1">Users</h1>
+          <h1 className="text-[15px] font-semibold text-slate-100 mb-1">Users</h1>
           <p className="text-sm text-slate-400">
             Shared with the other tools on this database — changes here apply everywhere.
           </p>
@@ -131,7 +131,7 @@ export default function Users() {
       {adding && (
         <div className="bg-surface-raised border border-surface-border rounded-xl p-4 flex flex-wrap items-end gap-3">
           <div className="space-y-1.5">
-            <label className="block text-[11px] uppercase tracking-wider text-slate-400">Username</label>
+            <label className="block text-xs uppercase tracking-wider text-slate-400">Username</label>
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
@@ -139,7 +139,7 @@ export default function Users() {
             />
           </div>
           <div className="space-y-1.5">
-            <label className="block text-[11px] uppercase tracking-wider text-slate-400">Password</label>
+            <label className="block text-xs uppercase tracking-wider text-slate-400">Password</label>
             <input
               type="password"
               autoComplete="new-password"
@@ -150,7 +150,7 @@ export default function Users() {
             />
           </div>
           <div className="space-y-1.5">
-            <label className="block text-[11px] uppercase tracking-wider text-slate-400">Role</label>
+            <label className="block text-xs uppercase tracking-wider text-slate-400">Role</label>
             <select
               value={newRole}
               onChange={(e) => setNewRole(e.target.value as Role)}
@@ -214,7 +214,7 @@ export default function Users() {
                 return (
                   <tr key={u.id} className="hover:bg-white/5/40 transition-colors">
                     <td className="px-4 py-2.5">
-                      <span className="text-white font-medium">{u.username}</span>
+                      <span className="text-slate-100 font-medium">{u.username}</span>
                       {isMe && <span className="ml-2 text-[10px] uppercase tracking-wider text-slate-500">you</span>}
                     </td>
                     <td className="px-3 py-2.5">
@@ -227,7 +227,7 @@ export default function Users() {
                             `${u.username} is now ${e.target.value}.`,
                           )
                         }
-                        className={`px-2 py-1 rounded text-[11px] font-semibold uppercase tracking-wider border-0 focus:outline-none ${ROLE_PILL[u.role]}`}
+                        className={`px-2 py-1 rounded text-xs font-semibold uppercase tracking-wider border-0 focus:outline-none ${ROLE_PILL[u.role]}`}
                       >
                         {ROLES.map((r) => (
                           <option key={r} value={r} className="bg-surface-raised text-slate-100">
@@ -275,8 +275,8 @@ export default function Users() {
           <div className="absolute inset-0 bg-black/60" onClick={() => setResetting(null)} />
           <div className="relative w-full max-w-sm bg-surface-raised border border-surface-border rounded-xl p-5 space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-white font-semibold">New password for {resetting.username}</h2>
-              <button onClick={() => setResetting(null)} className="text-slate-400 hover:text-white">
+              <h2 className="text-slate-100 font-semibold">New password for {resetting.username}</h2>
+              <button onClick={() => setResetting(null)} className="text-slate-400 hover:text-slate-200">
                 <X className="w-4 h-4" />
               </button>
             </div>
