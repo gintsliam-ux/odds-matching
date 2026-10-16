@@ -107,6 +107,39 @@ function priceStandout(b: TickerBet): { best: number | null; out: boolean; byPct
   return { best, out, byPct: out && best ? (b.price! / best - 1) * 100 : 0 };
 }
 
+/**
+ * Fold a freshly fetched batch into the feed already on screen.
+ *
+ * Keyed on the document id, because the same bet arrives by both routes — the
+ * stream pushes it the moment it is written and the poll returns it enriched a
+ * few seconds later. `authoritative` wins on the fields for any bet in both,
+ * which is the poll: its rows have been through the comparison prices and the
+ * fairs, and the pushed row has not.
+ *
+ * Then newest-first and capped, so the only way a row leaves the table is
+ * another LIMIT bets arriving after it. A refresh can add and it can update,
+ * but it cannot delete — which is what makes the feed monotonic, and a feed
+ * that silently goes backwards is worse than a stale one, because the gap is
+ * invisible.
+ */
+function mergeFeed(existing: TickerBet[], authoritative: TickerBet[]): TickerBet[] {
+  const byId = new Map<string, TickerBet>();
+  for (const b of existing) byId.set(b.id, b);
+  for (const b of authoritative) byId.set(b.id, b);
+  const at = (b: TickerBet) => (b.placedAt ? Date.parse(b.placedAt) : NaN);
+  return [...byId.values()]
+    .sort((a, b) => {
+      const ta = at(a);
+      const tb = at(b);
+      // A row with no usable time sorts last rather than poisoning the order.
+      if (Number.isNaN(ta) && Number.isNaN(tb)) return 0;
+      if (Number.isNaN(ta)) return 1;
+      if (Number.isNaN(tb)) return -1;
+      return tb - ta;
+    })
+    .slice(0, LIMIT);
+}
+
 /** The reference book, looked up once rather than per row. */
 const pinnacle = brandById('pinnacle');
 
@@ -434,7 +467,24 @@ export default function TickerPage() {
       fetchTicker()
         .then((d) => {
           if (cancelled) return;
-          setBets(d.bets ?? []);
+          /*
+           * MERGED, not replaced, and that is the whole point.
+           *
+           * This was `setBets(d.bets)`. A poll therefore deleted every bet the
+           * stream had pushed that the poll's own payload did not happen to
+           * contain — and the payload is built on the server a moment before it
+           * is sent, so a bet arriving in that gap was shown by the stream and
+           * then wiped by the next poll a few seconds later. Add a function
+           * instance serving a cached feed (see maxStaleMs on the route) and it
+           * wiped half an hour of them.
+           *
+           * The feed is the newest LIMIT bets this page has SEEN. Rows leave it
+           * by being pushed off the bottom by newer ones, never by a refresh
+           * disagreeing about what exists. The poll's copy of a bet wins on
+           * the fields, because it is the enriched one — the stream's rows
+           * carry no comparison prices.
+           */
+          setBets((prev) => mergeFeed(prev, d.bets ?? []));
           setLastPoll(Date.now());
           setState('ready');
         })

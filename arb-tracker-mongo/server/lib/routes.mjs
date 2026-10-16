@@ -96,7 +96,25 @@ const ROUTES = {
 
   // Bets live on a different cluster and are only read when the tab is opened.
   // The cross-sport bet feed. Cheap enough to serve live; see ticker.mjs.
-  'GET /api/ticker': () => cached('ticker', TTL.bets, betTicker),
+  /*
+   * Bounded staleness, for the same reason the pulse has it.
+   *
+   * `cached` serves a stale value for as long as you let it, which is right for
+   * a payload whose meaning does not decay. A bet feed is the opposite: its
+   * entire content is what has just come through. Unbounded, a function
+   * instance that built the feed and then sat idle handed that same list back
+   * on its next request — so a poll landing on it showed bets from before the
+   * last half hour and the rows above them appeared to have been REMOVED, then
+   * came back on the next poll when a busier instance answered. Exactly the
+   * fault the pulse bar had, with the same cause and the same tell: it snaps
+   * backwards rather than degrading.
+   *
+   * A minute is the line. Inside it the stale copy is served instantly and
+   * refreshed behind, which is most requests; past it the caller waits the two
+   * or three seconds for a real rebuild, because a feed a minute behind is
+   * still a feed and a feed half an hour behind is a lie.
+   */
+  'GET /api/ticker': () => cached('ticker', TTL.bets, betTicker, { maxStaleMs: 60_000 }),
 
   'GET /api/bets': async (url) => {
     const id = url.searchParams.get('fixtureId') ?? '';
