@@ -161,22 +161,39 @@ export function MoversPage() {
   const [sport, setSport] = useParam('sport', 'all');
   const [onlyLagging, setOnlyLagging] = useFlagParam('lagging', false);
 
+  /*
+   * Refreshed on a timer, which it was not.
+   *
+   * This page fetched once on mount and on a filter change, and never again —
+   * so a price that moved after you opened it did not appear until you
+   * reloaded. On a page whose entire subject is movement that is the one thing
+   * it had to do. Measured per book, the newest price we hold is a median 3
+   * minutes old at Pinnacle and 7 to 30 at the others, so a minute is faster
+   * than the data and there is nothing to gain by going below it.
+   *
+   * `loading` only while there is nothing to show. A poll that flipped the
+   * state back would replace a readable page with a skeleton every minute.
+   */
   useEffect(() => {
     let cancelled = false;
-    setState('loading');
-    fetchMovers({ window: win, minMove })
-      .then((d) => {
-        if (cancelled) return;
-        setData(d);
-        setState('ready');
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        setError(e instanceof Error ? e.message : 'could not load');
-        setState('error');
-      });
+    setState((prev) => (prev === 'ready' ? prev : 'loading'));
+    const load = () =>
+      fetchMovers({ window: win, minMove })
+        .then((d) => {
+          if (cancelled) return;
+          setData(d);
+          setState('ready');
+        })
+        .catch((e) => {
+          if (cancelled) return;
+          setError(e instanceof Error ? e.message : 'could not load');
+          setState('error');
+        });
+    load();
+    const id = setInterval(load, 60_000);
     return () => {
       cancelled = true;
+      clearInterval(id);
     };
   }, [win, minMove]);
 
@@ -300,7 +317,7 @@ export function MoversPage() {
         </div>
       </header>
 
-      {state === 'loading' && <RowsSkeleton rows={11} lead="w-16" />}
+      {state === 'loading' && !data && <RowsSkeleton rows={11} lead="w-16" />}
 
       {state === 'error' && (
         <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-slate-500">

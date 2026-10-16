@@ -125,6 +125,16 @@ export default async function handler(req, res) {
      */
     const CHEAP_AND_LIVE = new Set([
       '/api/bets', '/api/ticker', '/api/pulse', '/api/events', '/api/event',
+      /*
+       * Movers belongs here, and sat in the 300s bucket instead.
+       *
+       * A page about price movement was telling the browser it could reuse its
+       * answer for five minutes, so even a reload could show a five-minute-old
+       * board — and now that the page polls every minute, that window would
+       * have swallowed four polls in five. Prices themselves refresh on a
+       * median of 3 minutes at Pinnacle, so 30s is still slower than the data.
+       */
+      '/api/movers',
     ]);
     const PER_FIXTURE = new Set(['/api/odds', '/api/event/details']);
     /*
