@@ -538,6 +538,51 @@ const PRICE_FIELDS = new Set([
   'odds', 'open', '6h', '3h', '1h', '30m', '10m', 'close', 'current', 'at', 'status', 'fair',
 ]);
 
+/**
+ * The canonical leg for an outcome the surface names after the teams.
+ *
+ * `normalized_selection` was hard-coded null on every row this builds, because
+ * the pivot has no such column — and for most markets that costs nothing, since
+ * the grid resolves the side through `outcome_no` instead (moneyline, spreads
+ * and totals all go that way) and Yes/No names are distinct on their face.
+ *
+ * Double chance is the exception, and it is the one that broke. Its three
+ * outcomes are named "Sydney FC Or Draw", "Western Sydney Wanderers FC Or
+ * Draw", "Sydney FC Or Western Sydney Wanderers FC" — and with no canonical
+ * leg the grid had nothing to group on but those strings. Where the surface
+ * repeats one of them across all three outcomes, three outcomes became one row
+ * and the other two outcomes' prices went with it. The Mongo source carries
+ * `home_draw` / `draw_away` / `home_away` for exactly this reason: 30k rows of
+ * each, against 4,836 distinct team-named variants.
+ *
+ * Derived from the fixture's OWN `home_team` and `away_team`, which the pivot
+ * does carry, so this is a match rather than a guess — and it returns null
+ * unless both halves resolve, leaving the previous behaviour in place for
+ * anything it does not recognise. Not inferred from `outcome_no`: that mapping
+ * holds on the collection measured here but has never been checked against
+ * this surface, and a wrong leg is worse than no leg now that the grid trusts
+ * one when it is present.
+ */
+const legSlug = (s) =>
+  String(s ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+function canonicalLeg(name, home, away) {
+  const parts = legSlug(name).split('_or_');
+  if (parts.length !== 2) return null;
+  const h = legSlug(home);
+  const a = legSlug(away);
+  const has = (w) => Boolean(w) && parts.includes(w);
+  if (has(h) && has('draw')) return 'home_draw';
+  if (has(a) && has('draw')) return 'draw_away';
+  if (has(h) && has(a)) return 'home_away';
+  return null;
+}
+
 function explode(row, { live, unsettled }) {
   const out = [];
   const byOutcome = new Map();
@@ -623,7 +668,13 @@ function explode(row, { live, unsettled }) {
       market_id: mid,
       market_name: row.market_display_name ?? null,
       selection: row[`oc${rec.outcome}_name`] ?? null,
-      normalized_selection: null,
+      // Null for everything it cannot resolve, exactly as before — see
+      // canonicalLeg for why only this shape is derived.
+      normalized_selection: canonicalLeg(
+        row[`oc${rec.outcome}_name`],
+        row.home_team,
+        row.away_team,
+      ),
       line,
       // Grouped on magnitude, so the two sides of one handicap stay one row.
       line_group: line == null ? null : Math.abs(line),

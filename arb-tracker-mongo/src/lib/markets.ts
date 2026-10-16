@@ -801,31 +801,73 @@ const DC_BY_OUTCOME: Record<number, string> = { 1: 'home_draw', 2: 'draw_away', 
 
 const isDoubleChance = (marketId: string) => /double_chance/.test(marketId);
 
+type FlatIdentity = (r: OddsRow, home: string, away: string, marketId: string) => string | null;
+
 /**
- * The grouping key for one outcome of a flat market, canonical where possible.
+ * The three things that can tell one outcome of a flat market from another,
+ * most trustworthy first.
  *
- * Three identities, in order of how much they can be trusted. The normalized
- * name is stable across books and is what the Mongo source carries. The outcome
- * NUMBER is the other canonical identity and is what the odds surface carries
- * instead — it nulls `normalized_selection` on every row. Raw selection text is
- * the last resort, and the only one of the three that is not stable: it is the
- * same market written out by each book in its own words, so two books
- * disagreeing split one outcome in two, and a surface that repeats one outcome's
- * name across all three merges three outcomes into one.
- *
- * That last case is not hypothetical. It is what a Double Chance showing a
- * single row called "Western Sydney Wanderers FC Or Draw" looks like.
+ * The normalized leg is stable across books and is what the Mongo source
+ * carries. The outcome NUMBER is the other canonical identity, and is what the
+ * odds surface carries instead — it nulls `normalized_selection` on every row
+ * it builds. Raw selection text is last: it is the market written out by each
+ * book in its own words, so two books spelling a team differently split one
+ * outcome into two rows.
  */
-function flatKeyOf(r: OddsRow, home: string, away: string, marketId: string): string {
-  const n = r.normalized_selection;
-  if (n) return canonicalFlatKey(n, home, away) ?? n;
-  if (r.outcome_no != null) {
-    // Double chance has a known outcome order — see FLAT_RANK, measured from
-    // the rows that carry both identities — so the number resolves to the same
-    // key the other source would have given, and the two sources agree.
-    return (isDoubleChance(marketId) ? DC_BY_OUTCOME[r.outcome_no] : null) ?? `oc${r.outcome_no}`;
+const FLAT_IDENTITIES: FlatIdentity[] = [
+  (r, home, away) =>
+    r.normalized_selection ? canonicalFlatKey(r.normalized_selection, home, away) ?? r.normalized_selection : null,
+  (r, _home, _away, marketId) =>
+    r.outcome_no == null
+      ? null
+      : // Double chance has a known outcome order — FLAT_RANK, measured from the
+        // rows carrying both identities — so the number resolves to the key the
+        // normalized name would have given and the two sources agree.
+        (isDoubleChance(marketId) ? DC_BY_OUTCOME[r.outcome_no] : null) ?? `oc${r.outcome_no}`,
+  (r) => r.selection || null,
+];
+
+/**
+ * Pick the identity that actually distinguishes this market's outcomes.
+ *
+ * Trust order alone is not enough, because the canonical identities can arrive
+ * COLLAPSED: one Argentine fixture has all three of Betfair's double chance
+ * outcomes stored as `home_away` AND all three as outcome 3, with only the
+ * three names telling them apart — 141 fixture-markets in the collection have
+ * a leg with fewer distinct values than it has names. Keyed on the leg, those
+ * three became one row and two thirds of the prices vanished. That is what was
+ * reported, and preferring the leg because it is normally the best key is
+ * exactly what made it happen.
+ *
+ * The test is an invariant rather than a guess: in a market with no lines, a
+ * book quotes each outcome at most once, so if any (key, book) pair holds more
+ * than one row the key is merging outcomes and is unusable. The first identity
+ * that survives it wins, which keeps the normalized leg in charge whenever it
+ * is sound — including when a book's own spelling would have over-split.
+ */
+function chooseFlatIdentity(
+  rows: OddsRow[],
+  home: string,
+  away: string,
+  marketId: string,
+): FlatIdentity {
+  for (const identity of FLAT_IDENTITIES) {
+    const keys = rows.map((r) => identity(r, home, away, marketId));
+    // Unusable if any row lacks it — a half-populated identity would group the
+    // rows that have it and pile the rest into one bucket.
+    if (keys.some((k) => k == null)) continue;
+    const seen = new Set<string>();
+    const collapses = rows.some((r, i) => {
+      const k = `${keys[i]}\u0000${r.sportsbook}`;
+      if (seen.has(k)) return true;
+      seen.add(k);
+      return false;
+    });
+    if (!collapses) return identity;
   }
-  return r.selection ?? '';
+  // Nothing distinguishes them cleanly; the most trustworthy is still the least
+  // wrong, and the market renders as it did before.
+  return FLAT_IDENTITIES[0];
 }
 
 /**
@@ -898,9 +940,11 @@ export function buildMarkets(
         .sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
     } else if (def.kind === 'flat') {
       // Named outcomes (Yes/No, 1X/12/X2), ordered by outcome_no.
+      const identity = chooseFlatIdentity(marketRows, home, away, def.id);
+      const flatKeyOf = (r: OddsRow) => identity(r, home, away, def.id) ?? r.selection ?? '';
       const order = new Map<string, number>();
       for (const r of marketRows) {
-        const k = flatKeyOf(r, home, away, def.id);
+        const k = flatKeyOf(r);
         // The outcome number where the row has one, else the canonical rank for
         // the key — so a market whose rows carry neither still sorts the way
         // the same market does elsewhere, instead of by arrival.
@@ -912,7 +956,7 @@ export function buildMarkets(
       );
       const grouped = keys.map((k) => ({
         k,
-        rs: marketRows.filter((r) => flatKeyOf(r, home, away, def.id) === k),
+        rs: marketRows.filter((r) => flatKeyOf(r) === k),
       }));
       /*
        * Does the rows' own text actually tell the outcomes apart?
