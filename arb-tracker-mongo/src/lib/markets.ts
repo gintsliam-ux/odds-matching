@@ -367,6 +367,16 @@ const TEAM_DEFAULT: MarketDef[] = [
 const SOCCER_MARKETS: MarketDef[] = [
   D('moneyline', 'Result', 'h2h'),
   D('spread', 'Handicap', 'spread'),
+  /*
+   * The European handicap, which is a different market from the Asian one
+   * above rather than a variant of it: the draw is a third outcome, so a
+   * 1-0 win against a -1 line settles as the draw leg instead of pushing.
+   *
+   * 95 fixtures carry it and none of them could show it, because it was in the
+   * data and in no market list — `handicap_3way` appeared nowhere in this file.
+   * Soccer only; it is the only sport that has it.
+   */
+  D('handicap_3way', 'Handicap — 3-Way', 'spread'),
   D('total', 'Total Goals', 'total'),
   D('dnb', 'Draw No Bet', 'h2h'),
   D('double_chance', 'Double Chance', 'flat'),
@@ -1013,8 +1023,14 @@ export function buildMarkets(
       // share. home -1.5/away +1.5 and home +1.5/away -1.5 are different markets
       // (different pair_key), which abs(line) would wrongly merge. Fall back to
       // computing it from the home line when pair_key is absent.
+      /*
+       * The away side is the only one whose line is mirrored. Home and the
+       * draw both carry the home-signed number — checked on the data: pair_key
+       * -3 holds home@-3, draw@-3 and away@+3 — so negating anything that is
+       * not side 1 would have put the draw leg on its own phantom line.
+       */
       const keyNum = (r: OddsRow) =>
-        r.pair_key ?? (sideOf(r) === 1 ? (r.line ?? 0) : -(r.line ?? 0));
+        r.pair_key ?? (sideOf(r) === 2 ? -(r.line ?? 0) : (r.line ?? 0));
       const isSideA = (r: OddsRow) => sideOf(r) === 1;
       const main = mainLine(marketRows, keyNum, isSideA);
       const keys = [...new Set(marketRows.map(keyNum))];
@@ -1023,9 +1039,14 @@ export function buildMarkets(
         .flatMap((K) => {
           const hr = marketRows.filter((r) => sideOf(r) === 1 && keyNum(r) === K);
           const ar = marketRows.filter((r) => sideOf(r) === 2 && keyNum(r) === K);
+          // A three-way handicap has the draw as a real third outcome at each
+          // line. Only emitted where such rows exist, so an Asian handicap —
+          // which has no draw to emit — renders exactly as it did.
+          const dr = marketRows.filter((r) => sideOf(r) === 3 && keyNum(r) === K);
           // Label from each side's actual signed line (home line = K).
           const hLine = hr[0]?.line ?? K;
           const aLine = ar[0]?.line ?? -K;
+          const dLine = dr[0]?.line ?? K;
           const isMain = K === main;
           return [
             {
@@ -1033,6 +1054,10 @@ export function buildMarkets(
               isMain,
               groupStart: true,
             },
+            // Between the two sides, as the Result market puts it.
+            ...(dr.length
+              ? [{ ...makeSelectionRow(books, `Draw_${K}`, `Draw ${signed(dLine)}`, dr), isMain }]
+              : []),
             {
               ...makeSelectionRow(books, `${away}_${K}`, `${away} ${signed(aLine)}`, ar, away),
               isMain,
