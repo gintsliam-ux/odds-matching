@@ -950,6 +950,37 @@ function sameSelection(a, b) {
 }
 
 /**
+ * Which handicap market a soccer handicap bet is actually in.
+ *
+ * Soccer has two and they are different bets. The Asian handicap (`spread`) is
+ * two-way: at -1, a one-goal win returns the stake. The European handicap
+ * (`handicap_3way`) has the draw as a third outcome: at -1, a one-goal win
+ * loses. So the three-way price is systematically LONGER, and comparing one
+ * against the other manufactures edge that is not there — exactly the fault the
+ * moneyline branch below already guards against.
+ *
+ * A handicap bet resolved to `spread` and nothing else, so every swiftbet
+ * soccer handicap was priced against a market swiftbet does not offer. Real
+ * Madrid -1.0 taken at 1.65 showed a 1.407 "close" and a 10% overlay on a
+ * $1,000 stake; the two numbers are different bets.
+ *
+ * Told apart by the LINE, which is firmer than a brand rule and agrees with it.
+ * Measured over fourteen days: `handicap_3way` carries whole lines ONLY (±1 to
+ * ±6, no fractional line anywhere), while the Asian market is mostly
+ * fractional. And of 57 soccer handicap bets, swiftbet's 49 are all whole while
+ * mybet's and multis' 8 are all fractional — so the shape of the line and the
+ * brand that struck it say the same thing.
+ *
+ * No fallback between them, deliberately. If the three-way is not priced on a
+ * fixture — only Pinnacle and Sportsbet quote it — the bet is unjudged, which
+ * is the honest answer. Falling back to the Asian close is the bug.
+ */
+const handicapIds = (period, line, sport) =>
+  String(sport ?? '').toLowerCase() === 'soccer' && Number.isInteger(line)
+    ? [`${period}handicap_3way`]
+    : [`${period}spread`];
+
+/**
  * The market ids a bet's market name might be asking about.
  *
  * Whole-name matches only, and nothing combined. A same-game multi reads
@@ -976,7 +1007,7 @@ function sameSelection(a, b) {
  * can be compared. Matching on names alone priced none of these: 14 totals and
  * 10 handicaps went bare because "Total Under 7.5 runs" is not "Under".
  */
-export function parseBetMarket(market, outcome) {
+export function parseBetMarket(market, outcome, sport) {
   const m = String(market ?? '');
   const o = String(outcome ?? '');
   const km = key(m);
@@ -1099,7 +1130,7 @@ export function parseBetMarket(market, outcome) {
 
   // A market that SAYS handicap is one.
   if (/\b(handicap|line|spread|point spread)\b/.test(km) && line != null) {
-    return { kind: 'spread', marketIds: [`${period}spread`], name, line };
+    return { kind: 'spread', marketIds: handicapIds(period, line, sport), name, line };
   }
 
   /*
@@ -1120,7 +1151,7 @@ export function parseBetMarket(market, outcome) {
 
   // Otherwise a line in the text is the only sign it is a handicap at all.
   if (line != null && !/\btotal\b/.test(km)) {
-    return { kind: 'spread', marketIds: [`${period}spread`], name, line };
+    return { kind: 'spread', marketIds: handicapIds(period, line, sport), name, line };
   }
   return null;
 }
@@ -1173,7 +1204,7 @@ async function pricesFor(bets, byEventId, fixtures, timings, { closing = false }
   for (const b of bets) {
     const m = b.eventId ? byEventId.get(String(b.eventId)) : null;
     if (!m) continue;
-    const parsed = parseBetMarket(b.market, b.outcome);
+    const parsed = parseBetMarket(b.market, b.outcome, b.sport);
     if (!parsed) continue;
     want.set(b, parsed);
     const list = wanted.get(m.optic_fixture_id) ?? [];
