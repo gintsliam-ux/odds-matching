@@ -85,6 +85,35 @@ function Move({ pct }: { pct: number | null }) {
   );
 }
 
+/**
+ * Expected margin on the stake — price/fair - 1, against the closing fair.
+ *
+ * Signed from OUR side of the counter, which is the opposite of how it reads on
+ * the row: a positive EM% is the customer's edge and therefore our expected
+ * loss, so positive is the colour that means "look at this". The dollars matter
+ * more than the percentage — a 174% edge on a $12 alternate-line bet is noise
+ * and a 5% edge on $5,000 is not — so both are shown and the money leads on
+ * weight.
+ */
+function Em({ pct, pl }: { pct: number | null | undefined; pl: number | null | undefined }) {
+  if (pct == null) return <span className="text-slate-700">–</span>;
+  const against = pct > 0;
+  return (
+    <span className="inline-flex flex-col leading-tight">
+      <span className={against ? 'font-semibold text-rose-300' : 'text-emerald-300/70'}>
+        {against ? '+' : ''}
+        {pct.toFixed(2)}%
+      </span>
+      {pl != null && (
+        <span className={`text-[10px] ${against ? 'text-rose-300/60' : 'text-slate-600'}`}>
+          {against ? '-' : '+'}
+          {money(Math.abs(pl))}
+        </span>
+      )}
+    </span>
+  );
+}
+
 /** The book columns, in the board's order, plus whatever else the feed carries. */
 function bookColumns(bets: PendingBet[]): string[] {
   const core = BOOKMAKERS.map((b) => b.id);
@@ -175,17 +204,27 @@ export default function PendingBetsPage() {
     [bets],
   );
 
-  const shown = useMemo(
-    () =>
-      bets.filter(
-        (b) =>
-          (!firmersOnly || b.firmed) &&
-          (!settled || b.beatClose) &&
-          (brand === 'all' || b.brand === brand) &&
-          (sport === 'all' || b.sport === sport),
-      ),
-    [bets, firmersOnly, settled, brand, sport],
-  );
+  const shown = useMemo(() => {
+    const rows = bets.filter(
+      (b) =>
+        (!firmersOnly || b.firmed) &&
+        (!settled || b.beatClose) &&
+        (brand === 'all' || b.brand === brand) &&
+        (sport === 'all' || b.sport === sport),
+    );
+    /*
+     * Settled sorts by the MONEY, not the date.
+     *
+     * The open views are a feed and read newest-first, which is what you want
+     * from something still live. A settled list is a post-mortem: every row is
+     * over, nothing will change, and the only question is which prices cost
+     * the most. Ordering by expected dollars puts a 5% edge on $5,000 above a
+     * 174% edge on $12 — the percentage alone has the two the wrong way round.
+     */
+    return settled
+      ? [...rows].sort((a, b) => Math.abs(b.emPl ?? 0) - Math.abs(a.emPl ?? 0))
+      : rows;
+  }, [bets, firmersOnly, settled, brand, sport]);
 
   const columns = useMemo(() => bookColumns(bets), [bets]);
   const c = data?.counts;
@@ -236,6 +275,17 @@ export default function PendingBetsPage() {
                 <b className="tabular-nums text-slate-300">{c.judgeable}</b> judgeable ·{' '}
                 {money(c.stake)}
               </span>
+              {settled && c.emPl != null && (
+                <span
+                  title={`Expected margin over all ${c.judgeable} judgeable bets, priced against each one's closing fair. Negative is in our favour. The beats alone account for ${money(Math.abs(c.beatEmPl ?? 0))} against us, so this total is what the rest of the book earned back.`}
+                >
+                  EM{' '}
+                  <b className={`tabular-nums ${(c.emPl ?? 0) > 0 ? 'text-rose-300' : 'text-emerald-300/80'}`}>
+                    {(c.emPl ?? 0) > 0 ? '-' : '+'}
+                    {money(Math.abs(c.emPl ?? 0))}
+                  </b>
+                </span>
+              )}
               <span
                 title={
                   settled
@@ -402,7 +452,7 @@ export default function PendingBetsPage() {
                   className="px-2 py-2 text-center font-medium"
                   title={
                     settled
-                      ? "Where the market closed on this selection, with the margin divided out — Pinnacle's de-vigged close where it has one, else the blend of every book that closed the whole market. Not any one book's quoted close: that still carries its margin, so beating it is a lower bar than beating the true price."
+                      ? "Where the market closed on this selection, with the margin divided out: every book that closed the whole market, de-vigged individually and averaged. Not any one book's quoted close — that still carries its margin, so beating it is a lower bar than beating the true price — and not Pinnacle alone, because this is the fair the EM column totals against. Pinnacle's own reading is in each row's tooltip where it has one."
                       : "Our own current price on the same selection, from the book the bet was struck on. A multis bet reads mybet's price: the two are one platform behind two front ends and share a single event store."
                   }
                 >
@@ -411,6 +461,14 @@ export default function PendingBetsPage() {
                 <th className="px-2 py-2 text-center font-medium">
                   {settled ? 'vs close' : 'Move'}
                 </th>
+                {settled && (
+                  <th
+                    className="px-2 py-2 text-center font-medium"
+                    title="Expected margin on the stake: the price taken divided by the blend closing fair, less one — the customer's expected value per dollar, and our expected loss. Same definition as blend_em_pct on the trader stats, so the two agree. A positive number is a price we should not have offered, whether or not it won; the dollar figure beneath is that percentage of the stake."
+                  >
+                    EM
+                  </th>
+                )}
                 {columns.map((id) => {
                   const b = brandById(id);
                   return (
@@ -502,7 +560,20 @@ export default function PendingBetsPage() {
                     }
                   >
                     {settled ? (
-                      <span className="text-slate-200">{fmt(b.closeFair)}</span>
+                      <span
+                        className="text-slate-200"
+                        title={
+                          b.closeFair != null
+                            ? `Blend close ${fmt(b.closeFair)}${
+                                b.emPctPinn != null
+                                  ? ` · Pinnacle alone reads ${b.emPctPinn.toFixed(2)}% EM`
+                                  : ' · no Pinnacle close on this market'
+                              }`
+                            : undefined
+                        }
+                      >
+                        {fmt(b.closeFair)}
+                      </span>
                     ) : (
                       <span className={b.ourSuspended ? 'text-slate-600 line-through' : 'text-slate-200'}>
                         {fmt(b.ourNow)}
@@ -512,6 +583,11 @@ export default function PendingBetsPage() {
                   <td className="whitespace-nowrap px-2 py-1.5 text-center tabular-nums">
                     <Move pct={b.movePct} />
                   </td>
+                  {settled && (
+                    <td className="whitespace-nowrap px-2 py-1.5 text-center tabular-nums">
+                      <Em pct={b.emPct} pl={b.emPl} />
+                    </td>
+                  )}
                   {columns.map((id) => {
                     const p = (b.prices ?? {})[id];
                     return (

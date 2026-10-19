@@ -1107,7 +1107,25 @@ export function parseBetMarket(market, outcome, sport) {
    * Both end blank, which is the honest answer — a 10.00 shown against 3.189
    * does not read as a mismatch, it reads as a mistake we made.
    */
-  if (/\b(both halves|either half|to nil|clean sheet|draw no bet|wire to wire|win from behind|win by)\b/.test(km)) {
+  if (/\b(both halves|either half|to nil|clean sheet|wire to wire|win from behind|win by)\b/.test(km)) {
+    return null;
+  }
+
+  /*
+   * Period phrasings the surface has no market for.
+   *
+   * `/limits` carries 1h, 1q, 1inn, 1s and set markets and nothing else, so a
+   * first-five-innings total has no home — and because "1st 5 innings" matches
+   * none of the period patterns above it silently became the FULL-GAME total.
+   * A bet on Over 3.5 in the first five innings at 1.80 was judged against the
+   * nine-inning Over 3.5 close of 1.202 and reported as a 50% overlay.
+   *
+   * Set betting is the same shape of mistake with a different ending: there is
+   * no correct-score-in-sets market, and "Edas Butvilas 2-1" carries a 1 that
+   * the handicap rule below reads as a LINE, so it was priced against the -1
+   * set handicap at 1.709 for a bet struck at 4.10.
+   */
+  if (/\b(1st 5 innings|first 5 innings|f5|1st 3 innings|first 3 innings|set betting|score betting)\b/.test(km)) {
     return null;
   }
 
@@ -1134,6 +1152,21 @@ export function parseBetMarket(market, outcome, sport) {
   // Named here rather than above, because a half-time BTTS is `1h_btts`.
   if (btts) {
     return { kind: 'btts', marketIds: [`${period}btts`], name: o.trim(), line: null };
+  }
+
+  /*
+   * Markets the surface prices under their own id, which have to be claimed
+   * BEFORE the moneyline test below gets hold of them.
+   *
+   * `GET /limits` publishes 23 market types and `dnb` is one of them, so draw
+   * no bet has a real closing price of its own — it was being excluded
+   * outright, which is honest but needlessly blind, and before that judged
+   * against the three-way moneyline, which it is not: the stake comes back on
+   * a draw, so the price is always shorter. There is no `1h_dnb`, so a
+   * period-scoped one still has nowhere to go.
+   */
+  if (/\bdraw no bet\b|\bdnb\b/.test(km)) {
+    return period ? null : { kind: 'moneyline', marketIds: ['dnb'], name: o.trim(), line: null };
   }
 
   // The line can be written on either side: "handicap -3.5" carries it in the

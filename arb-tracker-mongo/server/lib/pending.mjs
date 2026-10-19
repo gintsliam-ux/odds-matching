@@ -264,12 +264,64 @@ export async function settledBets() {
   const { bets: enriched, pricesError } = await enrich(all, timings, { closing: true });
 
   for (const b of enriched) {
-    // The true closing price, not the best quoted one.
-    b.closeFair = b.fairPinnacle ?? b.fairBlend ?? null;
-    b.closeFrom = b.fairPinnacle != null ? 'Pinnacle' : b.fairBlend != null ? 'blend' : null;
+    /*
+     * ONE fair for the whole settled view: the blend.
+     *
+     * This preferred Pinnacle where it existed and fell back to the blend, and
+     * EM% was later put on the blend to match `blend_em_pct` upstream. Two
+     * different fairs answering the same question is the bug: on 108 of 304
+     * flagged rows the two disagreed, because Pinnacle's de-vigged price is
+     * systematically shorter than the blend, so the list said "beat the close"
+     * while the column beside it read -1.78%.
+     *
+     * The blend wins because it is what EM means here and because EM gets
+     * summed across thousands of bets, where an average of every book that
+     * closed the market is a sounder input than any single book. The cost is
+     * 135 bets priced by Pinnacle alone, which now go unjudged — and a market
+     * only one book closed in full is exactly what MIN_BLEND_BOOKS already
+     * declines to call a blend. `fairPinnacle` and `emPctPinn` stay on the
+     * payload as the second reading.
+     */
+    b.closeFair = b.fairBlend ?? null;
+    /*
+     * Expected margin, on the same definition the polytracker enrichment uses
+     * (`emPct` / `emPl` in enrich-soccer-em.mjs) so the two agree.
+     *
+     * That one is written for a prediction market, where the price IS a
+     * probability: (trueProb - paidProb) / paidProb. In decimal odds the paid
+     * probability is 1/price and the true one is 1/fair, and the whole thing
+     * reduces to price/fair - 1 — the customer's expected value per dollar
+     * staked. Positive means they had the edge.
+     *
+     * Off the BLEND fair, which is what `blend_em_pct` means upstream: every
+     * book that closed the whole market, de-vigged individually and averaged.
+     * One book's opinion de-vigged is still one book's opinion, and EM is a
+     * number that gets totalled across thousands of bets — the average is the
+     * more honest input to a sum. `emPctPinn` carries the Pinnacle-only reading
+     * beside it, the same way the upstream table keeps both columns.
+     *
+     * Note this is a DIFFERENT fair from the one `closeFair` and `beatClose`
+     * use, which prefer Pinnacle where it exists. The two can therefore
+     * disagree on a thin market, and the Closed column shows which fair the
+     * flag was struck against.
+     *
+     * Against the close either way, which is the only fair a settled bet has.
+     * Not a verdict on the result: a +8% bet that lost was still a price we
+     * should not have offered, which is the entire point of judging on close.
+     */
+    b.emPct = emPct(b.price, b.fairBlend);
+    b.emPctPinn = emPct(b.price, b.fairPinnacle);
+    // Signed dollars at stake. `emPl` upstream multiplies the traded cost by
+    // the edge; the cost here is simply the stake.
+    b.emPl = b.emPct != null && Number.isFinite(Number(b.stake))
+      ? Math.round(Number(b.stake) * (b.emPct / 100) * 100) / 100
+      : null;
+    b.closeFrom = b.fairBlend != null ? 'blend' : null;
     b.movePct = movePct(b.price, b.closeFair);
     // Beat the close: they took a price longer than the market's own final
     // estimate of the chance.
+    // Identical to `emPct > 0` by construction now, which is the point: the
+    // flag and the column are one comparison expressed two ways.
     b.beatClose = b.price != null && b.closeFair != null && b.price > b.closeFair;
   }
 
@@ -296,6 +348,16 @@ export async function settledBets() {
       from: enriched.length ? String(enriched[enriched.length - 1].placedAt ?? '').slice(0, 10) : null,
       fixtures: timings.fullFixtures ?? null,
       dropped: timings.droppedFixtures ?? 0,
+      /*
+       * The window's expected margin in dollars, over every judgeable bet —
+       * not just the ones that beat the close.
+       *
+       * Summing only the beats would report what we lost on the bets we got
+       * wrong while hiding what we earned on the rest, which is a number that
+       * can only look alarming. The honest total is the whole book.
+       */
+      emPl: Math.round(judgeable.reduce((s, b) => s + (Number(b.emPl) || 0), 0) * 100) / 100,
+      beatEmPl: Math.round(beat.reduce((s, b) => s + (Number(b.emPl) || 0), 0) * 100) / 100,
     },
     ...(pricesError ? { pricesError } : {}),
   };
@@ -412,6 +474,23 @@ async function ourPrices(db, bets) {
  * 1.90 and 10.0 to 9.50 are both "5% shorter" in odds terms and are not
  * remotely the same move.
  */
+/**
+ * Expected margin as a percentage of stake — see the call site.
+ *
+ * Both prices must be real decimals above 1. A `fair` of exactly 1 would divide
+ * a price by certainty and report an edge of several hundred percent, which is
+ * the shape a settled or placeholder price arrives in.
+ */
+const emPct = (price, fair) => {
+  const p = Number(price);
+  const f = Number(fair);
+  if (!(p > 1) || !(f > 1)) return null;
+  // Two decimals, not one. At one, an edge of four hundredths of a percent
+  // rounded to a flat 0.0% while `beatClose` still flagged the row — a column
+  // that reads zero beside a flag that says otherwise.
+  return Math.round((p / f - 1) * 10000) / 100;
+};
+
 const movePct = (struck, now) =>
   struck && now ? (1 / struck - 1 / now) * 100 : null;
 

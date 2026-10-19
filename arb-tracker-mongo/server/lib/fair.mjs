@@ -99,6 +99,24 @@ function devigBook(byOutcome, expected) {
     total += 1 / p;
   }
   if (!(total > 0)) return null;
+  /*
+   * An overround outside the plausible band is not a market.
+   *
+   * Exchanges keep quoting after the result is known: the winner trades at
+   * 1.01 and so does the loser, because nobody is left to take the other side.
+   * Betfair closed Nuggets -24.5 at 1.01 on BOTH sides, which de-vigs to a
+   * 198% overround and a "fair" of 2.0 — and blended with DraftKings' real
+   * 6.00 it produced a closing fair of 3.647 for a bet struck at 10.00. That
+   * row sat at the top of the settled list claiming a 174% overlay, which was
+   * entirely this.
+   *
+   * Below 100% a book's own prices arb against each other, which means at least
+   * one of them is stale. Above the ceiling nothing legitimate survives. The
+   * ceiling scales with the field because overround does: a two-way runs 104 to
+   * 110, while a forty-runner first-scorer market is honestly 130+, and a flat
+   * cap would either admit the artefact or throw away every big field.
+   */
+  if (total < 1 || total > 1 + 0.2 * expected.size) return null;
   const probs = new Map();
   for (const [outcome, p] of byOutcome) probs.set(outcome, 1 / p / total);
   return { probs, overround: total * 100 };

@@ -139,6 +139,16 @@ export interface PendingBet extends TickerBet {
   closeFair?: number | null;
   closeFrom?: 'Pinnacle' | 'blend' | null;
   beatClose?: boolean;
+  /**
+   * Expected margin as a percentage of stake, against the closing fair, on the
+   * same definition as the polytracker enrichment's `emPct`: price/fair - 1.
+   * Positive means the customer had the edge, so it is the continuous form of
+   * `beatClose` and can never disagree with it. `emPl` is the signed dollars.
+   */
+  emPct?: number | null;
+  emPl?: number | null;
+  /** The Pinnacle-only reading, kept beside the blend as the second opinion. */
+  emPctPinn?: number | null;
 }
 
 export interface Pending {
@@ -170,6 +180,9 @@ export interface Pending {
      */
     fixtures?: number | null;
     dropped?: number;
+    /** Window EM in dollars over every judgeable bet, and over the beats alone. */
+    emPl?: number;
+    beatEmPl?: number;
   } | null;
   pricesError?: string;
 }
