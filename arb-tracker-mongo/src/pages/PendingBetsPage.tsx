@@ -142,10 +142,25 @@ export default function PendingBetsPage() {
           setState('error');
         });
     load();
-    // A minute, matching the server's own TTL: the brand stores are scraped on
-    // that order and polling faster cannot return anything newer.
-    // An hour for settled, which cannot change, against a minute for open.
-    const id = setInterval(load, settled ? 10 * 60_000 : 60_000);
+    /*
+     * Each view polls at its own server TTL, because a poll that beats the
+     * cache cannot return anything but the payload already on screen.
+     *
+     * Open: a minute, which is the route's TTL and the order the brand stores
+     * are scraped on.
+     *
+     * Settled: an hour, which is the route's TTL — the comment here already
+     * said "an hour" while the code said ten minutes, so five of every six
+     * polls fetched a byte-identical cached payload.
+     *
+     * The trade is phase. The route serves stale-while-revalidate, so the first
+     * request after the TTL lapses gets the OLD payload and kicks off the
+     * rebuild behind it — which means an hourly poll shows data up to two hours
+     * old, and nobody ever waits on those 1,283 fixtures to be re-priced. For a
+     * settled view that is the right side of the trade: the rows are immutable
+     * and the only thing a refresh adds is bets that have settled since.
+     */
+    const id = setInterval(load, settled ? 60 * 60_000 : 60_000);
     return () => {
       cancelled = true;
       clearInterval(id);
