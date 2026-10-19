@@ -1041,7 +1041,7 @@ async function liveRows(sport) {
  *   `current_price` and nothing else. The event page leaves it false and gets
  *   the full history it draws.
  */
-export async function apiOddsForFixture(fixtureId, sport, { currentOnly = false } = {}) {
+export async function apiOddsForFixture(fixtureId, sport, { currentOnly = false, opens = !currentOnly } = {}) {
   if (!sport) return [];
   const one = (extra) =>
     cachedDrain(`fx:${fixtureId}:${extra.live ?? '0'}:${currentOnly ? 'c' : 'h'}`, () =>
@@ -1063,11 +1063,28 @@ export async function apiOddsForFixture(fixtureId, sport, { currentOnly = false 
 
   // No live pivot. This site shows pre-match prices only, so the in-play feed
   // is not a source here at all — see the merge note below.
+  /*
+   * `opens` is a SECOND REQUEST per fixture, and the settled view does not
+   * read it.
+   *
+   * Measured on the live surface: every fixture here costs exactly two calls,
+   * the pivot and this one. That is invisible at the forty fixtures the ticker
+   * asks for and decisive at the 1,283 behind fourteen days of settled bets —
+   * 2,566 requests, which at eight a second is 321 seconds against a
+   * 300-second function. The settled build was therefore guaranteed to hit its
+   * own deadline and return about half the window.
+   *
+   * Nothing in ticker.mjs reads `open_price`: the closing comparison is
+   * `close_price` through `fairsFor`, and the "vs open" column on the pending
+   * page comes from our own brand stores, not from here. The board, the event
+   * page and movers do read it, so the default is unchanged and only the
+   * caller that has no use for it opts out.
+   */
   const [closing, sp] = await Promise.all([
     one({}),
-    currentOnly
-      ? Promise.resolve([])
-      : call('odds-sp-api', { fixture_id: fixtureId }).then((b) => b.data ?? []).catch(() => []),
+    opens
+      ? call('odds-sp-api', { fixture_id: fixtureId }).then((b) => b.data ?? []).catch(() => [])
+      : Promise.resolve([]),
   ]);
 
   const explodeAll = (pivotRows, isLive) => {

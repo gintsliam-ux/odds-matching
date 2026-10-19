@@ -182,11 +182,14 @@ const CLOSING_FIXTURE_CAP = 1500;
  * function timing out and the view returning NOTHING, which is strictly worse
  * than returning twelve of the fourteen days.
  *
- * So the budget is time. Three minutes is ~1,440 fixtures at the current rate —
- * above what the window actually needs, so on a normal build nothing is dropped
- * and this never binds. It is the floor under the bad case, not the plan.
+ * So the budget is time. Four minutes against a 300-second function, which
+ * leaves the bets query and the mapping their ~20 seconds and still covers the
+ * ~192 seconds the window measures at (1,283 fixtures, ~1.2 requests each
+ * after the sp call came off, at eight a second). Set at three minutes first,
+ * which was under the real cost and would have dropped the oldest days of the
+ * window every single build. It is the floor under the bad case, not the plan.
  */
-const CLOSING_BUDGET_MS = 180_000;
+const CLOSING_BUDGET_MS = 240_000;
 
 /**
  * Concurrent lanes, which is not the same thing as the rate.
@@ -1379,7 +1382,21 @@ async function pricesFor(bets, byEventId, fixtures, timings, { closing = false }
          * for the ticker and useless for a closing price: the cheap shape has
          * no `_close` columns at all. A settled fixture is asked for whole.
          */
-        const got = await apiOddsForFixture(fixtureId, sport, { currentOnly: !closing }).catch(() => []);
+        /*
+         * `opens: false` in BOTH modes, because nothing in this file reads
+         * `open_price` — the closing comparison is `close_price` through
+         * `fairsFor`, and the pending page's "vs open" comes from our own brand
+         * stores. See apiOddsForFixture: it is a second request per fixture,
+         * which at the 1,283 fixtures behind fourteen days of settled bets was
+         * 321 seconds of a 300-second function.
+         *
+         * Written as `!closing` first, which was wrong in the other direction:
+         * the ticker's `currentOnly` used to skip that call on its own, so
+         * asking for opens here would have ADDED forty requests to every
+         * twenty-second ticker build to fetch a column it does not read.
+         */
+        const got = await apiOddsForFixture(fixtureId, sport, { currentOnly: !closing, opens: false })
+          .catch(() => []);
         for (const r of got) out.push(r);
       }
       return out;
