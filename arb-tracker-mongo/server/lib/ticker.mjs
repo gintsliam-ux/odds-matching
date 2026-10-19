@@ -1087,6 +1087,27 @@ export function parseBetMarket(market, outcome, sport) {
     return null;
   }
 
+  /*
+   * The "win ..." family, which the moneyline test below cannot tell apart.
+   *
+   * That test matches a bare `\bwin\b`, so ANY market with the word win in it
+   * became the match winner — and these are not it. Bet
+   * 4229dce1-6ff6-4536-b7fc-79d7430c2cea is "win both halves" on Melbourne
+   * City at 10.00, which was judged against the full-match moneyline close of
+   * 3.189 and reported as beating the close by a mile. Winning both halves is
+   * a far longer proposition than winning the match, so 10.00 was an ordinary
+   * price and the overlay was entirely an artefact of the comparison.
+   *
+   * Listed separately from the markets above rather than merged into them,
+   * because the reason differs: those are markets the board does not price,
+   * while these are markets it prices a DIFFERENT one of under a similar name.
+   * Both end blank, which is the honest answer — a 10.00 shown against 3.189
+   * does not read as a mismatch, it reads as a mistake we made.
+   */
+  if (/\b(both halves|either half|to nil|clean sheet|draw no bet|wire to wire|win from behind|win by)\b/.test(km)) {
+    return null;
+  }
+
   // Period scope. The surface carries these as a prefix on the market id, and
   // they used to be rejected outright — which threw away every first-half and
   // opening-set bet even though `1h_total` and `1s_total` were sitting there.
