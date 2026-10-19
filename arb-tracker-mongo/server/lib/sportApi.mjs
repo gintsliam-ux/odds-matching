@@ -202,7 +202,52 @@ function run(fn) {
   });
 }
 
-/** Rate-limited entry point; `callRaw` does the work. */
+/*
+ * A real rate limit, not just a concurrency cap.
+ *
+ * GET /limits publishes three numbers and they constrain different things:
+ * `max_in_flight` 16 is how many may be open at once, but `rate_per_sec` 10
+ * with `burst` 30 is how many may be STARTED. Capping only the former let a
+ * cold board start 16 at a time, each finishing in a few hundred ms, which is
+ * comfortably over ten a second — and the board lost a whole sport to a 429
+ * (gridiron, on the run that measured 288 requests).
+ *
+ * A token bucket: 30 to spend immediately, refilling at 10 a second. Bursty
+ * where the allowance is bursty and patient after that, which is exactly the
+ * shape of the published limit.
+ */
+/*
+ * Just under the published ten, because the KEY is the unit the limit applies
+ * to and a deployed instance is spending from the same allowance. Asking for
+ * exactly the ceiling means any concurrent production traffic pushes us over
+ * it, and the cost of a 429 here is a whole sport missing from the board.
+ */
+const RATE_PER_SEC = 8;
+/*
+ * A burst well under the published 30. The allowance is per KEY and a deployed
+ * instance draws on the same one, so spending 24 in the first instant was
+ * enough to get rate-limited even at 8/s sustained — and a 429 that outlives
+ * its retries costs a whole sport off the board.
+ */
+const BURST = 10;
+let tokens = BURST;
+let lastRefill = Date.now();
+
+async function takeToken() {
+  for (;;) {
+    const now = Date.now();
+    tokens = Math.min(BURST, tokens + ((now - lastRefill) / 1000) * RATE_PER_SEC);
+    lastRefill = now;
+    if (tokens >= 1) {
+      tokens -= 1;
+      return;
+    }
+    // How long until the next whole token, rather than a fixed poll.
+    await new Promise((r) => setTimeout(r, Math.ceil(((1 - tokens) / RATE_PER_SEC) * 1000)));
+  }
+}
+
+/** Rate-limited entry point; `callRaw` does the work and spends a token per attempt. */
 const call = (route, params) => gate(() => callRaw(route, params));
 
 async function callRaw(route, params) {
@@ -212,6 +257,16 @@ async function callRaw(route, params) {
   /** Set from a 429's Retry-After, and used in place of our own backoff once. */
   let retryAfterMs = null;
   for (let attempt = 0; attempt <= CALL_RETRIES; attempt++) {
+    /*
+     * A token per ATTEMPT, retries included.
+     *
+     * Taking one per CALL and letting the retry loop inside spend it three
+     * times over was worth up to 30 requests a second against a limit of ten —
+     * which produced more 429s, which produced more retries. A cold board went
+     * from one sport lost to three, with 118 rate-limit responses across 190
+     * requests. A retry is a request and costs the same as any other.
+     */
+    await takeToken();
     try {
       const res = await fetch(`${BASE}/${route}?${qs}`, {
         signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
@@ -403,10 +458,15 @@ export function boardWindow() {
  * returns 299 fixtures, 190 of them future. It also explains why a game that
  * had just started looked absent from the closing pivot entirely.
  *
- * The cost is payload — 0.1 MB to 0.5 MB per sport — which the function's
- * five-minute cache absorbs. The ladder columns themselves go unread here.
+ * `include_unsettled=true` now does that job on its own, which is what this
+ * asks for. Measured side by side over the board window: identical fixture
+ * counts and identical future counts — icehockey 357/99, soccer 1237/0,
+ * basketball 475/97 — for about 30% fewer bytes, because the fluc ladder is
+ * not bought. Every caller of this constant enumerates fixtures or reads a
+ * current price; the ladder columns went unread by all of them. The event page,
+ * which genuinely wants the ladder, asks for `flucs=true` itself.
  */
-const UNSETTLED = { flucs: 'true' };
+const UNSETTLED = { include_unsettled: 'true' };
 
 /** How long after a scheduled start a fixture is presumed in play rather than
  *  finished, while waiting for a book to open its in-play market. */
@@ -423,9 +483,21 @@ const PAGE_LIMIT = 50_000;
  * Drain a paginated endpoint. The surface caps a page and reports `has_more`
  * with a `next_offset`; a busy sport runs to several pages.
  */
-async function drain(route, params, { maxPages = 12 } = {}) {
+/**
+ * Page one request to exhaustion, reporting whether the window was CAPPED.
+ *
+ * Capped means the surface stopped because of its own hard limit rather than
+ * because the window was exhausted: `has_more` still true while `next_offset`
+ * refuses to advance. That is not a paging problem to retry — the cap is
+ * terminal for the window, and `truncated_hint` says so literally ("narrow the
+ * date window"). Measured: soccer over the ten-day board window returns 1,237
+ * fixtures and will not page past them, where asking day by day returns 2,263.
+ * The caller has to narrow; see drainSpan.
+ */
+async function drainReport(route, params, { maxPages = 12 } = {}) {
   const out = [];
   let offset = 0;
+  let capped = false;
   for (let page = 0; page < maxPages; page++) {
     const body = await call(route, {
       limit: String(PAGE_LIMIT),
@@ -434,9 +506,62 @@ async function drain(route, params, { maxPages = 12 } = {}) {
     });
     out.push(...(body.data ?? []));
     if (!body.has_more || body.next_offset == null) break;
+    /*
+     * An offset that does not move is the end, whatever `has_more` says.
+     *
+     * Cheap insurance on a loop that now carries the whole window: the old
+     * failure here was `next_offset` advancing by the requested limit instead
+     * of the rows returned, and the mirror-image fault — not advancing at all —
+     * would spin until maxPages rather than stopping.
+     */
+    if (body.next_offset <= offset) {
+      // More to come and no way to ask for it: the hard cap.
+      capped = true;
+      break;
+    }
     offset = body.next_offset;
+    // Ran out of pages with the surface still offering more.
+    if (page === maxPages - 1) capped = true;
   }
-  return out;
+  return { rows: out, capped };
+}
+
+/** The common case: just the rows. */
+async function drain(route, params, opts) {
+  return (await drainReport(route, params, opts)).rows;
+}
+
+const SPAN_MAX_DEPTH = 5;
+
+const ymdOf = (d) => new Date(d).toISOString().slice(0, 10);
+const shiftYmd = (ymd, days) =>
+  ymdOf(new Date(`${ymd}T00:00:00Z`).getTime() + days * 86_400_000);
+const daysBetween = (from, to) =>
+  Math.round((new Date(`${to}T00:00:00Z`) - new Date(`${from}T00:00:00Z`)) / 86_400_000);
+
+/**
+ * One sport across a date window, narrowing only where the surface says to.
+ *
+ * The window still has to be split — see drainReport — but the trigger is now a
+ * REPORTED cap rather than the old guess, which was "this response came back
+ * with 900+ rows and its last fixture is more than a day short of the span I
+ * asked for, so it was probably cut". That heuristic fired on windows that were
+ * actually complete and missed ones that were not: a cold board made 288
+ * requests for 24.9 MB in 161 seconds, 108 of those responses reporting the cap.
+ *
+ * Splitting on the fact instead means a span that fits is one request, and only
+ * a span that is genuinely truncated pays for a bisect.
+ */
+async function drainSpan(params, from, to, depth = 0) {
+  const { rows, capped } = await drainReport('odds-api', { ...params, date_from: from, date_to: to });
+  const span = daysBetween(from, to);
+  if (!capped || span < 1 || depth >= SPAN_MAX_DEPTH) return rows;
+  const mid = shiftYmd(from, Math.floor(span / 2));
+  const [a, b] = await Promise.all([
+    drainSpan(params, from, mid, depth + 1),
+    drainSpan(params, shiftYmd(mid, 1), to, depth + 1),
+  ]);
+  return [...a, ...b];
 }
 
 /**
@@ -472,69 +597,47 @@ async function drain(route, params, { maxPages = 12 } = {}) {
  * whose last fixture starts well before the span's own `date_to`, on a response
  * big enough to be near the cap, did not fit.
  */
-const SATURATED_ROWS = 900;
-const MAX_SPLIT_DEPTH = 5;
-
-const ymdOf = (d) => new Date(d).toISOString().slice(0, 10);
-const shiftYmd = (ymd, days) =>
-  ymdOf(new Date(`${ymd}T00:00:00Z`).getTime() + days * 86_400_000);
-const daysBetween = (from, to) =>
-  Math.round((new Date(`${to}T00:00:00Z`) - new Date(`${from}T00:00:00Z`)) / 86_400_000);
-
 /**
- * Drain one sport across a date window, splitting the window whenever the
- * surface answers with a truncated span. Spans are disjoint and inclusive at
- * both ends, so no row is fetched twice.
+ * Drain one sport across a date window.
+ *
+ * This used to SPLIT the window — recursively, bisecting whenever a response
+ * came back looking saturated — because the surface answered truncated spans
+ * with `has_more: false` and a `next_offset` that advanced by the requested
+ * limit rather than the rows returned. Paging was unusable, so the only way to
+ * get a whole window was to ask for narrower pieces of it until each piece fit.
+ *
+ * It worked and it was expensive: a cold board was 288 upstream requests,
+ * 24.9 MB and 161 seconds, with 108 of those responses reporting the cap hit.
+ *
+ * `has_more` and `next_offset` are now honest, and `drain` already follows
+ * them, so the splitting is pure duplication of work the surface will do
+ * properly. Measured after: paging one window to exhaustion takes 2 requests
+ * for soccer and 1 for each of basketball, tennis, ice hockey, baseball and
+ * gridiron — 7 for six sports where the splitting made dozens.
+ *
+ * Note the units, which are not obvious: `limit`, `offset` and `next_offset`
+ * count ROWS, while `count` counts FIXTURES. A limit of 5,000 came back with
+ * 703 fixtures and `next_offset: 5000`, which is offset plus rows returned,
+ * exactly as documented.
  */
-async function drainWindow(params, { from, to, depth = 0 } = {}) {
-  const rows = await drain('odds-api', { ...params, date_from: from, date_to: to });
-
-  const span = daysBetween(from, to);
-  if (span < 1 || depth >= MAX_SPLIT_DEPTH || rows.length < SATURATED_ROWS) return rows;
-
-  // Where did the answer actually stop?
-  let latest = null;
-  for (const r of rows) {
-    const t = r.commence_time ? new Date(r.commence_time).getTime() : NaN;
-    if (Number.isFinite(t) && (latest == null || t > latest)) latest = t;
-  }
-  // A full span ends on its own last day. Stopping a day or more short of that
-  // on a response this size means the tail was cut, not that the tail is empty.
-  if (latest != null && daysBetween(ymdOf(latest), to) < 1) return rows;
-
-  const mid = shiftYmd(from, Math.floor(span / 2));
-  const [a, b] = await Promise.all([
-    drainWindow(params, { from, to: mid, depth: depth + 1 }),
-    drainWindow(params, { from: shiftYmd(mid, 1), to, depth: depth + 1 }),
-  ]);
-  return [...a, ...b];
-}
-
 /**
- * The window is pre-split rather than discovered, because discovery is
- * sequential and the splits are not.
+ * The board window for one sport, narrowed only where the surface says to.
  *
- * Handing drainWindow the whole ten days means a big sport learns it was
- * truncated, splits, and each half learns the same thing again — three or four
- * round trips deep before any of it is useful, and a cold board took 23s.
- * Starting from spans that mostly fit removes those rounds: they all go out at
- * once, and only a span that is still saturated pays for a further split.
+ * Discovered rather than pre-split, which is the opposite of what this did
+ * before and for a measured reason. Pre-splitting the window into three-day
+ * spans sent 15 sports x 4 spans x 2 drains before anything was known, and
+ * exactly ONE sport needs narrowing: soccer returns 1,237 fixtures against a
+ * ground truth of 2,263 and reports the cap, while basketball, tennis, ice
+ * hockey, baseball, gridiron and Aussie rules all come back whole and uncapped.
+ * So the pre-split spent a hundred-odd requests to save soccer one round trip,
+ * and the rate limit is ten a second.
  *
- * Three days because it is the widest span soccer — comfortably the heaviest
- * sport — usually answers whole. A sport small enough to have fitted in one
- * request now makes four small ones instead, which is cheap and parallel.
+ * Starting whole costs the one sport that needs it a single extra round trip
+ * and leaves the other fourteen at one request each.
  */
-const INITIAL_SPAN_DAYS = 3;
-
 function drainBoard(params) {
   const { date_from: from, date_to: to } = boardWindow();
-  const spans = [];
-  for (let start = from; daysBetween(start, to) >= 0; start = shiftYmd(start, INITIAL_SPAN_DAYS)) {
-    const end = shiftYmd(start, INITIAL_SPAN_DAYS - 1);
-    // Clamp the last span to the window rather than running past it.
-    spans.push({ from: start, to: daysBetween(end, to) < 0 ? to : end });
-  }
-  return Promise.all(spans.map((sp) => drainWindow(params, sp))).then((all) => all.flat());
+  return drainSpan(params, from, to);
 }
 
 /* ------------------------------------------------------------- odds rows */
@@ -1065,12 +1168,12 @@ export function apiFixtureIndex(sport) {
     const w = boardWindow();
     const [closing, liveAll] = await Promise.all([
       cachedDrain(`odds:${sport}:false`, () =>
-        drainWindow({ sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED },
-          { from: w.date_from, to: w.date_to }),
+        drainSpan({ sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED },
+          w.date_from, w.date_to),
       ),
       cachedDrain(`odds:${sport}:true`, () =>
-        drainWindow({ sport, live: 'true', include_stale: 'true', market: BOARD_MARKET },
-          { from: w.date_from, to: w.date_to }),
+        drainSpan({ sport, live: 'true', include_stale: 'true', market: BOARD_MARKET },
+          w.date_from, w.date_to),
       ).catch(() => []),
     ]);
     const now = Date.now();
@@ -1098,8 +1201,8 @@ async function buildFixtures(sport, window) {
     // drains then failed — which `pricesFor` swallows, so the deployed ticker
     // simply showed no comparison prices at all and said nothing was wrong.
     cachedDrain(`odds:${sport}:false`, () =>
-      drainWindow({ sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED },
-        { from: window.date_from, to: window.date_to }),
+      drainSpan({ sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED },
+        window.date_from, window.date_to),
     ),
     // Enumeration needs the stale live rows too. A match that has just finished
     // has no active price left, and is not yet settled into `odds_sp` — so it
@@ -1111,8 +1214,8 @@ async function buildFixtures(sport, window) {
     // keys over one request is two drains. The pulse bar reads these rows for
     // the live heartbeat and must not pay for a second copy of them.
     cachedDrain(`odds:${sport}:true`, () =>
-      drainWindow({ sport, live: 'true', include_stale: 'true', market: BOARD_MARKET },
-        { from: window.date_from, to: window.date_to }),
+      drainSpan({ sport, live: 'true', include_stale: 'true', market: BOARD_MARKET },
+        window.date_from, window.date_to),
     ).catch(() => []),
     liveRows(sport),
   ]);
