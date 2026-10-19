@@ -258,12 +258,46 @@ async function swiftbetFor(db, gutsyEventId) {
  * competition ("NBA - Los Angeles Lakers v Sacramento Kings"), and calling that
  * the market would be worse than the generic bet type it replaces.
  */
+/**
+ * Words that mark a string as naming a MARKET rather than a team.
+ *
+ * Moved here from ticker.mjs, where it was declared and never used, to settle
+ * the one question `marketFromSlip` has to answer.
+ */
+const MARKETY =
+  /\b(quarter|half|period|inning|set|game|total|over|under|handicap|line|spread|margin|score|winner|result|tri ?bet|double|alternate|player|points|goals|runs|first|last|anytime|odd|even|btts|draw)\b/i;
+
+/**
+ * The market a slip names, from its own event string.
+ *
+ * mybet writes "<market> - <match>" on a per-market event and the bare match on
+ * the base one, so the market is the string with its last " - " segment removed.
+ *
+ * This used to require the event to have been gathered as a SATELLITE, and
+ * returned null otherwise — which meant a per-market event that the sibling
+ * search had not picked up fell back to `bet_type` and lost its market
+ * entirely. Bet 6667932 is the case: event_string "HT-FT Double - Nottingham
+ * Forest vs Arsenal", selections "Arsenal - Arsenal", bet_type "Win". The
+ * market read "Win", and because it read "Win" the bet was priced against the
+ * full-match moneyline — a 2.26 half-time/full-time double compared with a 1.57
+ * close on a different market. "Arsenal - Arsenal" is not malformed; it is the
+ * correct notation for the double.
+ *
+ * The satellite gate was standing in for a real question: whether that leading
+ * segment is a market or half of "Team - Team", which is what a base event
+ * looks like when the dash is the separator. MARKETY answers it directly —
+ * "HT-FT Double", "First Tryscorer" and "Alternate Winning Margin" read as
+ * markets, "Nottingham Forest" and "Manchester United" do not. A known
+ * satellite is still trusted on its own, since being one is proof.
+ */
 function marketFromSlip(row, satellites) {
-  if (!satellites?.has(Number(row.event_identifier))) return null;
   const parts = String(row.event_string ?? '').split(' - ');
   if (parts.length < 2) return null;
   parts.pop();                                   // the match itself
-  return parts.join(' - ').trim() || null;
+  const market = parts.join(' - ').trim();
+  if (!market) return null;
+  const known = satellites?.has(Number(row.event_identifier));
+  return known || MARKETY.test(market) ? market : null;
 }
 
 /** The match a slip names: the last " - " segment of its event string. */

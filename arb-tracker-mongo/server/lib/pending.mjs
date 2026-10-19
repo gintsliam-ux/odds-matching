@@ -30,7 +30,9 @@
  */
 
 import { betsConfigured, betsDb } from './betsMongo.mjs';
-import { enrich, mapMulti, mapSwift, pickByName, SPORT_SINGLE } from './ticker.mjs';
+import {
+  classifyLeadSegments, enrich, mapMulti, mapSwift, pickByName, SPORT_SINGLE,
+} from './ticker.mjs';
 
 /**
  * Open, in each brand's own vocabulary. Read off the data rather than assumed —
@@ -217,6 +219,18 @@ export async function settledBets() {
     .sort((a, b) => String(b.placedAt).localeCompare(String(a.placedAt)))
     .slice(0, SETTLED_LIMIT);
 
+  /*
+   * BEFORE enrich, and that ordering is the whole of it.
+   *
+   * This is where a mybet slip's real market name comes from — the lead segment
+   * of its event string — and both feeds here were skipping it, so every such
+   * bet fell back to `bet_type` and read "Win". Bet 6667932 is a half-time /
+   * full-time double on "Arsenal - Arsenal" at 2.26; labelled "Win" it parsed
+   * as a moneyline and was compared against a 1.57 full-match close, which is a
+   * different market. enrich also PROJECTS the bets into new objects on its way
+   * out, so this cannot be moved after it — see the ticker's own call site.
+   */
+  await classifyLeadSegments(all).catch(() => {});
   const { bets: enriched, pricesError } = await enrich(all, null, { closing: true });
 
   for (const b of enriched) {
@@ -385,6 +399,18 @@ export async function pendingBets() {
     .sort((a, b) => String(b.placedAt).localeCompare(String(a.placedAt)))
     .slice(0, LIMIT);
 
+  /*
+   * BEFORE enrich, and that ordering is the whole of it.
+   *
+   * This is where a mybet slip's real market name comes from — the lead segment
+   * of its event string — and both feeds here were skipping it, so every such
+   * bet fell back to `bet_type` and read "Win". Bet 6667932 is a half-time /
+   * full-time double on "Arsenal - Arsenal" at 2.26; labelled "Win" it parsed
+   * as a moneyline and was compared against a 1.57 full-match close, which is a
+   * different market. enrich also PROJECTS the bets into new objects on its way
+   * out, so this cannot be moved after it — see the ticker's own call site.
+   */
+  await classifyLeadSegments(all).catch(() => {});
   const { bets: enriched, pricesError } = await enrich(all);
   await ourPrices(db, enriched);
 

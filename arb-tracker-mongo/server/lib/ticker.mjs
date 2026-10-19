@@ -142,10 +142,6 @@ export const streamMatch = (name) =>
 const PERIOD_WORDS =
   /\b(1st|2nd|3rd|4th|first|second|third|fourth|half|quarter|period|inning|innings|set|1h|2h|1q|2q|3q|4q|1s)\b/g;
 
-/** Words that mark a string as naming a market rather than a competition. */
-const MARKETY =
-  /\b(quarter|half|period|inning|set|game|total|over|under|handicap|line|spread|margin|score|winner|result|tri ?bet|double|alternate|player|points|goals|runs|first|last|anytime|odd|even|btts|draw)\b/i;
-
 /**
  * How many fixtures a deployed instance will fetch in full for one feed.
  *
@@ -588,7 +584,12 @@ const saysBonus = (v) => BONUS_SUFFIX.test(String(v ?? ''));
  * bet whose event never got mapped: the competition is known even when the
  * fixture is not.
  */
-async function classifyLeadSegments(bets) {
+/*
+ * Exported, because the pending and settled feeds need it too and silently did
+ * without. It must run BEFORE enrich on every caller — see the note at the
+ * ticker's own call site.
+ */
+export async function classifyLeadSegments(bets) {
   const ids = [...new Set(
     bets.filter((b) => b.leadSegment !== undefined)
         .map((b) => Number(b.eventId))
