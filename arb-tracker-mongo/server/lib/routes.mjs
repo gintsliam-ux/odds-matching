@@ -24,7 +24,7 @@ import {
 import { closeBets } from './betsMongo.mjs';
 import { cached, invalidate } from './cache.mjs';
 import { fetchPulse } from './pulse.mjs';
-import { pendingBets, settledBets } from './pending.mjs';
+import { attachEm, pendingBets, settledBets } from './pending.mjs';
 import {
   cachedBoard, eventById, eventDetails, eventsForDay, h2hPrices, oddsForFixture, searchEvents,
 } from './queries.mjs';
@@ -127,7 +127,7 @@ const ROUTES = {
    * stores on top of the fixtures and the field), so a longer TTL and the same
    * one-minute ceiling on how stale a served copy may be.
    */
-  'GET /api/pending': (url) => {
+  'GET /api/pending': async (url) => {
     /*
      * `?view=settled` is a different question and a different cache.
      *
@@ -139,7 +139,17 @@ const ROUTES = {
      * one at a time.
      */
     if (url.searchParams.get('view') === 'settled') {
-      return cached('pending:settled', 60 * 60_000, settledBets, { maxStaleMs: 60 * 60_000 });
+      /*
+       * The CLOSES are cached for an hour; the EM is joined on after.
+       *
+       * Only the first half is expensive — 1,283 fixtures at one upstream
+       * request each. EM is a few indexed Mongo reads, and it is the half that
+       * actually changes between requests, because the matcher is re-run and
+       * corrects it. Inside the same cache entry a fixed EM waited up to two
+       * hours behind prices that had not moved at all.
+       */
+      const core = await cached('pending:settled', 60 * 60_000, settledBets, { maxStaleMs: 60 * 60_000 });
+      return attachEm(core);
     }
     return cached('pending', 60_000, pendingBets, { maxStaleMs: 60_000 });
   },

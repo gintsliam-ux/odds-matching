@@ -296,8 +296,22 @@ async function emForSettled(db, bets) {
   if (swiftIds.length) {
     jobs.push(
       db.collection('bets')
-        .find({ bet_id: { $in: swiftIds } })
-        .project({ _id: 0, bet_id: 1, enrichment: 1 })
+        /*
+         * Filtered server-side, and projected down to the eight fields read.
+         *
+         * `enrichment.emPercent` is indexed, so asking only for the bets that
+         * HAVE an EM turns 4,669 document fetches into 2,394 and halves the
+         * bytes off Atlas — the same lesson as the swift matcher, which was
+         * filtering in memory long after the index existed. Pulling the whole
+         * `enrichment` subdoc was the other half of the cost.
+         */
+        .find({ bet_id: { $in: swiftIds }, 'enrichment.emPercent': { $ne: null } })
+        .project({
+          _id: 0, bet_id: 1,
+          'enrichment.blendFair': 1, 'enrichment.emPercent': 1, 'enrichment.emPnl': 1,
+          'enrichment.matchMethod': 1, 'enrichment.matchScore': 1,
+          'enrichment.bsp': 1, 'enrichment.bspEmPercent': 1, 'enrichment.bspEmPnl': 1,
+        })
         .toArray()
         .then((rows) => {
           for (const r of rows) {
@@ -309,12 +323,18 @@ async function emForSettled(db, bets) {
     );
   }
   if (multiIds.length) {
-    // transaction_id is numeric in that store, so both spellings are offered.
+    // transaction_id is a NUMBER in that store — checked, not assumed. Offering
+    // the string spelling as well only doubled the terms in the $in for nothing.
     const asNum = multiIds.map(Number).filter(Number.isFinite);
     jobs.push(
       db.collection('multi_bets_enrichment')
-        .find({ transaction_id: { $in: [...multiIds, ...asNum] } })
-        .project({ _id: 0, transaction_id: 1, enrichment: 1 })
+        .find({ transaction_id: { $in: asNum }, 'enrichment.emPercent': { $ne: null } })
+        .project({
+          _id: 0, transaction_id: 1,
+          'enrichment.blendFair': 1, 'enrichment.emPercent': 1, 'enrichment.emPnl': 1,
+          'enrichment.matchMethod': 1, 'enrichment.matchScore': 1,
+          'enrichment.bsp': 1, 'enrichment.bspEmPercent': 1, 'enrichment.bspEmPnl': 1,
+        })
         .toArray()
         .then((rows) => {
           for (const r of rows) {
@@ -327,9 +347,18 @@ async function emForSettled(db, bets) {
   }
   await Promise.all(jobs);
 
-  // Sidecar fallback, asked for only where the inline copy came back empty.
+  /*
+   * Sidecar fallback, asked for only when the inline copy looks WIPED.
+   *
+   * It exists for one event: a re-import of gutsy.bets takes every inline
+   * enrichment with it, and this collection is what recover-enrich.sh restores
+   * from. In normal operation it costs two seconds to find 61 rows the inline
+   * copy had not caught up on yet — a bad trade on a request path. Below a
+   * fifth of the ids carrying an EM is not a backlog, it is a wipe.
+   */
   const missing = swiftIds.filter((id) => !out.has(id));
-  if (missing.length) {
+  const wiped = swiftIds.length > 0 && (swiftIds.length - missing.length) / swiftIds.length < 0.2;
+  if (missing.length && wiped) {
     await db.collection('enrichment')
       .find({ bet_id: { $in: missing } })
       .project({ _id: 0, bet_id: 1, blendFair: 1, emPercent: 1, emPnl: 1, matchMethod: 1, matchScore: 1, bsp: 1, bspEmPercent: 1, bspEmPnl: 1 })
@@ -343,6 +372,86 @@ async function emForSettled(db, bets) {
       .catch(() => {});
   }
   return out;
+}
+
+/**
+ * Join the enrichment's EM onto an already-built settled payload.
+ *
+ * Deliberately OUTSIDE the hour-long cache around `settledBets`. That cache
+ * exists for the closing prices — 1,283 fixtures, one upstream request each,
+ * three minutes of work — and EM has nothing to do with any of it: it is a
+ * handful of indexed Mongo reads. Cached together, a corrected EM waited up to
+ * two hours behind work it does not depend on, and the EMs ARE being corrected:
+ * a Liverpool first-half handicap that read +122.64% off a 1.4508 strike fair
+ * was unmatched upstream between two runs of this view.
+ *
+ * The cached rows are COPIED before anything is written to them. The payload
+ * behind that key is shared by every request the instance serves, so assigning
+ * onto its bets would poison it for the rest of the hour — the same rule
+ * `stripHistory` follows on the odds cache.
+ */
+/**
+ * How long a corrected EM may hide, and the only thing this memo is for.
+ *
+ * The join is three seconds of Atlas reads. Paying that on every request is
+ * wasteful when nothing has changed; paying it never — which is what caching it
+ * with the closes did — meant a fixed EM waited up to two hours. Two minutes is
+ * the honest middle: the matcher reruns take longer than that, so a correction
+ * is never more than a couple of minutes from the screen.
+ *
+ * Single-flight, because the settled page polls and a cold instance can take
+ * several requests at once; without it they each start their own copy of the
+ * same three seconds.
+ */
+const EM_TTL_MS = 2 * 60_000;
+let emMemo = { at: 0, map: null, inflight: null };
+
+function emMapFor(db, bets) {
+  const age = Date.now() - emMemo.at;
+  if (emMemo.map && age < EM_TTL_MS) return Promise.resolve(emMemo.map);
+  if (emMemo.inflight) return emMemo.inflight;
+  emMemo.inflight = emForSettled(db, bets)
+    .then((map) => {
+      emMemo = { at: Date.now(), map, inflight: null };
+      return map;
+    })
+    .catch((err) => {
+      emMemo.inflight = null;
+      // Keep the last good map rather than blanking the column on one bad read.
+      if (emMemo.map) return emMemo.map;
+      throw err;
+    });
+  return emMemo.inflight;
+}
+
+export async function attachEm(payload) {
+  if (!payload?.configured || !payload.bets?.length) return payload;
+  const db = await betsDb().catch(() => null);
+  if (!db) return payload;
+  const em = await emMapFor(db, payload.bets).catch(() => null);
+  if (!em?.size) return payload;
+
+  const bets = payload.bets.map((b) => ({ ...b, ...(em.get(String(b.betId)) ?? {}) }));
+  const beat = bets.filter((b) => b.beatClose);
+  const sum = (rows) => Math.round(rows.reduce((t, b) => t + (Number(b.emPl) || 0), 0) * 100) / 100;
+  return {
+    ...payload,
+    bets,
+    counts: payload.counts && {
+      ...payload.counts,
+      /*
+       * The window's expected margin in dollars, over every judgeable bet —
+       * not just the ones that beat the close. Summing only the beats would
+       * report what we lost on the bets we got wrong while hiding what we
+       * earned on the rest, which is a number that can only look alarming.
+       */
+      emPl: sum(bets),
+      beatEmPl: sum(beat),
+      /** How many rows the enrichment has priced — the EM column's denominator. */
+      withEm: bets.filter((b) => b.emPct != null).length,
+      withBsp: bets.filter((b) => b.bspEmPct != null).length,
+    },
+  };
 }
 
 export const SETTLED_DAYS = SETTLED_WINDOW_DAYS;
@@ -384,8 +493,6 @@ export async function settledBets() {
    */
   const timings = {};
   const { bets: enriched, pricesError } = await enrich(all, timings, { closing: true });
-
-  const emByBet = await emForSettled(db, enriched).catch(() => new Map());
 
   for (const b of enriched) {
     /*
@@ -434,12 +541,6 @@ export async function settledBets() {
      * should not have offered, which is the entire point of judging on close.
      */
     /*
-     * EM is READ, not recomputed — see emForSettled. Applied after `enrich`
-     * because enrich projects the bets into new objects, so anything attached
-     * before it is dropped on the way through.
-     */
-    Object.assign(b, emByBet.get(String(b.betId)) ?? {});
-    /*
      * And the close comparison stays computed, because the enrichment has no
      * close for a sport bet: `blendFair` is struck at match time and the only
      * closing counterpart in that store is `bsp`, which is racing-only. So
@@ -484,19 +585,7 @@ export async function settledBets() {
       from: enriched.length ? String(enriched[enriched.length - 1].placedAt ?? '').slice(0, 10) : null,
       fixtures: timings.fullFixtures ?? null,
       dropped: timings.droppedFixtures ?? 0,
-      /*
-       * The window's expected margin in dollars, over every judgeable bet —
-       * not just the ones that beat the close.
-       *
-       * Summing only the beats would report what we lost on the bets we got
-       * wrong while hiding what we earned on the rest, which is a number that
-       * can only look alarming. The honest total is the whole book.
-       */
-      emPl: Math.round(judgeable.reduce((s, b) => s + (Number(b.emPl) || 0), 0) * 100) / 100,
-      beatEmPl: Math.round(beat.reduce((s, b) => s + (Number(b.emPl) || 0), 0) * 100) / 100,
-      /** How many rows the enrichment actually priced — the EM column's denominator. */
-      withEm: judgeable.filter((b) => b.emPct != null).length,
-      withBsp: judgeable.filter((b) => b.bspEmPct != null).length,
+      // EM and its totals are joined on per request by attachEm, not cached here.
     },
     ...(pricesError ? { pricesError } : {}),
   };
