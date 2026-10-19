@@ -6,6 +6,7 @@ import { SignOut } from '../components/SignOut';
 import { useParam } from '../lib/urlState';
 import { fetchPending, type Pending, type PendingBet } from '../lib/db';
 import { BookmakerLogo } from '../components/BookmakerLogo';
+import { IdChip } from '../components/IdChip';
 import { brandById, BOOKMAKERS } from '../lib/markets';
 import { BRAND_LABEL, BRAND_TONE } from '../lib/brands';
 import { marketLabel } from '../lib/marketLabel';
@@ -39,6 +40,29 @@ const money = (n: number | null | undefined) =>
 
 const time = (v: string | null) =>
   v ? new Date(v).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '–';
+
+/**
+ * How long until the event starts, or how long since.
+ *
+ * On a page of open bets the absolute kick-off matters less than the distance
+ * to it: a firmer on a game starting in nine minutes is a different problem
+ * from the same firmer on one three days out, because only one of them can
+ * still be traded out of. "Started" rather than a negative, because a bet open
+ * on a game already under way is its own thing — see the Late Bets page.
+ */
+function untilStart(v: string | null): string {
+  if (!v) return '';
+  const ms = new Date(v).getTime() - Date.now();
+  if (!Number.isFinite(ms)) return '';
+  if (ms <= 0) {
+    const mins = Math.round(-ms / 60_000);
+    return mins < 60 ? `started ${mins}m ago` : `started ${Math.floor(mins / 60)}h ago`;
+  }
+  const mins = Math.round(ms / 60_000);
+  if (mins < 60) return `in ${mins}m`;
+  if (mins < 1440) return `in ${Math.floor(mins / 60)}h ${mins % 60}m`;
+  return `in ${Math.floor(mins / 1440)}d`;
+}
 
 const SUB = 'text-xs text-slate-500';
 
@@ -258,7 +282,13 @@ export default function PendingBetsPage() {
             <thead className="sticky top-0 z-10 bg-surface-raised text-[11px] uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="w-[5rem] px-3 py-2 text-left font-medium">Brand</th>
-                <th className="w-[7rem] px-2 py-2 text-left font-medium">Placed</th>
+                {/* Both copyable: these are the two ids you quote when asking
+                    about a bet, and reading a UUID off a screen is not a thing
+                    anyone should be asked to do. */}
+                <th className="w-[7.5rem] px-2 py-2 text-left font-medium">User</th>
+                <th className="w-[7.5rem] px-2 py-2 text-left font-medium">Bet</th>
+                <th className="w-[8rem] px-2 py-2 text-left font-medium">Placed</th>
+                <th className="w-[8rem] px-2 py-2 text-left font-medium">Starts</th>
                 <th className="px-2 py-2 text-left font-medium">Event</th>
                 <th className="px-2 py-2 text-left font-medium">Selection</th>
                 <th className="border-l border-surface-border px-2 py-2 text-right font-medium">
@@ -302,11 +332,18 @@ export default function PendingBetsPage() {
                       {BRAND_LABEL[b.brand] ?? b.brand}
                     </span>
                   </td>
-                  <td className="whitespace-nowrap px-2 py-1.5 tabular-nums">
-                    <div className="text-slate-200">{time(b.placedAt)}</div>
-                    <div className={SUB} title="bet · user">
-                      {b.betId ?? '–'}
-                    </div>
+                  <td className="px-2 py-1.5">
+                    <IdChip value={b.userId} title="User" />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <IdChip value={b.betId} title="Bet" />
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-200">
+                    {time(b.placedAt)}
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-1.5 tabular-nums" title={b.startsAt ?? ''}>
+                    <div className="text-slate-200">{time(b.startsAt)}</div>
+                    <div className={SUB}>{untilStart(b.startsAt)}</div>
                   </td>
                   <td className="max-w-[15rem] px-2 py-1.5" title={b.event ?? ''}>
                     <div className="truncate text-slate-200">
