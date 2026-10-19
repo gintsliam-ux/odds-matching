@@ -113,7 +113,22 @@ export default function PendingBetsPage() {
 
   useEffect(() => {
     let cancelled = false;
-    setState((prev) => (prev === 'ready' ? prev : 'loading'));
+    /*
+     * The other view's payload is DISCARDED, not left on screen.
+     *
+     * This effect re-runs only when the view changes, and it used to keep
+     * whatever was already loaded until the new fetch returned — so clicking
+     * Settled rendered the open book for a moment, and since `beatClose` is
+     * undefined on an open bet every row filtered out. What showed was "Nobody
+     * beat the close" above the OPEN view's own counts: "177 open singles, 13
+     * of them with both our price and another book's". Both true of the data
+     * on screen and neither true of the view asked for.
+     *
+     * `loading` unconditionally here for the same reason — the poll below still
+     * refreshes in place, because it does not re-run this effect.
+     */
+    setData(null);
+    setState('loading');
     const load = () =>
       fetchPending(settled ? 'settled' : 'open')
         .then((d) => {
@@ -295,9 +310,11 @@ export default function PendingBetsPage() {
             {settled ? 'Nobody beat the close.' : firmersOnly ? 'Nothing has firmed.' : 'Nothing open to compare.'}
           </p>
           <p className="max-w-md text-xs text-slate-600">
-            {c
-              ? `${c.open} open singles, ${c.judgeable} of them with both our price and another book's on the same selection.`
-              : ''}
+            {!c
+              ? ''
+              : settled
+                ? `${c.open} settled singles in the last 7 days, ${c.judgeable} of them with a closing price to judge against. None was struck longer than the close.`
+                : `${c.open} open singles, ${c.judgeable} of them with both our price and another book's on the same selection.`}
           </p>
         </div>
       )}

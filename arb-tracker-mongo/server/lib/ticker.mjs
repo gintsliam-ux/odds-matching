@@ -161,6 +161,16 @@ const PERIOD_WORDS =
 const FULL_FIXTURE_CAP = 40;
 
 /**
+ * The same budget for the settled view, which can afford far more of it.
+ *
+ * Every settled fixture has to be fetched one at a time — see needFull — and
+ * there is no cheap drain to fall back on, so the cap IS the coverage. Forty
+ * would have answered for a quarter of a week's bets and silently dropped the
+ * rest. The route caches for an hour, which is what makes this affordable.
+ */
+const CLOSING_FIXTURE_CAP = 250;
+
+/**
  * Phase timings, reported on the payload.
  *
  * The cold path is the whole performance story here -- warm calls answer in
@@ -1274,10 +1284,25 @@ async function pricesFor(bets, byEventId, fixtures, timings, { closing = false }
     const onH2hDrain = (w) =>
       w?.kind === 'moneyline' &&
       (w.marketIds ?? []).every((id) => id === 'moneyline' || id === 'moneyline_3way');
+    /*
+     * Closing prices need EVERY fixture fetched, and a much larger budget.
+     *
+     * The filter below asks "can the cheap per-sport drain already answer for
+     * this fixture", and for a settled one the answer is always no: the drain
+     * covers the board window, three days back, and a bet settled a week ago is
+     * outside it. So a settled moneyline — which this filter would skip as
+     * already covered — got no closing price at all.
+     *
+     * The cap is the ticker's budget, and the ticker rebuilds every twenty
+     * seconds. The settled view is cached for an hour, so it can afford to ask
+     * for all of them: 150-odd fixtures at eight requests a second is twenty
+     * seconds, once an hour.
+     */
+    const cap = closing ? CLOSING_FIXTURE_CAP : FULL_FIXTURE_CAP;
     const needFull = [...wanted.entries()]
-      .filter(([, list]) => list.some((b) => !onH2hDrain(want.get(b))))
+      .filter(([, list]) => closing || list.some((b) => !onH2hDrain(want.get(b))))
       .map(([fixtureId]) => fixtureId)
-      .slice(0, FULL_FIXTURE_CAP);
+      .slice(0, cap);
 
     const extra = await timed(timings, 'oddsPerFixture', () => Promise.all(
       needFull.map((fixtureId) => {
