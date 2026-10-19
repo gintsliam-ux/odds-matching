@@ -16,6 +16,7 @@
  */
 
 import { cached } from './cache.mjs';
+import { isMultiDay, MULTI_DAY_GRACE_MS } from './events.mjs';
 
 const DEFAULT_BASE = 'https://sport.gutsysapi.com';
 
@@ -786,7 +787,7 @@ export async function apiOddsForSport(sport, { live = false } = {}) {
  * something is actually in play is answered by the live feed rather than
  * guessed at from a clock.
  */
-function impliedStatus(row, now, liveIds) {
+function impliedStatus(row, now, liveIds, sport) {
   if (liveIds?.has(row.optic_fixture_id)) return 'live';
   const start = row.commence_time ? new Date(row.commence_time).getTime() : NaN;
   if (!Number.isFinite(start)) return null;
@@ -811,7 +812,25 @@ function impliedStatus(row, now, liveIds) {
    * scheduled start resolve to live, and only after that does an unquoted
    * fixture read as completed.
    */
-  return now - start < KICKOFF_GRACE_MS ? 'live' : 'completed';
+  /*
+   * A format that runs for days is not finished because nobody is quoting it
+   * right now.
+   *
+   * This is the rule that put "Final" on South Africa v Australia on day two of
+   * a five-day Test. `liveIds` holds only fixtures a book is actively quoting
+   * in-play, and between sessions — overnight, at a declaration, through rain —
+   * nothing is. Past the fifteen-minute kick-off grace the fixture then fell to
+   * `completed`, and the board reported a match in progress as over.
+   *
+   * So multi-day formats get the same six-day benefit of the doubt the Mongo
+   * path already gives them, from the same shared rule. The trade is the one
+   * this function already states: of the two possible errors, calling a running
+   * game finished is much the worse. "Final" on a Test still being played is
+   * wrong in a way anyone can see; a Test reading live for a day after it ends
+   * is merely late.
+   */
+  const grace = isMultiDay(sport, row.optic_league) ? MULTI_DAY_GRACE_MS : KICKOFF_GRACE_MS;
+  return now - start < grace ? 'live' : 'completed';
 }
 
 /**
@@ -1079,7 +1098,7 @@ function periodsFrom(scores) {
 
 /** One pivot row as a fixture record. Shared with the by-id lookup. */
 function fixtureFromPivot(r, sport, now, liveIds) {
-  const status = impliedStatus(r, now, liveIds);
+  const status = impliedStatus(r, now, liveIds, sport);
   // A score on an unplayed fixture is left over from some other meeting;
   // only show one once the thing has actually started.
   const played = status === 'completed' || status === 'live';

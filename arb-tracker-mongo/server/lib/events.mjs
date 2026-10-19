@@ -257,6 +257,40 @@ const FINAL = new Set(['final', 'completed', 'complete', 'ended', 'finished', 'r
 /** Exported so callers that have to reason about live state use THIS list and
  *  not a second copy of it that drifts — see expireStaleLive in queries.mjs. */
 export const LIVE = new Set(['live', 'in_play', 'inplay', 'playing', 'started']);
+
+/**
+ * Fixtures that legitimately stay unfinished for days.
+ *
+ * Both halves of the site need this and for different reasons, so it lives here
+ * with the rest of the shared status vocabulary rather than in either of them.
+ * On the Mongo path it decides how long a claimed-live fixture is believed
+ * before being written off as stale; on the odds-surface path it decides
+ * whether a start time in the past means "finished", which is the whole of how
+ * status is derived there.
+ *
+ * Golf is multi-day as a SPORT — every tournament runs four rounds. Cricket is
+ * not: of the fixtures held, `cricket_international_test_matches` and
+ * `cricket_india_ranji_trophy` run for days while t20, odi, ipl, big bash, the
+ * hundred and the rest are over in an afternoon. Keying cricket on the sport
+ * gave a finished T20 the same six-day benefit of the doubt as a Test, which on
+ * the surface path would have invented "live" on it for a week.
+ */
+const MULTI_DAY_SPORTS = new Set(['golf']);
+
+/**
+ * The multi-day cricket formats, by the only name the data gives them.
+ * `first_class` and the shields are included on the same basis even though the
+ * current window holds none: they are the same kind of fixture and will arrive.
+ */
+const MULTI_DAY_LEAGUE =
+  /test|ranji|first_class|sheffield_shield|county_champ|plunket_shield|duleep/i;
+
+export const MULTI_DAY_GRACE_MS = 6 * 24 * 60 * 60 * 1000;
+
+/** Does this fixture belong to a format that runs across days? */
+export const isMultiDay = (sport, league) =>
+  MULTI_DAY_SPORTS.has(String(sport ?? '').toLowerCase()) ||
+  MULTI_DAY_LEAGUE.test(String(league ?? ''));
 const CANCELLED = new Set(['cancelled', 'canceled', 'postponed', 'abandoned', 'walkover']);
 
 function mapStatus(raw) {

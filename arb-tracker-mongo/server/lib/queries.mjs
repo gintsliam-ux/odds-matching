@@ -1,7 +1,9 @@
 import { cached } from './cache.mjs';
 import { coll, mirrorConfigured } from './mongo.mjs';
 import { fixtureMapping } from './fixtureMapping.mjs';
-import { FIXTURE_PROJECTION, LIVE, SKIP_SPORTS, toEvents } from './events.mjs';
+import {
+  FIXTURE_PROJECTION, isMultiDay, LIVE, MULTI_DAY_GRACE_MS, SKIP_SPORTS, toEvents,
+} from './events.mjs';
 import { isApi } from './source.mjs';
 import { apiFixtureById, apiFixtures, apiOddsForFixture, apiOddsForSport, apiSports } from './sportApi.mjs';
 
@@ -212,12 +214,12 @@ async function bookableIds(ids) {
  * match from the day before yesterday stops claiming to be live.
  */
 const LIVE_GRACE_MS = 6 * 60 * 60 * 1000;
-const MULTI_DAY_GRACE_MS = 6 * 24 * 60 * 60 * 1000;
-const MULTI_DAY = new Set(['cricket', 'golf']);
 
 function expireStaleLive(f) {
   if (!f.is_live && !LIVE.has(String(f.status ?? '').toLowerCase())) return f;
-  const grace = MULTI_DAY.has(f.sport) ? MULTI_DAY_GRACE_MS : LIVE_GRACE_MS;
+  // By FORMAT, not by sport — see isMultiDay. A finished T20 used to inherit a
+  // Test's six-day grace and could sit claiming live for most of a week.
+  const grace = isMultiDay(f.sport, f.optic_league) ? MULTI_DAY_GRACE_MS : LIVE_GRACE_MS;
   const start = f.actual_start ?? f.scheduled_start;
   const t = start ? new Date(start).getTime() : NaN;
   if (!Number.isFinite(t) || Date.now() - t <= grace) return f;
