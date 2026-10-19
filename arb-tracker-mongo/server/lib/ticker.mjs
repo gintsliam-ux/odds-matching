@@ -168,7 +168,38 @@ const FULL_FIXTURE_CAP = 40;
  * would have answered for a quarter of a week's bets and silently dropped the
  * rest. The route caches for an hour, which is what makes this affordable.
  */
-const CLOSING_FIXTURE_CAP = 250;
+const CLOSING_FIXTURE_CAP = 1500;
+
+/**
+ * And a DEADLINE, because the cap bounds requests while the function is bounded
+ * in seconds.
+ *
+ * Fourteen days of settled singles touch 1,283 distinct fixtures, and in
+ * production each one is its own HTTP request paced at eight a second — about
+ * 160 seconds against a 300-second function. That fits, but only while the
+ * upstream stays quick: the cap cannot tell the difference between 1,283 fast
+ * requests and 1,283 slow ones, and the failure it cannot prevent is the whole
+ * function timing out and the view returning NOTHING, which is strictly worse
+ * than returning twelve of the fourteen days.
+ *
+ * So the budget is time. Three minutes is ~1,440 fixtures at the current rate —
+ * above what the window actually needs, so on a normal build nothing is dropped
+ * and this never binds. It is the floor under the bad case, not the plan.
+ */
+const CLOSING_BUDGET_MS = 180_000;
+
+/**
+ * Concurrent lanes, which is not the same thing as the rate.
+ *
+ * The token bucket in sportApi decides how FAST requests leave (eight a
+ * second); this decides how many are in the air at once, and the surface
+ * documents sixteen. The fan-out below used to be one `Promise.all` over every
+ * fixture, which with 1,283 of them opened 1,283 sockets and let the bucket
+ * dribble them out — the rate was right and the in-flight count was not. A pool
+ * also gives the deadline somewhere to be checked: queued work that has not
+ * started yet can still be abandoned, where a promise already created cannot.
+ */
+const FETCH_LANES = 16;
 
 /**
  * Phase timings, reported on the payload.
@@ -1304,20 +1335,44 @@ async function pricesFor(bets, byEventId, fixtures, timings, { closing = false }
       .map(([fixtureId]) => fixtureId)
       .slice(0, cap);
 
-    const extra = await timed(timings, 'oddsPerFixture', () => Promise.all(
-      needFull.map((fixtureId) => {
+    const deadline = Date.now() + (closing ? CLOSING_BUDGET_MS : Infinity);
+    const queue = needFull.slice();
+    let dropped = 0;
+    const lane = async () => {
+      const out = [];
+      while (queue.length) {
+        // Checked here rather than before the fan-out, because this is the only
+        // place that runs LATE: by the time a lane reaches the thousandth
+        // fixture, minutes have passed, and abandoning what is still queued is
+        // what keeps the answer inside the function's budget.
+        if (Date.now() > deadline) {
+          dropped += queue.length;
+          queue.length = 0;
+          break;
+        }
+        const fixtureId = queue.shift();
         const sport = fixtures.get(fixtureId)?.sport;
+        if (!sport) continue;
         /*
          * `currentOnly` drops the ladder AND the settled prices, which is right
          * for the ticker and useless for a closing price: the cheap shape has
          * no `_close` columns at all. A settled fixture is asked for whole.
          */
-        return sport
-          ? apiOddsForFixture(fixtureId, sport, { currentOnly: !closing }).catch(() => [])
-          : Promise.resolve([]);
-      }),
-    ));
-    if (timings) timings.fullFixtures = needFull.length;
+        const got = await apiOddsForFixture(fixtureId, sport, { currentOnly: !closing }).catch(() => []);
+        for (const r of got) out.push(r);
+      }
+      return out;
+    };
+    const extra = await timed(timings, 'oddsPerFixture', () =>
+      Promise.all(Array.from({ length: Math.min(FETCH_LANES, queue.length) }, lane)),
+    );
+    if (timings) {
+      timings.fullFixtures = needFull.length - dropped;
+      // Surfaced even at zero: "how many fixtures did this answer actually
+      // price" is the first question to ask of a thin settled view, and a
+      // missing key reads as a coverage problem that is not there.
+      timings.droppedFixtures = dropped;
+    }
     rows = [...rows, ...extra.flat()];
   }
 

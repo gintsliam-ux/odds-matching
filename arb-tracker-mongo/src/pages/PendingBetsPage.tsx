@@ -174,6 +174,16 @@ export default function PendingBetsPage() {
 
   const columns = useMemo(() => bookColumns(bets), [bets]);
   const c = data?.counts;
+  /*
+   * The settled window, from the server, with ONE fallback for the render
+   * before any payload has arrived.
+   *
+   * It was written out as "the last 7 days" in four separate strings, and the
+   * day the server's constant went from 7 to 14 all four became wrong at once
+   * with nothing to catch them. A single binding keeps the copy honest and
+   * leaves exactly one literal to get stale instead of four.
+   */
+  const days = c?.days ?? 14;
   const CHIP = 'rounded-md px-2.5 py-1 text-xs font-medium transition';
 
   return (
@@ -193,7 +203,7 @@ export default function PendingBetsPage() {
             </h1>
             <p className="mt-0.5 text-xs text-slate-500">
               {settled
-                ? 'Settled in the last 7 days where the customer beat the closing price'
+                ? `Settled in the last ${days} days where the customer beat the closing price`
                 : 'Open singles, with the price we show now beside the price the customer took'}
             </p>
           </div>
@@ -214,7 +224,7 @@ export default function PendingBetsPage() {
               <span
                 title={
                   settled
-                    ? `Of ${c.open} settled singles in the last 7 days, ${c.noClose ?? 0} have no usable closing price to judge against — a market the close cannot be divided to 100% on, usually because a book closed only part of it.`
+                    ? `Of ${c.open} settled singles in the last ${days} days${c.from ? ` (back to ${c.from})` : ''}, ${c.noClose ?? 0} have no usable closing price to judge against — a market the close cannot be divided to 100% on, usually because a book closed only part of it.${c.dropped ? ` ${c.dropped} fixtures were left unpriced by the build's time budget.` : ''}`
                     : `Of ${c.open} open singles: ${c.noOurPrice} have no current price of our own on that selection, ${c.noFieldPrice} have no other book priced on it. A row missing either cannot be compared, so it is counted here rather than shown as a bet nobody has an opinion on.`
                 }
               >
@@ -240,7 +250,7 @@ export default function PendingBetsPage() {
               asking of a bet that is already over — so the filter lives in the
               tooltip and the heading says which half of the book you are in.
             */
-            ['settled', 'Settled', 'Settled in the last 7 days where the customer took a longer price than the market closed at, de-vigged. A price we should not have offered, whether or not it won.'],
+            ['settled', 'Settled', `Settled in the last ${days} days where the customer took a longer price than the market closed at, de-vigged. A price we should not have offered, whether or not it won.`],
           ] as const).map(([key, label, title]) => (
             <button
               key={key}
@@ -296,7 +306,34 @@ export default function PendingBetsPage() {
         </div>
       </header>
 
-      {state === 'loading' && !data && <BetsTableSkeleton rows={12} cols={8} />}
+      {state === 'loading' && !data && (
+        <div className="min-h-0 flex-1">
+          {/*
+            * Thirteen columns, because that is how many the table has.
+            * A skeleton narrower than the thing it stands in for reflows the
+            * whole page the moment the data lands, which reads as a glitch
+            * rather than as loading.
+            */}
+          <BetsTableSkeleton rows={12} cols={13} />
+          {/*
+            * And the settled view SAYS why it is slow.
+            *
+            * Every settled fixture's closing price is one upstream request, a
+            * thousand-odd of them for the window, so a cold build runs to a
+            * minute or more where the open view answers in seconds. An
+            * unexplained minute of skeleton reads as broken; the same minute
+            * with a reason reads as work. No day count in this copy on purpose
+            * — the number lives on the server and there are no counts to read
+            * until the payload arrives.
+            */}
+          {settled && (
+            <p className="px-4 pt-3 text-xs text-slate-600">
+              Reading every settled single in the window and the market's closing price on each
+              one. The first load after an hour takes a minute or so; after that it is instant.
+            </p>
+          )}
+        </div>
+      )}
 
       {state === 'error' && (
         <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-slate-500">
@@ -313,7 +350,7 @@ export default function PendingBetsPage() {
             {!c
               ? ''
               : settled
-                ? `${c.open} settled singles in the last 7 days, ${c.judgeable} of them with a closing price to judge against. None was struck longer than the close.`
+                ? `${c.open} settled singles in the last ${days} days, ${c.judgeable} of them with a closing price to judge against. None was struck longer than the close.`
                 : `${c.open} open singles, ${c.judgeable} of them with both our price and another book's on the same selection.`}
           </p>
         </div>

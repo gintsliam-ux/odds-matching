@@ -55,9 +55,29 @@ const MULTI_OPEN = ['Accepted', 'Partially Accepted'];
 const SWIFT_SETTLED = 'paid';
 const MULTI_SETTLED = [{ bet_status: 'No Return' }, { bet_status: /^Return @/ }];
 
-/** Settled bets are immutable, so a week is safe to ask for; the cost is the fixtures. */
-const SETTLED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-const SETTLED_LIMIT = 250;
+/**
+ * Fourteen days, and the bet limit raised to actually reach them.
+ *
+ * Settled bets are immutable, so the window itself costs nothing to widen —
+ * and widening it alone would have changed NOTHING, which is the part worth
+ * recording. At 250 bets the newest ones reached back twelve HOURS, so "the
+ * last seven days" was really "the last half day" and the limit, not the
+ * window, was what anyone was looking at. The limit is now above the
+ * population: fourteen days holds 7,066 settled sport singles.
+ *
+ * The cost is not the bets, it is the FIXTURES behind them — 1,283 of them, one
+ * request each in production, since nothing cheaper covers a fixture outside
+ * the board window. That is bounded in ticker.mjs by CLOSING_FIXTURE_CAP and
+ * CLOSING_BUDGET_MS, and the route caches the answer for an hour, which is what
+ * makes asking for all of them affordable at all.
+ *
+ * Worth knowing when reading the span: the filter is on PLACED time, so a bet
+ * laid three weeks ago and settled yesterday is outside it. For sport singles
+ * that is a rounding error; for a futures market it would not be.
+ */
+const SETTLED_WINDOW_DAYS = 14;
+const SETTLED_WINDOW_MS = SETTLED_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+const SETTLED_LIMIT = 8000;
 
 /**
  * How far back to look for something still open.
@@ -203,6 +223,8 @@ async function settledMulti(db, since) {
  * Pinnacle's de-vigged close first, the blend of complete books second — see
  * fair.mjs. The book columns carry the raw closes so the number can be checked.
  */
+export const SETTLED_DAYS = SETTLED_WINDOW_DAYS;
+
 export async function settledBets() {
   if (!betsConfigured) return { configured: false, bets: [], counts: null };
   const db = await betsDb();
@@ -231,7 +253,15 @@ export async function settledBets() {
    * out, so this cannot be moved after it — see the ticker's own call site.
    */
   await classifyLeadSegments(all).catch(() => {});
-  const { bets: enriched, pricesError } = await enrich(all, null, { closing: true });
+  /*
+   * A timings object rather than null, because this is the only route whose
+   * COVERAGE is in question. The per-fixture pricing is deadline-bounded, so
+   * "how many of the window's fixtures did this answer actually price" has to
+   * come back with the answer — a thin settled view otherwise looks identical
+   * whether the market had no closes or we ran out of time asking.
+   */
+  const timings = {};
+  const { bets: enriched, pricesError } = await enrich(all, timings, { closing: true });
 
   for (const b of enriched) {
     // The true closing price, not the best quoted one.
@@ -257,6 +287,15 @@ export async function settledBets() {
       firmed: beat.length,
       stake: judgeable.reduce((s, b) => s + (Number(b.stake) || 0), 0),
       firmedStake: beat.reduce((s, b) => s + (Number(b.stake) || 0), 0),
+      // The window, sent rather than restated on the client: the page used to
+      // say "the last 7 days" in two places as literal text, which is a number
+      // that silently lies the moment this constant changes — as it just did.
+      days: SETTLED_WINDOW_DAYS,
+      // The oldest bet that actually made it in, so the page can show the span
+      // it has rather than the span it asked for.
+      from: enriched.length ? String(enriched[enriched.length - 1].placedAt ?? '').slice(0, 10) : null,
+      fixtures: timings.fullFixtures ?? null,
+      dropped: timings.droppedFixtures ?? 0,
     },
     ...(pricesError ? { pricesError } : {}),
   };

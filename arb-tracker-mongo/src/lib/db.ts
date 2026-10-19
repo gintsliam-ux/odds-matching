@@ -154,6 +154,22 @@ export interface Pending {
     firmed: number;
     stake: number;
     firmedStake: number;
+    /**
+     * Settled view only — the window, sent by the server rather than restated
+     * here. The page used to carry "the last 7 days" as literal text in two
+     * places, which is a number that lies silently the moment the server's
+     * constant changes.
+     */
+    days?: number;
+    /** Oldest date actually covered (YYYY-MM-DD), which is the span we HAVE. */
+    from?: string | null;
+    /**
+     * Fixtures priced, and fixtures abandoned to the time budget. Null on the
+     * Mongo path, where the odds come from one query and no fixture costs a
+     * request — so a null here means "not applicable", not "none".
+     */
+    fixtures?: number | null;
+    dropped?: number;
   } | null;
   pricesError?: string;
 }
