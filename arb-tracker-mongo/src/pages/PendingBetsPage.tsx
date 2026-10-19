@@ -97,8 +97,16 @@ export default function PendingBetsPage() {
   const [data, setData] = useState<Pending | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [error, setError] = useState<string | null>(null);
-  /** `?view=firmers`, All being the default — the page is the book, not the alarm. */
+  /*
+   * Three views on one page, because they are three readings of the same book.
+   *
+   * `all` and `firmers` are open bets against our current price. `settled` is a
+   * different question with a different answer: a bet that is over can only be
+   * judged against the CLOSE, and the ones that beat it were mispriced whether
+   * or not they won. All is the default — the page is the book, not the alarm.
+   */
   const [view, setView] = useParam('view', 'all');
+  const settled = view === 'settled';
   const firmersOnly = view === 'firmers';
   const [brand, setBrand] = useParam('brand', 'all');
   const [sport, setSport] = useParam('sport', 'all');
@@ -107,7 +115,7 @@ export default function PendingBetsPage() {
     let cancelled = false;
     setState((prev) => (prev === 'ready' ? prev : 'loading'));
     const load = () =>
-      fetchPending()
+      fetchPending(settled ? 'settled' : 'open')
         .then((d) => {
           if (cancelled) return;
           setData(d);
@@ -121,12 +129,13 @@ export default function PendingBetsPage() {
     load();
     // A minute, matching the server's own TTL: the brand stores are scraped on
     // that order and polling faster cannot return anything newer.
-    const id = setInterval(load, 60_000);
+    // An hour for settled, which cannot change, against a minute for open.
+    const id = setInterval(load, settled ? 10 * 60_000 : 60_000);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, []);
+  }, [settled]);
 
   // Memoised so the three lists below are not rebuilt on every render: `data?.bets
   // ?? []` is a new array each time, which is enough to invalidate all of them.
@@ -141,10 +150,11 @@ export default function PendingBetsPage() {
       bets.filter(
         (b) =>
           (!firmersOnly || b.firmed) &&
+          (!settled || b.beatClose) &&
           (brand === 'all' || b.brand === brand) &&
           (sport === 'all' || b.sport === sport),
       ),
-    [bets, firmersOnly, brand, sport],
+    [bets, firmersOnly, settled, brand, sport],
   );
 
   const columns = useMemo(() => bookColumns(bets), [bets]);
@@ -167,14 +177,17 @@ export default function PendingBetsPage() {
               Pending Bets
             </h1>
             <p className="mt-0.5 text-xs text-slate-500">
-              Open singles, with the price we show now beside the price the customer took
+              {settled
+                ? 'Settled in the last 7 days where the customer beat the closing price'
+                : 'Open singles, with the price we show now beside the price the customer took'}
             </p>
           </div>
 
           {c && (
             <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
               <span>
-                <b className="tabular-nums text-rose-300">{c.firmed}</b> firmed
+                <b className="tabular-nums text-rose-300">{c.firmed}</b>{' '}
+                {settled ? 'beat the close' : 'firmed'}
               </span>
               <span>
                 <b className="tabular-nums text-amber-300">{money(c.firmedStake)}</b> on them
@@ -184,9 +197,14 @@ export default function PendingBetsPage() {
                 {money(c.stake)}
               </span>
               <span
-                title={`Of ${c.open} open singles: ${c.noOurPrice} have no current price of our own on that selection, ${c.noFieldPrice} have no other book priced on it. A row missing either cannot be compared, so it is counted here rather than shown as a bet nobody has an opinion on.`}
+                title={
+                  settled
+                    ? `Of ${c.open} settled singles in the last 7 days, ${c.noClose ?? 0} have no usable closing price to judge against — a market the close cannot be divided to 100% on, usually because a book closed only part of it.`
+                    : `Of ${c.open} open singles: ${c.noOurPrice} have no current price of our own on that selection, ${c.noFieldPrice} have no other book priced on it. A row missing either cannot be compared, so it is counted here rather than shown as a bet nobody has an opinion on.`
+                }
               >
-                of <b className="tabular-nums text-slate-400">{c.open}</b> open
+                of <b className="tabular-nums text-slate-400">{c.open}</b>{' '}
+                {settled ? 'settled' : 'open'}
               </span>
               {state === 'loading' && <Loader2 size={13} className="animate-spin text-slate-600" />}
             </div>
@@ -197,32 +215,32 @@ export default function PendingBetsPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 border-t border-surface-border/60 px-4 py-2">
-          {[false, true].map((v) => (
+          {([
+            ['all', 'All', 'Every open single we can compare.'],
+            ['firmers', 'Firmers', 'Open bets whose price has shortened since they were struck — the market moving towards the customer.'],
+            ['settled', 'Beat the close', 'Settled in the last 7 days where the customer took a longer price than the market closed at, de-vigged. A price we should not have offered, whether or not it won.'],
+          ] as const).map(([key, label, title]) => (
             <button
-              key={String(v)}
+              key={key}
               type="button"
-              onClick={() => setView(v ? 'firmers' : 'all')}
-              title={
-                v
-                  ? 'Only bets whose price has shortened since they were struck — the market moving towards the customer.'
-                  : 'Every open single we can compare.'
-              }
+              onClick={() => setView(key)}
+              title={title}
               className={`${CHIP} ${
-                firmersOnly === v
+                view === key
                   ? 'bg-rose-500/15 text-rose-300'
                   : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
               }`}
             >
-              {v ? (
-                <span className="inline-flex items-center gap-1">
-                  <TrendingDown size={12} /> Firmers
-                </span>
-              ) : (
+              {key === 'all' ? (
                 'All'
+              ) : (
+                <span className="inline-flex items-center gap-1">
+                  <TrendingDown size={12} /> {label}
+                </span>
               )}
-              <span className="ml-1.5 tabular-nums opacity-60">
-                {v ? bets.filter((b) => b.firmed).length : bets.length}
-              </span>
+              {view === key && (
+                <span className="ml-1.5 tabular-nums opacity-60">{shown.length}</span>
+              )}
             </button>
           ))}
           <span className="mx-1 h-4 w-px bg-surface-border" />
@@ -267,7 +285,7 @@ export default function PendingBetsPage() {
       {data && state !== 'error' && shown.length === 0 && (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
           <p className="text-sm text-slate-300">
-            {firmersOnly ? 'Nothing has firmed.' : 'Nothing open to compare.'}
+            {settled ? 'Nobody beat the close.' : firmersOnly ? 'Nothing has firmed.' : 'Nothing open to compare.'}
           </p>
           <p className="max-w-md text-xs text-slate-600">
             {c
@@ -306,11 +324,17 @@ export default function PendingBetsPage() {
                 </th>
                 <th
                   className="px-2 py-2 text-center font-medium"
-                  title="Our own current price on the same selection, from the book the bet was struck on. A multis bet reads mybet's price: the two are one platform behind two front ends and share a single event store."
+                  title={
+                    settled
+                      ? "Where the market closed on this selection, with the margin divided out — Pinnacle's de-vigged close where it has one, else the blend of every book that closed the whole market. Not any one book's quoted close: that still carries its margin, so beating it is a lower bar than beating the true price."
+                      : "Our own current price on the same selection, from the book the bet was struck on. A multis bet reads mybet's price: the two are one platform behind two front ends and share a single event store."
+                  }
                 >
-                  Ours now
+                  {settled ? 'Closed' : 'Ours now'}
                 </th>
-                <th className="px-2 py-2 text-center font-medium">Move</th>
+                <th className="px-2 py-2 text-center font-medium">
+                  {settled ? 'vs close' : 'Move'}
+                </th>
                 {columns.map((id) => {
                   const b = brandById(id);
                   return (
@@ -328,7 +352,7 @@ export default function PendingBetsPage() {
                 <tr
                   key={`${b.brand}:${b.id}`}
                   className={`border-b border-surface-border/50 hover:bg-white/[0.02] ${
-                    b.firmed ? 'bg-rose-500/[0.05]' : ''
+                    (settled ? b.beatClose : b.firmed) ? 'bg-rose-500/[0.05]' : ''
                   }`}
                 >
                   <td className="whitespace-nowrap px-3 py-1.5">
@@ -388,20 +412,26 @@ export default function PendingBetsPage() {
                   <td
                     className="px-2 py-1.5 text-center tabular-nums"
                     title={
-                      b.ourAt
-                        ? `${BRAND_LABEL[b.ourBook ?? ''] ?? b.ourBook ?? 'our book'}'s own price${
-                            b.ourBook && b.ourBook !== b.brand
-                              ? ' (one platform behind both front ends)'
-                              : ''
-                          }, last seen ${new Date(b.ourAt).toLocaleString()}${
-                            b.ourOpen != null ? ` — opened ${fmt(b.ourOpen)}` : ''
-                          }`
-                        : undefined
+                      settled
+                        ? `closing fair from ${b.closeFrom ?? 'the market'}`
+                        : b.ourAt
+                          ? `${BRAND_LABEL[b.ourBook ?? ''] ?? b.ourBook ?? 'our book'}'s own price${
+                              b.ourBook && b.ourBook !== b.brand
+                                ? ' (one platform behind both front ends)'
+                                : ''
+                            }, last seen ${new Date(b.ourAt).toLocaleString()}${
+                              b.ourOpen != null ? ` — opened ${fmt(b.ourOpen)}` : ''
+                            }`
+                          : undefined
                     }
                   >
-                    <span className={b.ourSuspended ? 'text-slate-600 line-through' : 'text-slate-200'}>
-                      {fmt(b.ourNow)}
-                    </span>
+                    {settled ? (
+                      <span className="text-slate-200">{fmt(b.closeFair)}</span>
+                    ) : (
+                      <span className={b.ourSuspended ? 'text-slate-600 line-through' : 'text-slate-200'}>
+                        {fmt(b.ourNow)}
+                      </span>
+                    )}
                   </td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-center tabular-nums">
                     <Move pct={b.movePct} />

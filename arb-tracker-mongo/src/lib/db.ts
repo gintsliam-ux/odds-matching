@@ -130,6 +130,15 @@ export interface PendingBet extends TickerBet {
   movePct: number | null;
   vsOpenPct: number | null;
   firmed: boolean;
+  /**
+   * Settled view only: where the market closed on this selection, de-vigged —
+   * Pinnacle's close where it has one, else the blend of every book that closed
+   * the whole market. `beatClose` is the customer having taken a longer price
+   * than that, which is a price we should not have offered whatever the result.
+   */
+  closeFair?: number | null;
+  closeFrom?: 'Pinnacle' | 'blend' | null;
+  beatClose?: boolean;
 }
 
 export interface Pending {
@@ -140,6 +149,8 @@ export interface Pending {
     judgeable: number;
     noOurPrice: number;
     noFieldPrice: number;
+    /** Settled view: bets with no usable closing price to judge against. */
+    noClose?: number;
     firmed: number;
     stake: number;
     firmedStake: number;
@@ -147,8 +158,12 @@ export interface Pending {
   pricesError?: string;
 }
 
-/** Open singles with our price beside the customer's. Admin only; see ADMIN_ONLY. */
-export const fetchPending = (): Promise<Pending> => apiGet<Pending>('/api/pending');
+/**
+ * Open singles with our price beside the customer's, or settled ones with the
+ * CLOSE beside it. Admin only; see ADMIN_ONLY.
+ */
+export const fetchPending = (view: 'open' | 'settled' = 'open'): Promise<Pending> =>
+  apiGet<Pending>(`/api/pending${view === 'settled' ? '?view=settled' : ''}`);
 
 /** Best (highest) H2H decimal price for each side of a fixture. */
 export interface H2HPrices {

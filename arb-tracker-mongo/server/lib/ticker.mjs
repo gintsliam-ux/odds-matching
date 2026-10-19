@@ -912,12 +912,28 @@ const key = (s) =>
  * the fixture — see pickByName. A containment test that is allowed to match two
  * things is how a same-game-multi leg ended up priced against the moneyline.
  */
-function surnameSubset(a, b) {
-  const A = new Set(key(a).split(' ').filter((t) => t.length > 1));
-  const B = new Set(key(b).split(' ').filter((t) => t.length > 1));
-  if (!A.size || !B.size) return false;
-  const [small, big] = A.size <= B.size ? [A, B] : [B, A];
-  for (const t of small) if (!big.has(t)) return false;
+/*
+ * DIRECTIONAL: the bet's name must be contained in the SURFACE's, never the
+ * other way round.
+ *
+ * It used to take whichever set was smaller, which is the same test run both
+ * ways — and the wrong way round it matches a player to his own team. mybet
+ * writes a scorer market as "Brevyn Spann-Ford (Dallas Cowboys)" on a bet_type
+ * of "Win", so the surface's "Dallas Cowboys" moneyline selection is a strict
+ * subset of the bet's text and matched it: a bet struck at 67.0 was priced
+ * against the team's moneyline and reported a closing fair of 1.925, a 50%
+ * edge that was really a 35x price gap between two different markets.
+ *
+ * The case this exists for runs the other way — a book writes
+ * "Krajicek, A/Mektic, N" where the surface writes the fuller "Austin Krajicek
+ * // Nikola Mektic", so the BET is the subset. Requiring that direction keeps
+ * the doubles and refuses the scorer.
+ */
+function surnameSubset(surfaceName, betName) {
+  const surface = new Set(key(surfaceName).split(' ').filter((t) => t.length > 1));
+  const bet = new Set(key(betName).split(' ').filter((t) => t.length > 1));
+  if (!surface.size || !bet.size) return false;
+  for (const t of bet) if (!surface.has(t)) return false;
   return true;
 }
 
@@ -1141,7 +1157,16 @@ export function pickByName(rows, name) {
  * blank because the market is exotic looks the same as one blank because the
  * books disagree, and only one of those is interesting.
  */
-async function pricesFor(bets, byEventId, fixtures, timings) {
+/**
+ * `closing: true` reads where the market FINISHED rather than where it is.
+ *
+ * A settled bet cannot be judged against a current price — the market has moved
+ * on and in most cases stopped existing. The close is the number everyone had
+ * their say about, so it is the one that says whether the price we laid was
+ * wrong. Same matching, same de-vig, different column.
+ */
+async function pricesFor(bets, byEventId, fixtures, timings, { closing = false } = {}) {
+  const priceField = closing ? 'close_price' : 'current_price';
   const wanted = new Map(); // fixture_id -> bets needing it
   const want = new Map(); // bet -> what to look for
   for (const b of bets) {
@@ -1169,6 +1194,11 @@ async function pricesFor(bets, byEventId, fixtures, timings) {
         // them in the projection every fair came back null while the price
         // columns beside them filled in normally.
         pair_key: 1, outcome_no: 1, status: 1,
+        // And the close, for the settled view. Projected unconditionally rather
+        // than behind the flag: it is one number, and a projection that depends
+        // on a caller's option is the same trap as the three above — the fairs
+        // came back null with nothing to say why.
+        close_price: 1, closed_at: 1,
       })
       .toArray();
   } else {
@@ -1220,10 +1250,13 @@ async function pricesFor(bets, byEventId, fixtures, timings) {
     const extra = await timed(timings, 'oddsPerFixture', () => Promise.all(
       needFull.map((fixtureId) => {
         const sport = fixtures.get(fixtureId)?.sport;
-        // Current prices only: no ladder, no settled prices. These columns
-        // read `current_price` and nothing else.
+        /*
+         * `currentOnly` drops the ladder AND the settled prices, which is right
+         * for the ticker and useless for a closing price: the cheap shape has
+         * no `_close` columns at all. A settled fixture is asked for whole.
+         */
         return sport
-          ? apiOddsForFixture(fixtureId, sport, { currentOnly: true }).catch(() => [])
+          ? apiOddsForFixture(fixtureId, sport, { currentOnly: !closing }).catch(() => [])
           : Promise.resolve([]);
       }),
     ));
@@ -1292,7 +1325,7 @@ async function pricesFor(bets, byEventId, fixtures, timings) {
       if (!hits.length) continue;
       const best = new Map();
       for (const r of hits) {
-        const p = num(r.current_price);
+        const p = num(r[priceField]);
         if (p == null) continue;
         const prev = best.get(r.sportsbook);
         if (prev == null || p > prev) best.set(r.sportsbook, p);
@@ -1309,7 +1342,7 @@ async function pricesFor(bets, byEventId, fixtures, timings) {
        */
       const group = groups.get(groupKey(hits[0]));
       if (group) {
-        const f = fairsFor(group, hits[0].outcome_no);
+        const f = fairsFor(group, hits[0].outcome_no, { field: priceField });
         if (f.fairPinnacle != null) b.fairPinnacle = f.fairPinnacle;
         if (f.fairBlend != null) {
           b.fairBlend = f.fairBlend;
@@ -1374,7 +1407,7 @@ export async function betTicker() {
  * Separate from the query so a bet that arrives PUSHED goes through exactly the
  * same enrichment as one that arrives in the batch — see tickerStream.mjs.
  */
-export async function enrich(bets, timings) {
+export async function enrich(bets, timings, { closing = false } = {}) {
   if (!bets.length) return { bets: [], pricesError: null };
 
   const { byEventId, fixtures } = await timed(timings, 'fixtures', () => fixturesFor(bets, timings));
@@ -1400,7 +1433,7 @@ export async function enrich(bets, timings) {
   // outside. Anything that degrades the feed now says so in the payload.
   const [pricesError] = await Promise.all([
     timed(timings, 'prices', () =>
-      pricesFor(bets, byEventId, fixtures, timings).then(
+      pricesFor(bets, byEventId, fixtures, timings, { closing }).then(
         () => null,
         (e) => String(e?.message ?? e).slice(0, 200),
       ),

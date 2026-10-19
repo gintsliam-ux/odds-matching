@@ -62,16 +62,25 @@ const MIN_BLEND_BOOKS = 2;
 export const groupKey = (row) =>
   row?.pair_key == null ? null : `${row.market_id}|${row.pair_key}`;
 
-const price = (row) => {
-  const p = Number(row?.current_price);
+/**
+ * Which column holds the price, because there are two questions.
+ *
+ * `current_price` answers "is this a good bet now", which is the ticker. For a
+ * SETTLED bet the only meaningful comparison is the close — where the market
+ * finished, after everyone had their say — so the settled view reads
+ * `close_price` through the same de-vig rather than a second implementation of
+ * it.
+ */
+const priceIn = (row, field) => {
+  const p = Number(row?.[field]);
   // 1.0 is not a price, it is a settled market or a placeholder, and it makes
   // an implied probability of exactly 1 that swamps a blend.
   return Number.isFinite(p) && p > 1 ? p : null;
 };
 
 /** Suspended prices are stale by definition — the book has stopped standing behind them. */
-const usable = (row) =>
-  !row.is_lay && String(row.status ?? '').toLowerCase() !== 'suspended' && price(row) != null;
+const usable = (row, field) =>
+  !row.is_lay && String(row.status ?? '').toLowerCase() !== 'suspended' && priceIn(row, field) != null;
 
 /**
  * De-vig one book's column: implied probabilities divided by their own total.
@@ -101,21 +110,26 @@ function devigBook(byOutcome, expected) {
  * `rows` is every row in the outcome group — all books, all outcomes — and
  * `outcomeNo` is the side the bet is on.
  */
-export function fairsFor(rows, outcomeNo) {
+export function fairsFor(rows, outcomeNo, { field = 'current_price' } = {}) {
   const none = { fairPinnacle: null, fairBlend: null, fairBooks: 0, pinnacleOverround: null };
   if (!rows?.length || outcomeNo == null) return none;
 
-  const rowsOk = rows.filter(usable);
+  const rowsOk = rows.filter((r) => usable(r, field));
   if (!rowsOk.length) return none;
 
   /*
-   * What counts as the complete market is what the FIELD prices, not a number
-   * declared anywhere: a two-way market is two outcomes because every book
-   * quoting it quotes two. Taking the union across books rather than trusting
-   * one of them means a book that has pulled a side is measured against the
-   * others and excluded, instead of silently redefining the market as smaller.
+   * What counts as the complete market is every outcome the group HAS, not
+   * every outcome that happens to carry the price being read.
+   *
+   * This took `rowsOk`, which is filtered on the price field — so an outcome
+   * with no price in that column disappeared from the market's definition, and
+   * whatever was left looked complete. Barely visible on current prices;
+   * glaring on closing ones, where a first-touchdown market with forty runners
+   * came back with two closes and de-vigged as a two-way: a bet struck at 67.0
+   * reported a closing fair of 1.925 and a 50% edge. The market is defined by
+   * its outcomes; a book that cannot price all of them is the thing to exclude.
    */
-  const expected = new Set(rowsOk.map((r) => r.outcome_no));
+  const expected = new Set(rows.filter((r) => !r.is_lay).map((r) => r.outcome_no));
   // One outcome is not a market. Dividing a single implied probability by
   // itself gives a fair price of exactly 1.0 for everything, every time.
   if (expected.size < 2) return none;
@@ -127,7 +141,7 @@ export function fairsFor(rows, outcomeNo) {
     // Best price per (book, outcome): the same book can appear twice when a
     // market is quoted at more than one id, and the better number is the one
     // the grid would show.
-    const p = price(r);
+    const p = priceIn(r, field);
     const prev = book.get(r.outcome_no);
     if (prev == null || p > prev) book.set(r.outcome_no, p);
     byBook.set(r.sportsbook, book);

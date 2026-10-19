@@ -24,7 +24,7 @@ import {
 import { closeBets } from './betsMongo.mjs';
 import { cached, invalidate } from './cache.mjs';
 import { fetchPulse } from './pulse.mjs';
-import { pendingBets } from './pending.mjs';
+import { pendingBets, settledBets } from './pending.mjs';
 import {
   cachedBoard, eventById, eventDetails, eventsForDay, h2hPrices, oddsForFixture, searchEvents,
 } from './queries.mjs';
@@ -127,7 +127,22 @@ const ROUTES = {
    * stores on top of the fixtures and the field), so a longer TTL and the same
    * one-minute ceiling on how stale a served copy may be.
    */
-  'GET /api/pending': () => cached('pending', 60_000, pendingBets, { maxStaleMs: 60_000 }),
+  'GET /api/pending': (url) => {
+    /*
+     * `?view=settled` is a different question and a different cache.
+     *
+     * Open bets are judged against our current price and go stale by the
+     * minute. A settled bet is judged against the CLOSE, which cannot change —
+     * the market is over — so that view is cached for an hour and its staleness
+     * ceiling is the same hour. It is also the more expensive of the two, since
+     * the fixtures it wants are outside the board window and have to be fetched
+     * one at a time.
+     */
+    if (url.searchParams.get('view') === 'settled') {
+      return cached('pending:settled', 60 * 60_000, settledBets, { maxStaleMs: 60 * 60_000 });
+    }
+    return cached('pending', 60_000, pendingBets, { maxStaleMs: 60_000 });
+  },
 
   'GET /api/bets': async (url) => {
     const id = url.searchParams.get('fixtureId') ?? '';

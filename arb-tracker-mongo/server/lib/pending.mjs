@@ -40,6 +40,24 @@ const SWIFT_OPEN = 'Unresulted';
 const MULTI_OPEN = ['Accepted', 'Partially Accepted'];
 
 /**
+ * Settled, in each brand's own vocabulary, read off a week of real statuses.
+ *
+ * swiftbet resolves everything to `paid` (2,328 sport singles in seven days);
+ * `Rejected` (227) and `FullyRefunded` (28) are bets that never stood and are
+ * not settled results. mybet writes `No Return` for a loser (691) and
+ * `Return @<br>Tkt <n>` for a winner — a DISTINCT status string per ticket,
+ * which is why it has to be matched by shape rather than listed. Note it is
+ * "Return @" and not "Return of": the latter is COUNTER_ENTRY, the balancing
+ * row rather than a bet.
+ */
+const SWIFT_SETTLED = 'paid';
+const MULTI_SETTLED = [{ bet_status: 'No Return' }, { bet_status: /^Return @/ }];
+
+/** Settled bets are immutable, so a week is safe to ask for; the cost is the fixtures. */
+const SETTLED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const SETTLED_LIMIT = 250;
+
+/**
  * How far back to look for something still open.
  *
  * Generous, because an unsettled bet is unsettled however old it is — a futures
@@ -139,6 +157,95 @@ function resolveOne(candidates, betMarket) {
 
   const prices = new Set(candidates.map((c) => c.price));
   return prices.size === 1 ? candidates[0] : null;
+}
+
+async function settledSwift(db, since) {
+  const rows = await db
+    .collection('bets')
+    .find({ ...SPORT_SINGLE.bets, bet_status: SWIFT_SETTLED, bet_time: { $gte: since } })
+    .sort({ bet_time: -1 })
+    .limit(SETTLED_LIMIT)
+    .toArray();
+  return rows.map(mapSwift);
+}
+
+async function settledMulti(db, since) {
+  const rows = await db
+    .collection('multi_bets')
+    .find({ ...SPORT_SINGLE.multi_bets, $or: MULTI_SETTLED, transaction_date: { $gte: since } })
+    .sort({ transaction_date: -1 })
+    .limit(SETTLED_LIMIT)
+    .project({
+      transaction_date: 1, price: 1, amount_bet: 1, bonus_bet: 1, bet_status: 1,
+      transaction_id: 1, user_accountID: 1,
+      sport_name: 1, bet_type: 1, selections: 1, event_string: 1,
+      event_identifier: 1, transaction_licenseid: 1,
+    })
+    .toArray();
+  return rows.map(mapMulti);
+}
+
+/**
+ * Settled singles where the customer beat the closing price.
+ *
+ * The close is the market's last word — the number arrived at after everyone
+ * had their say — so a bet struck longer than the close was a bet we should not
+ * have offered at that price, whether or not it won. That is the whole point of
+ * looking at settled business: a winner at a fair price is variance, and a
+ * loser taken at 3.40 against a 2.60 close is a mistake that happened to be
+ * rescued by the result.
+ *
+ * Judged against the closing FAIR rather than any one book's close, for the
+ * reason the fair exists: every quoted close still carries that book's margin,
+ * so beating the best quoted close is a lower bar than beating the true price.
+ * Pinnacle's de-vigged close first, the blend of complete books second — see
+ * fair.mjs. The book columns carry the raw closes so the number can be checked.
+ */
+export async function settledBets() {
+  if (!betsConfigured) return { configured: false, bets: [], counts: null };
+  const db = await betsDb();
+  if (!db) return { configured: false, bets: [], counts: null };
+
+  const since = new Date(Date.now() - SETTLED_WINDOW_MS);
+  const [swift, multi] = await Promise.all([
+    settledSwift(db, since).catch(() => []),
+    settledMulti(db, since).catch(() => []),
+  ]);
+
+  const all = [...swift, ...multi]
+    .filter((b) => b.placedAt)
+    .sort((a, b) => String(b.placedAt).localeCompare(String(a.placedAt)))
+    .slice(0, SETTLED_LIMIT);
+
+  const { bets: enriched, pricesError } = await enrich(all, null, { closing: true });
+
+  for (const b of enriched) {
+    // The true closing price, not the best quoted one.
+    b.closeFair = b.fairPinnacle ?? b.fairBlend ?? null;
+    b.closeFrom = b.fairPinnacle != null ? 'Pinnacle' : b.fairBlend != null ? 'blend' : null;
+    b.movePct = movePct(b.price, b.closeFair);
+    // Beat the close: they took a price longer than the market's own final
+    // estimate of the chance.
+    b.beatClose = b.price != null && b.closeFair != null && b.price > b.closeFair;
+  }
+
+  const judgeable = enriched.filter((b) => b.closeFair != null);
+  const beat = judgeable.filter((b) => b.beatClose);
+
+  return {
+    configured: true,
+    // The view exists to show the ones that beat it; the rest are the denominator.
+    bets: judgeable,
+    counts: {
+      open: enriched.length,
+      judgeable: judgeable.length,
+      noClose: enriched.filter((b) => b.closeFair == null).length,
+      firmed: beat.length,
+      stake: judgeable.reduce((s, b) => s + (Number(b.stake) || 0), 0),
+      firmedStake: beat.reduce((s, b) => s + (Number(b.stake) || 0), 0),
+    },
+    ...(pricesError ? { pricesError } : {}),
+  };
 }
 
 /**
