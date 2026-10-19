@@ -119,6 +119,12 @@ export interface PendingBet extends TickerBet {
   ourOpen: number | null;
   /** When that brand event was last scraped. */
   ourAt: string | null;
+  /**
+   * Whose book that price is. The bet's own brand for swiftbet and mybet; for
+   * a `multis` bet it reads `mybet`, because the two share one platform and one
+   * event store — see the note in pending.mjs.
+   */
+  ourBook: 'swiftbet' | 'mybet' | null;
   /** The brand has pulled this selection — eliminated, or no longer trading. */
   ourSuspended: boolean;
   movePct: number | null;

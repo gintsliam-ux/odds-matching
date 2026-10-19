@@ -228,6 +228,18 @@ async function ourPrices(db, bets) {
     b.ourOpen = one.opening;
     b.ourAt = hit.at;
     b.ourSuspended = one.suspended;
+    /*
+     * Which store the number came from, so the column can say.
+     *
+     * For swiftbet and mybet it is the brand's own book and the comparison is
+     * exact. For MULTIS it is mybet's store, because there is no Multis event
+     * store — the two are one platform behind two front ends, sharing the
+     * `multi_bets` collection and split only by licence, and every Multis event
+     * id resolves in `mybet_events`. Still the price the bet was struck
+     * against, then, but worth naming rather than leaving the reader to assume
+     * a Multis-specific feed exists.
+     */
+    b.ourBook = b.brand === 'swiftbet' ? 'swiftbet' : 'mybet';
   }
 }
 

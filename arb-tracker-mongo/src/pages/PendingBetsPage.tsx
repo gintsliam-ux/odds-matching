@@ -7,6 +7,7 @@ import { useParam } from '../lib/urlState';
 import { fetchPending, type Pending, type PendingBet } from '../lib/db';
 import { BookmakerLogo } from '../components/BookmakerLogo';
 import { IdChip } from '../components/IdChip';
+import { TagChip } from '../components/TagChip';
 import { brandById, BOOKMAKERS } from '../lib/markets';
 import { BRAND_LABEL, BRAND_TONE } from '../lib/brands';
 import { marketLabel } from '../lib/marketLabel';
@@ -285,7 +286,9 @@ export default function PendingBetsPage() {
                 {/* Both copyable: these are the two ids you quote when asking
                     about a bet, and reading a UUID off a screen is not a thing
                     anyone should be asked to do. */}
-                <th className="w-[7.5rem] px-2 py-2 text-left font-medium">User</th>
+                {/* The client tag sits under the id: it describes the punter,
+                    not the bet. */}
+                <th className="w-[10rem] px-2 py-2 text-left font-medium">User</th>
                 <th className="w-[7.5rem] px-2 py-2 text-left font-medium">Bet</th>
                 <th className="w-[8rem] px-2 py-2 text-left font-medium">Placed</th>
                 <th className="w-[8rem] px-2 py-2 text-left font-medium">Starts</th>
@@ -301,7 +304,12 @@ export default function PendingBetsPage() {
                 <th className="border-l border-surface-border px-2 py-2 text-center font-medium">
                   Took
                 </th>
-                <th className="px-2 py-2 text-center font-medium">Ours now</th>
+                <th
+                  className="px-2 py-2 text-center font-medium"
+                  title="Our own current price on the same selection, from the book the bet was struck on. A multis bet reads mybet's price: the two are one platform behind two front ends and share a single event store."
+                >
+                  Ours now
+                </th>
                 <th className="px-2 py-2 text-center font-medium">Move</th>
                 {columns.map((id) => {
                   const b = brandById(id);
@@ -332,10 +340,15 @@ export default function PendingBetsPage() {
                       {BRAND_LABEL[b.brand] ?? b.brand}
                     </span>
                   </td>
-                  <td className="px-2 py-1.5">
+                  <td className="min-w-0 px-2 py-1.5">
                     <IdChip value={b.userId} title="User" />
+                    {(b.tags ?? []).length > 0 && (
+                      <div className="mt-0.5">
+                        <TagChip tags={b.tags ?? []} />
+                      </div>
+                    )}
                   </td>
-                  <td className="px-2 py-1.5">
+                  <td className="px-2 py-1.5 align-top">
                     <IdChip value={b.betId} title="Bet" />
                   </td>
                   <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-slate-200">
@@ -376,7 +389,11 @@ export default function PendingBetsPage() {
                     className="px-2 py-1.5 text-center tabular-nums"
                     title={
                       b.ourAt
-                        ? `our own book, last seen ${new Date(b.ourAt).toLocaleString()}${
+                        ? `${BRAND_LABEL[b.ourBook ?? ''] ?? b.ourBook ?? 'our book'}'s own price${
+                            b.ourBook && b.ourBook !== b.brand
+                              ? ' (one platform behind both front ends)'
+                              : ''
+                          }, last seen ${new Date(b.ourAt).toLocaleString()}${
                             b.ourOpen != null ? ` — opened ${fmt(b.ourOpen)}` : ''
                           }`
                         : undefined
