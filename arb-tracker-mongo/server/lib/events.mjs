@@ -332,12 +332,29 @@ export function expireStaleLive(f) {
   return { ...f, is_live: false, status: 'completed' };
 }
 
-const CANCELLED = new Set(['cancelled', 'canceled', 'postponed', 'abandoned', 'walkover']);
+const CANCELLED = new Set(['cancelled', 'canceled', 'abandoned', 'walkover']);
+
+/**
+ * Going to be played, just not now — which is not a cancellation.
+ *
+ * `postponed` sat in CANCELLED above, and the odds surface normalises a
+ * suspended fixture TO postponed: tennis 2026101989BE5F03 was suspended at one
+ * set each and arrived as `fixture_status: "postponed"` with
+ * `source_status: "suspended"`, so the board called a match that resumes in ten
+ * hours "Cancelled". On a trading desk that reads as no-action, which is the
+ * opposite of what it means.
+ *
+ * `abandoned` and `walkover` stay cancellations: those are results, or the
+ * absence of one, and nothing further is played.
+ */
+const SUSPENDED = new Set(['suspended', 'postponed', 'interrupted', 'delayed']);
 
 function mapStatus(raw) {
   const t = String(raw ?? '').toLowerCase();
   if (FINAL.has(t)) return 'final';
   if (LIVE.has(t)) return 'live';
+  // Before CANCELLED, which used to swallow `postponed`.
+  if (SUSPENDED.has(t)) return 'suspended';
   if (CANCELLED.has(t)) return 'cancelled';
   return 'upcoming';
 }

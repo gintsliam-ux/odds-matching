@@ -3,7 +3,8 @@ import type { EventStatus, SportEvent } from './types';
 export type CountdownTone =
   | 'live' // started, in play
   | 'final' // completed
-  | 'cancelled' // called off
+  | 'cancelled' // called off for good
+  | 'suspended' // started or scheduled, paused, still to be played
   | 'imminent' // <= 5 min
   | 'soon' // <= 10 min
   | 'near' // <= 30 min
@@ -46,6 +47,9 @@ const MIN = 60_000;
 export function effectiveStatus(event: SportEvent, _now: number): EventStatus {
   if (event.status === 'final') return 'final';
   if (event.status === 'cancelled') return 'cancelled';
+  // Before the live test: a suspended match keeps its is_live flag in some
+  // feeds, and a paused game is not a game in progress.
+  if (event.status === 'suspended') return 'suspended';
   if (event.status === 'live' || event.isLive) return 'live';
   return 'upcoming';
 }
@@ -75,6 +79,17 @@ export function countdownFor(event: SportEvent, now: number): Countdown {
   const status = effectiveStatus(event, now);
   if (status === 'final') return { tone: 'final', label: 'Final', pulse: false };
   if (status === 'cancelled') return { tone: 'cancelled', label: 'Cancelled', pulse: false };
+  /*
+   * One state, two words, chosen by whether it ever started.
+   *
+   * The surface collapses both into `postponed`, but they are not the same
+   * thing to anyone reading the board: a match stopped at one set each resumes
+   * from that score, while one that never started is simply moved. `actualStart`
+   * is what separates them.
+   */
+  if (status === 'suspended') {
+    return { tone: 'suspended', label: event.actualStart ? 'Suspended' : 'Postponed', pulse: false };
+  }
   if (status === 'live') return { tone: 'live', label: 'LIVE', pulse: true };
 
   const ms = new Date(event.startsAt).getTime() - now;
@@ -185,6 +200,8 @@ export const TONE_CLASSES: Record<CountdownTone, string> = {
   live: 'bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30',
   final: 'bg-slate-500/10 text-slate-400 ring-1 ring-slate-500/20',
   cancelled: 'bg-rose-500/10 text-rose-300 ring-1 ring-rose-500/25',
+  // Amber, not rose: it is a hold, not a write-off.
+  suspended: 'bg-amber-500/10 text-amber-200 ring-1 ring-amber-500/25',
   imminent: 'bg-red-500/15 text-red-300 ring-1 ring-red-500/40',
   soon: 'bg-orange-500/15 text-orange-300 ring-1 ring-orange-500/30',
   near: 'bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30',

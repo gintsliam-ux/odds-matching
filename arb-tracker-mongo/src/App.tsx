@@ -68,9 +68,12 @@ function SignedInAs() {
 
 const STATUS_ORDER: Record<EventStatus, number> = {
   live: 0,
-  upcoming: 1,
-  final: 2,
-  cancelled: 3,
+  // Above upcoming: a suspended match is part-played and resuming, so it wants
+  // attention sooner than a game that has not started. Still below live.
+  suspended: 1,
+  upcoming: 2,
+  final: 3,
+  cancelled: 4,
 };
 
 /**
