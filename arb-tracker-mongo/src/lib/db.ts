@@ -147,8 +147,24 @@ export interface PendingBet extends TickerBet {
    */
   emPct?: number | null;
   emPl?: number | null;
-  /** The Pinnacle-only reading, kept beside the blend as the second opinion. */
-  emPctPinn?: number | null;
+  /** The fair the matcher struck it against, and which market it resolved. */
+  strikeFair?: number | null;
+  emMethod?: string | null;
+  emScore?: number | null;
+  /**
+   * Betfair starting price and its EM. RACING columns — no sport bet carries
+   * one — so these are null on this view and the column only renders if a row
+   * ever has one.
+   */
+  bsp?: number | null;
+  bspEmPct?: number | null;
+  bspEmPl?: number | null;
+  /**
+   * This view's own EM against the CLOSE, which the enrichment has no
+   * equivalent of for sport: `blendFair` is struck near placement and its only
+   * closing counterpart, `bsp`, is racing-only.
+   */
+  closeEmPct?: number | null;
 }
 
 export interface Pending {
@@ -183,6 +199,9 @@ export interface Pending {
     /** Window EM in dollars over every judgeable bet, and over the beats alone. */
     emPl?: number;
     beatEmPl?: number;
+    /** How many judgeable rows the enrichment priced, and how many have a BSP. */
+    withEm?: number;
+    withBsp?: number;
   } | null;
   pricesError?: string;
 }

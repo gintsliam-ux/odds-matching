@@ -223,6 +223,128 @@ async function settledMulti(db, since) {
  * Pinnacle's de-vigged close first, the blend of complete books second — see
  * fair.mjs. The book columns carry the raw closes so the number can be checked.
  */
+/**
+ * EM as the enrichment already computed it, rather than recomputed here.
+ *
+ * `enrichment.{blendFair, emPercent, emPnl}` is stamped by the matcher when a
+ * bet is priced, and it is the number the user scorecards and trader stats are
+ * built on — so recomputing it here could only produce a second EM that
+ * disagrees with every other screen. The matcher also knows things this view
+ * cannot: `matchMethod` names the market it actually resolved to
+ * (`sport-total`, `sport-wdw`, `sport-1q_spread`), where parseBetMarket is
+ * inferring the same thing from a market label.
+ *
+ * It is measured at MATCH time, near placement — which is a different question
+ * from the close this view filters on, and the two genuinely part company: a
+ * bet struck at 4.10 against a 3.56 strike fair scores +15.09% here while the
+ * market closed at 4.47, making it -8.28% on the close. Both readings are kept
+ * for that reason.
+ *
+ * `bsp` / `bspEmPercent` / `bspEmPnl` are read the same way. They are RACING
+ * columns — 133,461 racing bets carry a Betfair starting price and not one
+ * sport bet does — so on this sport-singles view they come back null, and the
+ * page renders that column only if a row ever has one.
+ */
+/*
+ * `fin` rather than the `num` above, which is a PRICE guard and rejects
+ * anything at or below 1.0. An EM percentage is negative on most bets — that is
+ * the house holding its margin — and a P&L and a match score can be negative or
+ * zero too, so a price guard would have silently nulled the ordinary case.
+ * Prices among these (the fair, the BSP) still go through `num`.
+ */
+const fin = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+const r2 = (v) => (v == null ? null : Math.round(v * 100) / 100);
+
+function emFields(e) {
+  const pct = fin(e?.emPercent);
+  const bspPct = fin(e?.bspEmPercent);
+  if (pct == null && bspPct == null) return null;
+  return {
+    // The fair the matcher struck it against, so the percentage can be checked.
+    strikeFair: num(e.blendFair),
+    emPct: r2(pct),
+    emPl: r2(fin(e.emPnl)),
+    // Which market the matcher resolved, and how confidently.
+    emMethod: e.matchMethod ?? null,
+    emScore: fin(e.matchScore),
+    bsp: num(e.bsp),
+    bspEmPct: r2(bspPct),
+    bspEmPl: r2(fin(e.bspEmPnl)),
+  };
+}
+
+/**
+ * One map of betId -> EM fields, across both brands' stores.
+ *
+ * swiftbet keeps it inline on the bet and ALSO in a sidecar `enrichment`
+ * collection; multis keep it only in `multi_bets_enrichment`, because that
+ * scraper full-re-syncs and would wipe anything written in place. The sidecar
+ * is read as a fallback for swiftbet too: it buys 35 rows today, and it is the
+ * whole of the enrichment after a re-import — which has happened, and is what
+ * recover-enrich.sh exists to undo.
+ */
+async function emForSettled(db, bets) {
+  const out = new Map();
+  const swiftIds = [];
+  const multiIds = [];
+  for (const b of bets) {
+    if (!b.betId) continue;
+    (b.brand === 'swiftbet' ? swiftIds : multiIds).push(String(b.betId));
+  }
+
+  const jobs = [];
+  if (swiftIds.length) {
+    jobs.push(
+      db.collection('bets')
+        .find({ bet_id: { $in: swiftIds } })
+        .project({ _id: 0, bet_id: 1, enrichment: 1 })
+        .toArray()
+        .then((rows) => {
+          for (const r of rows) {
+            const f = emFields(r.enrichment);
+            if (f) out.set(String(r.bet_id), f);
+          }
+        })
+        .catch(() => {}),
+    );
+  }
+  if (multiIds.length) {
+    // transaction_id is numeric in that store, so both spellings are offered.
+    const asNum = multiIds.map(Number).filter(Number.isFinite);
+    jobs.push(
+      db.collection('multi_bets_enrichment')
+        .find({ transaction_id: { $in: [...multiIds, ...asNum] } })
+        .project({ _id: 0, transaction_id: 1, enrichment: 1 })
+        .toArray()
+        .then((rows) => {
+          for (const r of rows) {
+            const f = emFields(r.enrichment);
+            if (f) out.set(String(r.transaction_id), f);
+          }
+        })
+        .catch(() => {}),
+    );
+  }
+  await Promise.all(jobs);
+
+  // Sidecar fallback, asked for only where the inline copy came back empty.
+  const missing = swiftIds.filter((id) => !out.has(id));
+  if (missing.length) {
+    await db.collection('enrichment')
+      .find({ bet_id: { $in: missing } })
+      .project({ _id: 0, bet_id: 1, blendFair: 1, emPercent: 1, emPnl: 1, matchMethod: 1, matchScore: 1, bsp: 1, bspEmPercent: 1, bspEmPnl: 1 })
+      .toArray()
+      .then((rows) => {
+        for (const r of rows) {
+          const f = emFields(r);
+          if (f) out.set(String(r.bet_id), f);
+        }
+      })
+      .catch(() => {});
+  }
+  return out;
+}
+
 export const SETTLED_DAYS = SETTLED_WINDOW_DAYS;
 
 export async function settledBets() {
@@ -262,6 +384,8 @@ export async function settledBets() {
    */
   const timings = {};
   const { bets: enriched, pricesError } = await enrich(all, timings, { closing: true });
+
+  const emByBet = await emForSettled(db, enriched).catch(() => new Map());
 
   for (const b of enriched) {
     /*
@@ -309,8 +433,20 @@ export async function settledBets() {
      * Not a verdict on the result: a +8% bet that lost was still a price we
      * should not have offered, which is the entire point of judging on close.
      */
-    b.emPct = emPct(b.price, b.fairBlend);
-    b.emPctPinn = emPct(b.price, b.fairPinnacle);
+    /*
+     * EM is READ, not recomputed — see emForSettled. Applied after `enrich`
+     * because enrich projects the bets into new objects, so anything attached
+     * before it is dropped on the way through.
+     */
+    Object.assign(b, emByBet.get(String(b.betId)) ?? {});
+    /*
+     * And the close comparison stays computed, because the enrichment has no
+     * close for a sport bet: `blendFair` is struck at match time and the only
+     * closing counterpart in that store is `bsp`, which is racing-only. So
+     * `beatClose` is still this view's own measurement, and `emPct` beside it
+     * is the matcher's verdict at the moment the bet was taken.
+     */
+    b.closeEmPct = emPct(b.price, b.fairBlend);
     // Signed dollars at stake. `emPl` upstream multiplies the traded cost by
     // the edge; the cost here is simply the stake.
     b.emPl = b.emPct != null && Number.isFinite(Number(b.stake))
@@ -358,6 +494,9 @@ export async function settledBets() {
        */
       emPl: Math.round(judgeable.reduce((s, b) => s + (Number(b.emPl) || 0), 0) * 100) / 100,
       beatEmPl: Math.round(beat.reduce((s, b) => s + (Number(b.emPl) || 0), 0) * 100) / 100,
+      /** How many rows the enrichment actually priced — the EM column's denominator. */
+      withEm: judgeable.filter((b) => b.emPct != null).length,
+      withBsp: judgeable.filter((b) => b.bspEmPct != null).length,
     },
     ...(pricesError ? { pricesError } : {}),
   };

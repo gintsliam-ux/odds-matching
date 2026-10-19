@@ -86,14 +86,17 @@ function Move({ pct }: { pct: number | null }) {
 }
 
 /**
- * Expected margin on the stake — price/fair - 1, against the closing fair.
+ * Expected margin, as the enrichment computed it — not recomputed here.
+ *
+ * `enrichment.emPercent` / `emPnl` is stamped by the matcher when the bet is
+ * priced and is what the scorecards and trader stats are built on, so a second
+ * calculation on this page could only disagree with every other screen.
  *
  * Signed from OUR side of the counter, which is the opposite of how it reads on
  * the row: a positive EM% is the customer's edge and therefore our expected
  * loss, so positive is the colour that means "look at this". The dollars matter
- * more than the percentage — a 174% edge on a $12 alternate-line bet is noise
- * and a 5% edge on $5,000 is not — so both are shown and the money leads on
- * weight.
+ * more than the percentage — a 122% edge on a $325 bet costs less than a 9% one
+ * on $1,600 — so both are shown and the money leads on weight.
  */
 function Em({ pct, pl }: { pct: number | null | undefined; pl: number | null | undefined }) {
   if (pct == null) return <span className="text-slate-700">–</span>;
@@ -113,6 +116,16 @@ function Em({ pct, pl }: { pct: number | null | undefined; pl: number | null | u
     </span>
   );
 }
+
+/**
+ * Does any row carry a Betfair starting price?
+ *
+ * BSP and its EM are racing columns: 133,461 racing bets have one and no sport
+ * bet does, and this view is sport singles only. Rather than ship a column
+ * that is empty by construction — or leave it out and have it silently missing
+ * if racing is ever added here — the column asks the data whether it belongs.
+ */
+const hasBsp = (bets: PendingBet[]) => bets.some((b) => b.bspEmPct != null || b.bsp != null);
 
 /** The book columns, in the board's order, plus whatever else the feed carries. */
 function bookColumns(bets: PendingBet[]): string[] {
@@ -227,6 +240,7 @@ export default function PendingBetsPage() {
   }, [bets, firmersOnly, settled, brand, sport]);
 
   const columns = useMemo(() => bookColumns(bets), [bets]);
+  const showBsp = useMemo(() => settled && hasBsp(bets), [settled, bets]);
   const c = data?.counts;
   /*
    * The settled window, from the server, with ONE fallback for the render
@@ -277,7 +291,7 @@ export default function PendingBetsPage() {
               </span>
               {settled && c.emPl != null && (
                 <span
-                  title={`Expected margin over all ${c.judgeable} judgeable bets, priced against each one's closing fair. Negative is in our favour. The beats alone account for ${money(Math.abs(c.beatEmPl ?? 0))} against us, so this total is what the rest of the book earned back.`}
+                  title={`Expected margin as the enrichment stamped it, over the ${c.withEm ?? 0} of ${c.judgeable} judgeable bets it has priced. Negative is in our favour. The beats alone account for ${money(Math.abs(c.beatEmPl ?? 0))} against us, so this total is what the rest of the book earned back.`}
                 >
                   EM{' '}
                   <b className={`tabular-nums ${(c.emPl ?? 0) > 0 ? 'text-rose-300' : 'text-emerald-300/80'}`}>
@@ -464,9 +478,17 @@ export default function PendingBetsPage() {
                 {settled && (
                   <th
                     className="px-2 py-2 text-center font-medium"
-                    title="Expected margin on the stake: the price taken divided by the blend closing fair, less one — the customer's expected value per dollar, and our expected loss. Same definition as blend_em_pct on the trader stats, so the two agree. A positive number is a price we should not have offered, whether or not it won; the dollar figure beneath is that percentage of the stake."
+                    title="Expected margin as the enrichment stamped it (enrichment.emPercent / emPnl) — the same number the scorecards and trader stats use, not a second calculation. Measured against the blend fair at MATCH time, near placement, which is a different question from the close this list filters on: a bet can score well at strike and still be beaten by the close, or the reverse. Each row's tooltip names the market the matcher resolved."
                   >
                     EM
+                  </th>
+                )}
+                {showBsp && (
+                  <th
+                    className="px-2 py-2 text-center font-medium"
+                    title="Expected margin against the Betfair starting price — the closing price on the exchange. A racing column: no sport bet carries a BSP, so this appears only when a row has one."
+                  >
+                    BSP EM
                   </th>
                 )}
                 {columns.map((id) => {
@@ -565,10 +587,10 @@ export default function PendingBetsPage() {
                         title={
                           b.closeFair != null
                             ? `Blend close ${fmt(b.closeFair)}${
-                                b.emPctPinn != null
-                                  ? ` · Pinnacle alone reads ${b.emPctPinn.toFixed(2)}% EM`
-                                  : ' · no Pinnacle close on this market'
-                              }`
+                                b.closeEmPct != null
+                                  ? ` — ${b.closeEmPct.toFixed(2)}% against the close`
+                                  : ''
+                              }${b.fairPinnacle != null ? ` · Pinnacle closed ${fmt(b.fairPinnacle)}` : ''}`
                             : undefined
                         }
                       >
@@ -584,8 +606,29 @@ export default function PendingBetsPage() {
                     <Move pct={b.movePct} />
                   </td>
                   {settled && (
-                    <td className="whitespace-nowrap px-2 py-1.5 text-center tabular-nums">
+                    <td
+                      className="whitespace-nowrap px-2 py-1.5 text-center tabular-nums"
+                      title={
+                        b.emPct == null
+                          ? 'The enrichment has not priced this bet.'
+                          : `Struck against a fair of ${fmt(b.strikeFair)}${
+                              b.emMethod ? ` via ${b.emMethod}` : ''
+                            }${b.emScore != null ? ` (match score ${b.emScore})` : ''}.${
+                              b.closeEmPct != null
+                                ? ` Against the close instead it reads ${b.closeEmPct.toFixed(2)}%.`
+                                : ''
+                            }`
+                      }
+                    >
                       <Em pct={b.emPct} pl={b.emPl} />
+                    </td>
+                  )}
+                  {showBsp && (
+                    <td
+                      className="whitespace-nowrap px-2 py-1.5 text-center tabular-nums"
+                      title={b.bsp != null ? `Betfair SP ${fmt(b.bsp)}` : undefined}
+                    >
+                      <Em pct={b.bspEmPct} pl={b.bspEmPl} />
                     </td>
                   )}
                   {columns.map((id) => {
