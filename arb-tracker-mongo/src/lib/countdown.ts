@@ -20,15 +20,33 @@ export interface Countdown {
 const MIN = 60_000;
 
 /**
- * Effective status, from the fixture's authoritative signals — NOT the clock.
- * An event is live only if the feed says so (`status='live'`, the `is_live`
- * flag, or a stamped `actualStart`); a scheduled start that has merely passed
- * does NOT imply live (matches run late / get postponed, especially tennis).
+ * Effective status: the one in the database, not one re-derived here.
+ *
+ * `status` already IS the feed's own word, mapped server-side by `mapStatus` —
+ * which knows the whole vocabulary, `in_play` and `break` included. So the only
+ * job left here is naming the four display states.
+ *
+ * It used to add `|| event.actualStart`, on the reasoning that a stamped start
+ * means the game is under way. That is true right up until a match is
+ * SUSPENDED: tennis 2026101989BE5F03 started 2026-10-19T15:02Z, played to one
+ * set each and was pushed to the next morning, and this line read it as LIVE —
+ * a pulsing badge on a match that will not resume for ten hours — while the
+ * database said `upcoming` and `is_live: false`. An actualStart never expires,
+ * so once stamped it outranked the status for good.
+ *
+ * It earned nothing either: measured across 4,548 fixtures in eight sports,
+ * exactly two were labelled live by that clause alone, and both were suspended
+ * matches it was getting wrong. Every genuinely live fixture is already carried
+ * by `status === 'live'` or the `is_live` flag.
+ *
+ * Still NOT the clock: a scheduled start that has merely passed does not imply
+ * live, because matches run late and get postponed — see the `Delayed` branch
+ * in countdownFor, which is what those now fall through to.
  */
 export function effectiveStatus(event: SportEvent, _now: number): EventStatus {
   if (event.status === 'final') return 'final';
   if (event.status === 'cancelled') return 'cancelled';
-  if (event.status === 'live' || event.isLive || event.actualStart) return 'live';
+  if (event.status === 'live' || event.isLive) return 'live';
   return 'upcoming';
 }
 
@@ -51,7 +69,7 @@ function relativeLabel(ms: number): string {
 /**
  * Derive the countdown badge for an event at a given `now`.
  * Under 30 min it becomes a live mm:ss countdown and escalates in colour;
- * once started it reads LIVE, and when completed it reads Final.
+ * while the feed says the game is on it reads LIVE, and when completed, Final.
  */
 export function countdownFor(event: SportEvent, now: number): Countdown {
   const status = effectiveStatus(event, now);
