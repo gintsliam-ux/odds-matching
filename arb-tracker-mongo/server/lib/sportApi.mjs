@@ -16,7 +16,7 @@
  */
 
 import { cached } from './cache.mjs';
-import { isMultiDay, LIVE, MULTI_DAY_GRACE_MS } from './events.mjs';
+import { expireStaleLive, isMultiDay, LIVE, MULTI_DAY_GRACE_MS } from './events.mjs';
 
 const DEFAULT_BASE = 'https://sport.gutsysapi.com';
 
@@ -1246,7 +1246,15 @@ function periodsFrom(scores) {
   return out;
 }
 
-/** One pivot row as a fixture record. Shared with the by-id lookup. */
+/**
+ * One pivot row as a fixture record. Shared with the by-id lookup.
+ *
+ * The result goes through `expireStaleLive` on the way out, because a published
+ * status is only better than a guess for fixtures somebody upstream has closed.
+ * Optic leaves finished games on `break` — see the note on that function — and
+ * without this a basketball game two days over, 72-57 with every quarter
+ * scored, reported itself live indefinitely.
+ */
 function fixtureFromPivot(r, sport, now, liveIds) {
   /*
    * The surface's own status wins, and `impliedStatus` is now only a fallback.
@@ -1272,7 +1280,7 @@ function fixtureFromPivot(r, sport, now, liveIds) {
    */
   const live = LIVE.has(status);
   const played = live || status === 'completed' || status === 'final';
-  return {
+  const record = {
       fixture_id: r.optic_fixture_id,
       sport,
       category: r.category ?? null,
@@ -1325,6 +1333,8 @@ function fixtureFromPivot(r, sport, now, liveIds) {
       score_updated_at: r.score_updated_at ?? null,
       has_odds: true,
   };
+  // See the note above the function: a status nobody upstream closed.
+  return expireStaleLive(record);
 }
 
 /** Is the surface reachable and answering? */

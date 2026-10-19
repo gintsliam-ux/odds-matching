@@ -299,6 +299,39 @@ export const MULTI_DAY_GRACE_MS = 6 * 24 * 60 * 60 * 1000;
 export const isMultiDay = (sport, league) =>
   MULTI_DAY_SPORTS.has(String(sport ?? '').toLowerCase()) ||
   MULTI_DAY_LEAGUE.test(String(league ?? ''));
+/**
+ * A fixture that still claims to be in play long after it could be.
+ *
+ * Both sources need this and neither can be trusted to stop claiming it. The
+ * NAS copy carries a stale `is_live` from the scraper; the odds surface derives
+ * `fixture_status` from Optic's fixture document, and Optic leaves games on
+ * `break` indefinitely — Soba Dragons Rhondorf v SV Fellbach Flashers sat on
+ * `break` with all four quarters scored, the clock stopped and 72-57 on the
+ * board, two days after it finished, with `finished_at` never stamped.
+ *
+ * Before the surface published a status, the api path derived one from the
+ * clock and so wrote that game off on its own. Trusting the published status
+ * fixed Tests reading Final mid-match and broke this in the same move, which is
+ * the trade: a published status is better than a guess about every fixture
+ * except the ones nobody upstream has closed.
+ *
+ * Scores a fixture already carries stay — they are the final score.
+ */
+const LIVE_GRACE_MS = 6 * 60 * 60 * 1000;
+
+export function expireStaleLive(f) {
+  if (!f.is_live && !LIVE.has(String(f.status ?? '').toLowerCase())) return f;
+  // By FORMAT, not by sport — see isMultiDay. A finished T20 used to inherit a
+  // Test's six-day grace and could sit claiming live for most of a week.
+  const grace = isMultiDay(f.sport, f.optic_league) ? MULTI_DAY_GRACE_MS : LIVE_GRACE_MS;
+  const start = f.actual_start ?? f.scheduled_start;
+  const t = start ? new Date(start).getTime() : NaN;
+  if (!Number.isFinite(t) || Date.now() - t <= grace) return f;
+  // Past the point where it could still be running: a finished game, not a
+  // live one. Scores it already carries stay — they are the final score.
+  return { ...f, is_live: false, status: 'completed' };
+}
+
 const CANCELLED = new Set(['cancelled', 'canceled', 'postponed', 'abandoned', 'walkover']);
 
 function mapStatus(raw) {

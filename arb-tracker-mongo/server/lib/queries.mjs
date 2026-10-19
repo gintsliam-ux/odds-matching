@@ -2,7 +2,7 @@ import { cached } from './cache.mjs';
 import { coll, mirrorConfigured } from './mongo.mjs';
 import { fixtureMapping } from './fixtureMapping.mjs';
 import {
-  FIXTURE_PROJECTION, isMultiDay, LIVE, MULTI_DAY_GRACE_MS, SKIP_SPORTS, toEvents,
+  expireStaleLive, FIXTURE_PROJECTION, LIVE, SKIP_SPORTS, toEvents,
 } from './events.mjs';
 import { isApi } from './source.mjs';
 import { apiFixtureById, apiFixtures, apiOddsForFixture, apiOddsForSport, apiSports } from './sportApi.mjs';
@@ -213,20 +213,6 @@ async function bookableIds(ids) {
  * else is a single session: generous at six hours, and past it the La Liga
  * match from the day before yesterday stops claiming to be live.
  */
-const LIVE_GRACE_MS = 6 * 60 * 60 * 1000;
-
-function expireStaleLive(f) {
-  if (!f.is_live && !LIVE.has(String(f.status ?? '').toLowerCase())) return f;
-  // By FORMAT, not by sport — see isMultiDay. A finished T20 used to inherit a
-  // Test's six-day grace and could sit claiming live for most of a week.
-  const grace = isMultiDay(f.sport, f.optic_league) ? MULTI_DAY_GRACE_MS : LIVE_GRACE_MS;
-  const start = f.actual_start ?? f.scheduled_start;
-  const t = start ? new Date(start).getTime() : NaN;
-  if (!Number.isFinite(t) || Date.now() - t <= grace) return f;
-  // Past the point where it could still be running: a finished game, not a
-  // live one. Scores it already carries stay — they are the final score.
-  return { ...f, is_live: false, status: 'completed' };
-}
 
 async function scheduleOnly(have) {
   if (!mirrorConfigured) return [];
