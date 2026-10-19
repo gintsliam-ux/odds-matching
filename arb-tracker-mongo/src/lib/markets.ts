@@ -387,6 +387,10 @@ const SOCCER_MARKETS: MarketDef[] = [
   D('1h_total', '1st Half — Total Goals', 'total'),
   D('1h_asian_total', '1st Half — Asian Total', 'total'),
   D('1h_dnb', '1st Half — Draw No Bet', 'h2h'),
+  // Published by the surface as `1h_spread_3way`; see GET /limits. It was the
+  // one market id in that table with no definition here, which is the same
+  // silent-absence the full-match version had.
+  D('1h_handicap_3way', '1st Half — Handicap — 3-Way', 'spread'),
   D('1h_double_chance', '1st Half — Double Chance', 'flat'),
   D('1h_btts', '1st Half — Both Teams to Score', 'flat'),
 ];

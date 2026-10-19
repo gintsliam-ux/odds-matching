@@ -16,7 +16,7 @@
  */
 
 import { cached } from './cache.mjs';
-import { isMultiDay, MULTI_DAY_GRACE_MS } from './events.mjs';
+import { isMultiDay, LIVE, MULTI_DAY_GRACE_MS } from './events.mjs';
 
 const DEFAULT_BASE = 'https://sport.gutsysapi.com';
 
@@ -144,6 +144,8 @@ const CALL_TIMEOUT_MS = 20_000;
  * is to let the window move.
  */
 const CALL_RETRIES = 2;
+/** However long Retry-After asks for, never past this. */
+const RETRY_AFTER_CAP_MS = 10_000;
 
 /**
  * `include_stale=true` is what makes the feed complete.
@@ -176,7 +178,12 @@ const CALL_RETRIES = 2;
  * This is the same failure the retry logic in `call` was written for; that fixed
  * the lost sports, this removes the cause.
  */
-const MAX_INFLIGHT = 10;
+/*
+ * The published ceiling: GET /limits reports 10 req/s sustained, burst 30 and
+ * max_in_flight 16. This was 10, chosen blind because a cold board opened about
+ * fifty at once and took whole sports off the board with 429s.
+ */
+const MAX_INFLIGHT = 16;
 let inflight = 0;
 const queued = [];
 
@@ -202,6 +209,8 @@ async function callRaw(route, params) {
   if (!KEY) throw new Error('SPORT_API_KEY is not set');
   const qs = new URLSearchParams({ key: KEY, ...params });
   let lastErr;
+  /** Set from a 429's Retry-After, and used in place of our own backoff once. */
+  let retryAfterMs = null;
   for (let attempt = 0; attempt <= CALL_RETRIES; attempt++) {
     try {
       const res = await fetch(`${BASE}/${route}?${qs}`, {
@@ -224,6 +233,18 @@ async function callRaw(route, params) {
          */
         if (res.status < 500 && res.status !== 429 && res.status !== 408) throw err;
         lastErr = err;
+        /*
+         * Wait as long as the server says to.
+         *
+         * 429 now carries Retry-After, so backing off by our own escalating
+         * guess is both slower than necessary when the window is about to move
+         * and too fast when it is not. Capped, because a header is not a
+         * licence to hang the request past the function's own budget.
+         */
+        const after = Number(res.headers.get('retry-after'));
+        if (Number.isFinite(after) && after > 0) {
+          retryAfterMs = Math.min(after * 1000, RETRY_AFTER_CAP_MS);
+        }
       } else {
         return await res.json();
       }
@@ -234,7 +255,11 @@ async function callRaw(route, params) {
         && !/ 5\d\d:/.test(err.message) && !/ (429|408):/.test(err.message)
       ) throw err;
     }
-    if (attempt < CALL_RETRIES) await new Promise((r) => setTimeout(r, 400 * (attempt + 1) ** 2));
+    if (attempt < CALL_RETRIES) {
+      const wait = retryAfterMs ?? 400 * (attempt + 1) ** 2;
+      retryAfterMs = null;
+      await new Promise((r) => setTimeout(r, wait));
+    }
   }
   throw lastErr ?? new Error(`${route}: failed`);
 }
@@ -529,6 +554,18 @@ const FIXTURE_COLS = new Set([
   // slot, which tennis never replaces, so a match already in play can carry a
   // start time hours away. The two write timestamps feed the status bar.
   'actual_start', 'fixture_updated_at', 'score_updated_at',
+  /*
+   * Added by the surface so none of this has to be inferred any more.
+   *
+   * `fixture_status` is derived from the fixture document alone — never from
+   * scores, prices or a clock — which is exactly the thing impliedStatus could
+   * not do and why a Test read Final on day two. `source_status` is Optic's raw
+   * value, kept for when the mapped one looks wrong. `finished_at` is stamped
+   * only on a completed fixture and is NOT synthesised, which is what makes it
+   * usable where `fixtures.settled_at` is not. `market_id` is the collection's
+   * own id beside the alias.
+   */
+  'fixture_status', 'source_status', 'finished_at', 'market_id',
 ]);
 
 /**
@@ -642,7 +679,17 @@ function explode(row, { live, unsettled }) {
       !unsettled && !live && rec.status !== 'active' && rec.status !== 'suspended';
     const closePrice = num(rec.close) ?? (settled ? price : null);
 
-    const mid = marketId(row.sports_market_type);
+    /*
+     * The collection's own id, straight off the row.
+     *
+     * `marketId` maps the surface's alias onto it and agrees with the published
+     * table on all 23 types — but a type that appears tomorrow and is not in
+     * that table passes through under the alias, matches no market definition,
+     * and is invisible with nothing to say so. That is exactly how the 3-way
+     * handicap went unrendered. Reading `market_id` when the row carries it
+     * means a new market is wrong-looking rather than absent.
+     */
+    const mid = row.market_id ?? marketId(row.sports_market_type);
     /*
      * The handicap each side is actually getting, taken from the row rather
      * than inferred.
@@ -1098,10 +1145,30 @@ function periodsFrom(scores) {
 
 /** One pivot row as a fixture record. Shared with the by-id lookup. */
 function fixtureFromPivot(r, sport, now, liveIds) {
-  const status = impliedStatus(r, now, liveIds, sport);
-  // A score on an unplayed fixture is left over from some other meeting;
-  // only show one once the thing has actually started.
-  const played = status === 'completed' || status === 'live';
+  /*
+   * The surface's own status wins, and `impliedStatus` is now only a fallback.
+   *
+   * It is derived from the fixture document rather than from scores, prices or
+   * a clock, which is the one thing deriving it here could never do: our rule
+   * had to treat "no book is quoting this in-play" as finished, and so reported
+   * a Test in progress as Final between sessions.
+   *
+   * `unknown` is explicitly NOT trusted — it is the surface saying it does not
+   * know, and guessing from the clock is better than asserting upcoming.
+   */
+  const given = String(r.fixture_status ?? '').toLowerCase();
+  const status = given && given !== 'unknown' ? given : impliedStatus(r, now, liveIds, sport);
+  /*
+   * Has it actually been played? A score on an unplayed fixture is left over
+   * from some other meeting, so one is only shown once the thing has started.
+   *
+   * Tested against the LIVE set rather than the string 'live', because the
+   * status may now be the surface's own word — `in_play` or `break` — and this
+   * line read `status === 'live'`, which would have blanked the scoreline on
+   * every game actually in progress.
+   */
+  const live = LIVE.has(status);
+  const played = live || status === 'completed' || status === 'final';
   return {
       fixture_id: r.optic_fixture_id,
       sport,
@@ -1114,9 +1181,14 @@ function fixtureFromPivot(r, sport, now, liveIds) {
       away_team: r.away_team ?? null,
       scheduled_start: r.commence_time ?? null,
       actual_start: r.actual_start ?? null,
-      is_live: status === 'live',
+      // `in_play` and `break` are both a game being played — see LIVE.
+      is_live: live,
       status,
-      end_date: null,
+      /** Optic's raw word, for when the mapped one looks wrong. */
+      source_status: r.source_status ?? null,
+      // Stamped only on a completed fixture and never synthesised, unlike
+      // `fixtures.settled_at`, which is start+4h on 2,017 of 2,048 rows.
+      end_date: r.finished_at ?? null,
       current_round: null,
       scores: played
         ? {

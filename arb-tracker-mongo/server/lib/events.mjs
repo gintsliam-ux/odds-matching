@@ -256,7 +256,15 @@ function deriveLeague(sport, category, tournament, stage, compLogos) {
 const FINAL = new Set(['final', 'completed', 'complete', 'ended', 'finished', 'result']);
 /** Exported so callers that have to reason about live state use THIS list and
  *  not a second copy of it that drifts — see expireStaleLive in queries.mjs. */
-export const LIVE = new Set(['live', 'in_play', 'inplay', 'playing', 'started']);
+export const LIVE = new Set([
+  'live', 'in_play', 'inplay', 'playing', 'started',
+  // The odds surface's own vocabulary now includes `break` — between innings,
+  // at half time, between sessions of a Test. A break is a pause in a game
+  // being played, not a game that has not started, and without it here the
+  // surface's `break` fell through to `upcoming` and the board put a countdown
+  // on a match already under way.
+  'break',
+]);
 
 /**
  * Fixtures that legitimately stay unfinished for days.
