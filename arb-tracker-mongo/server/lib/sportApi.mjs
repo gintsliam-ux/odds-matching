@@ -368,6 +368,62 @@ function cachedDrain(key, produce) {
   return refresh;
 }
 
+/**
+ * The cached drain if we already have one, otherwise start it and return empty.
+ *
+ * For a drain whose rows are worth having but not worth WAITING for. The live
+ * pivot is the case: measured against the real bisecting drains across six
+ * sports, it contributes 19 fixtures of 4,477 — 0.4% — while costing half of
+ * every cold board build. Blocking the first paint on it charged every visitor
+ * eight seconds for one fixture in 235.
+ *
+ * So the first build on a cold instance goes without those rows and kicks the
+ * drain off behind itself; the next build, forty-five seconds later, has them.
+ * Self-healing, and nothing is lost permanently — which is the only reason this
+ * is acceptable at all, because a board that quietly drops fixtures is the
+ * failure mode this file has been bitten by twice.
+ */
+const DEFER_MS = 15_000;
+/** key -> when its drain was scheduled, so a timer that never fired is retried. */
+const deferred = new Map();
+
+function cachedDrainSoon(key, produce) {
+  const hit = pivotCache.get(key);
+  if (hit?.value && Date.now() - hit.at < PIVOT_STALE_MAX_MS) return hit.value;
+
+  /*
+   * Started on a TIMER, not immediately, and that delay is the whole point.
+   *
+   * Kicking it off at once moved the live drain off the critical path but not
+   * out of the way: every request spends a token from one shared bucket at
+   * eight a second, so the background drains simply queued ahead of the board's
+   * own pages and a cold build went from 16.5s to 14.6s instead of to 6s. The
+   * work has to be deferred in TIME, not just in await.
+   *
+   * Fifteen seconds clears a cold board (about 25 blocking calls) and still
+   * lands these rows well inside the board's 45-second TTL, so the next build
+   * has them.
+   *
+   * Re-schedulable: the timestamp is kept rather than a flag, because a
+   * serverless instance can freeze before a timer fires. If the scheduled time
+   * is long past and still nothing is cached, the next caller schedules again,
+   * so nothing is lost permanently.
+   */
+  const at = deferred.get(key);
+  if (!hit?.inflight && (at == null || Date.now() - at > DEFER_MS * 4)) {
+    deferred.set(key, Date.now());
+    const timer = setTimeout(() => {
+      deferred.delete(key);
+      // Errors swallowed: beginDrain keeps the last good value, and a failed
+      // background drain must never reject the board that did not wait for it.
+      beginDrain(key, produce, pivotCache.get(key)).catch(() => {});
+    }, DEFER_MS);
+    // Never hold the process open for a drain nobody is waiting on.
+    timer.unref?.();
+  }
+  return Promise.resolve([]);
+}
+
 function beginDrain(key, produce, hit) {
   const inflight = produce()
     .then((value) => {
@@ -557,6 +613,28 @@ const daysBetween = (from, to) =>
  * a span that is genuinely truncated pays for a bisect.
  */
 async function drainSpan(params, from, to, depth = 0) {
+  /*
+   * Pre-split at the top, for sports known not to fit — see PRESPLIT_DAYS.
+   *
+   * It lives here rather than in drainBoard because buildFixtures, which is
+   * what the board's fixture list actually comes from, calls drainSpan directly and
+   * never goes through drainBoard. Putting the hint in the wrong one of those
+   * two changed nothing at all.
+   */
+  if (depth === 0) {
+    const chunk = PRESPLIT_DAYS[String(params.sport ?? '').toLowerCase()];
+    if (chunk && daysBetween(from, to) >= chunk) {
+      const spans = [];
+      // YYYY-MM-DD compares correctly as a string, which is why the window is
+      // carried in that form rather than as dates.
+      for (let start = from; start <= to; start = shiftYmd(start, chunk)) {
+        const last = shiftYmd(start, chunk - 1);
+        spans.push([start, last > to ? to : last]);
+      }
+      const out = await Promise.all(spans.map(([a, b]) => drainSpan(params, a, b, 1)));
+      return out.flat();
+    }
+  }
   const { rows, capped } = await drainReport('odds-api', { ...params, date_from: from, date_to: to });
   const span = daysBetween(from, to);
   if (!capped || span < 1 || depth >= SPAN_MAX_DEPTH) return rows;
@@ -639,6 +717,22 @@ async function drainSpan(params, from, to, depth = 0) {
  * Starting whole costs the one sport that needs it a single extra round trip
  * and leaves the other fourteen at one request each.
  */
+/**
+ * Sports whose board window cannot fit in one response, in days per request.
+ *
+ * A PERFORMANCE hint only: correctness still comes from the cap discovery in
+ * drainSpan, which bisects further if a chunk this size still truncates. Get
+ * the number wrong and the board is slower or chattier, never incomplete.
+ *
+ * Why it is needed: discovery costs a serial round trip per level, and the
+ * capped call at each level has its rows DISCARDED. Soccer carries 2,604
+ * fixtures over the eleven-day window and took 10 calls and 14.2 seconds of a
+ * 16-second cold board — every other sport finished inside 1.4s. Three days is
+ * roughly 700 rows against a cap near 1,240, so each chunk lands in one call
+ * and the four chunks go out together.
+ */
+const PRESPLIT_DAYS = { soccer: 3 };
+
 function drainBoard(params) {
   const { date_from: from, date_to: to } = boardWindow();
   return drainSpan(params, from, to);
@@ -1192,10 +1286,12 @@ export function apiFixtureIndex(sport) {
         drainSpan({ sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED },
           w.date_from, w.date_to),
       ),
-      cachedDrain(`odds:${sport}:true`, () =>
+      // Not worth waiting for here either — this index makes no live claim at
+      // all (see NO_LIVE below), so these rows only ever add fixtures.
+      cachedDrainSoon(`odds:${sport}:true`, () =>
         drainSpan({ sport, live: 'true', include_stale: 'true', market: BOARD_MARKET },
           w.date_from, w.date_to),
-      ).catch(() => []),
+      ),
     ]);
     const now = Date.now();
     const byId = new Map();
@@ -1238,7 +1334,7 @@ export async function apiFixturesForDay(sport, date) {
  * entry; the board passes nothing and keeps the shared one.
  */
 async function buildFixtures(sport, window, keySuffix = '') {
-  const [closing, liveAll, liveActive] = await Promise.all([
+  const [closing, liveAll] = await Promise.all([
     // SAME key apiOddsForSport uses. These two drain the identical request and
     // deliberately share one cached result; giving this one a window-specific
     // key split them in two, doubled the upstream work per sport, and the extra
@@ -1257,19 +1353,40 @@ async function buildFixtures(sport, window, keySuffix = '') {
     // closing drain above shares one: the request is byte-identical, and two
     // keys over one request is two drains. The pulse bar reads these rows for
     // the live heartbeat and must not pay for a second copy of them.
-    cachedDrain(`odds:${sport}:true${keySuffix}`, () =>
+    cachedDrainSoon(`odds:${sport}:true${keySuffix}`, () =>
       drainSpan({ sport, live: 'true', include_stale: 'true', market: BOARD_MARKET },
         window.date_from, window.date_to),
-    ).catch(() => []),
-    liveRows(sport),
+    ),
   ]);
-  // Liveness still comes from actively-quoted prices only — a stale live row
-  // outlives its game, so using these would report finished matches as in play.
+  /*
+   * The live-ACTIVE drain is now fetched only if something actually needs it.
+   *
+   * Its rows exist for one purpose: `liveIds`, which `impliedStatus` consults
+   * when the pivot carries no usable `fixture_status`. The surface publishes
+   * that field on every row now — measured at 0 missing across 2,200 rows in
+   * four sports — so this was a request per sport, sixteen of them on a cold
+   * board, feeding a fallback that never fired.
+   *
+   * The test is the same one fixtureFromPivot applies, so the two cannot drift:
+   * if no row needs the fallback, no drain is made, and liveness comes entirely
+   * from the published status.
+   *
+   * Still actively-quoted prices only when it IS fetched — a stale live row
+   * outlives its game, so the stale drain's rows would report finished matches
+   * as in play.
+   */
+  const rows = [...liveAll, ...closing];
+  const unknown = (r) => {
+    const t = String(r.fixture_status ?? '').toLowerCase();
+    return !t || t === 'unknown';
+  };
+  const liveActive = rows.some(unknown) ? await liveRows(sport).catch(() => []) : [];
   const liveIds = new Set(liveActive.map((r) => r.optic_fixture_id).filter(Boolean));
   const now = Date.now();
   const byId = new Map();
-  // Live first, so an in-play fixture wins over any closing row for it.
-  const rows = [...liveAll, ...closing];
+  // Live first, so an in-play fixture wins over any closing row for it — see
+  // `rows` above, built before the liveActive decision because that decision
+  // reads it.
   for (const r of rows) {
     if (!r.optic_fixture_id || byId.has(r.optic_fixture_id)) continue;
     byId.set(r.optic_fixture_id, fixtureFromPivot(r, sport, now, liveIds));
