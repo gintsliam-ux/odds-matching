@@ -1,17 +1,31 @@
-import { StrictMode } from 'react';
+import { lazy, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import App from './App';
 import EventView from './EventView';
-import TickerPage from './pages/TickerPage';
-import MoversPage from './pages/MoversPage';
-import MappingPage from './pages/MappingPage';
+/*
+ * Every page but the board is its own chunk.
+ *
+ * All nine were imported eagerly into one 380 kB bundle (111 kB on the wire),
+ * so opening the board downloaded the mapping table, the user admin, the
+ * pending-bets table and four more before it could paint — none of which the
+ * board can reach without a navigation. The ticker is lazy too: it is a
+ * trading account's landing page, but its chunk loads in parallel with the
+ * feed it then has to wait for anyway.
+ *
+ * LoginPage stays eager. It is the one page a cold visitor is most likely to
+ * need, and making the sign-in screen wait on a second request is the opposite
+ * of the point.
+ */
+const TickerPage = lazy(() => import('./pages/TickerPage'));
+const MoversPage = lazy(() => import('./pages/MoversPage'));
+const MappingPage = lazy(() => import('./pages/MappingPage'));
 import { CapabilitiesProvider } from './lib/capabilities';
-import UsersPage from './pages/UsersPage';
-import SearchPage from './pages/SearchPage';
-import SettlementPage from './pages/SettlementPage';
-import LateBetsPage from './pages/LateBetsPage';
-import PendingBetsPage from './pages/PendingBetsPage';
+const UsersPage = lazy(() => import('./pages/UsersPage'));
+const SearchPage = lazy(() => import('./pages/SearchPage'));
+const SettlementPage = lazy(() => import('./pages/SettlementPage'));
+const LateBetsPage = lazy(() => import('./pages/LateBetsPage'));
+const PendingBetsPage = lazy(() => import('./pages/PendingBetsPage'));
 import LoginPage from './pages/LoginPage';
 import { AuthProvider } from './lib/auth';
 import { useAuth } from './lib/useAuth';
@@ -69,6 +83,13 @@ createRoot(document.getElementById('root')!).render(
       <RequireAuth>
     <CapabilitiesProvider>
       <BrowserRouter>
+      {/*
+        A single boundary around the table rather than one per route: every
+        chunk here is a full-page view, so there is nothing to show underneath
+        it while it arrives, and `null` is less jarring than a spinner that
+        flashes for 40ms on a warm cache.
+      */}
+      <Suspense fallback={null}>
       <Routes>
         <Route path="/" element={<DeskOnly><App /></DeskOnly>}>
           <Route index element={<EventView />} />
@@ -93,6 +114,7 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/mapping" element={<DeskOnly><MappingPage /></DeskOnly>} />
         <Route path="/users" element={<AdminOnly><UsersPage /></AdminOnly>} />
       </Routes>
+      </Suspense>
       </BrowserRouter>
     </CapabilitiesProvider>
       </RequireAuth>
