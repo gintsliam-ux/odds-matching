@@ -1323,7 +1323,28 @@ function fixtureFromPivot(r, sport, now, liveIds) {
    * every game actually in progress.
    */
   const live = LIVE.has(status);
-  const played = live || status === 'completed' || status === 'final';
+  /*
+   * A SUSPENDED match is none of those statuses and has a real score.
+   *
+   * Tennis fixture 2026101989BE5F03 (Ribecai v Vasami, Florence Challenger)
+   * started 2026-10-19T15:02Z, played to one set each — 4-6, 6-0 — and was
+   * suspended. The feed briefly called it `completed` and settled it, then
+   * corrected itself to `upcoming` with a resume time the following morning.
+   * Correct, and it left this guard reporting no score for a match whose
+   * scoreline is the single most useful thing about it: it restarts at one set
+   * each.
+   *
+   * `actual_start` is the honest test for "has this begun" — a fixture that has
+   * never run carries none, which is what the stale-score worry above is really
+   * about. Kept as an OR rather than a replacement, because the reverse also
+   * happens: fixtures arrive `completed` with no actual_start at all.
+   *
+   * A score is required alongside it so that an actual_start on its own, which
+   * upstream has been known to stamp early, cannot put an empty scoreline on an
+   * unplayed game.
+   */
+  const begun = r.actual_start != null && (r.home_score != null || r.away_score != null);
+  const played = live || status === 'completed' || status === 'final' || begun;
   const record = {
       fixture_id: r.optic_fixture_id,
       sport,
