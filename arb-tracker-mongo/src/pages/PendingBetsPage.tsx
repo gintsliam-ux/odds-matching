@@ -218,7 +218,14 @@ export default function PendingBetsPage() {
           {([
             ['all', 'All', 'Every open single we can compare.'],
             ['firmers', 'Firmers', 'Open bets whose price has shortened since they were struck — the market moving towards the customer.'],
-            ['settled', 'Beat the close', 'Settled in the last 7 days where the customer took a longer price than the market closed at, de-vigged. A price we should not have offered, whether or not it won.'],
+            /*
+              Named for the bet STATE, not for the filter. All and Firmers are
+              open bets; this one is the settled book. What it shows within that
+              is the ones that beat the close, which is the only question worth
+              asking of a bet that is already over — so the filter lives in the
+              tooltip and the heading says which half of the book you are in.
+            */
+            ['settled', 'Settled', 'Settled in the last 7 days where the customer took a longer price than the market closed at, de-vigged. A price we should not have offered, whether or not it won.'],
           ] as const).map(([key, label, title]) => (
             <button
               key={key}
