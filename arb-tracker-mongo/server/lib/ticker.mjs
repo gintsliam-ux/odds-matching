@@ -67,15 +67,16 @@ const apiSportsIn = (bets) =>
 const RACING = /racing|gallop|greyhound|harness|trot|thoroughbred/i;
 
 /**
- * What counts as a bet this feed shows. ONE definition, used by the batch query
- * and by the change stream's server-side filter.
+ * What counts as a bet this feed shows. ONE definition — used by the batch
+ * query, by the change stream's server-side filter, and (exported) by the
+ * pending-bets feed, so all three ask the same question.
  *
  * It was briefly two. The stream re-stated the racing rule as
  * `/^(horse|harness|greyhound)/` and the live feed filled with trifectas,
  * because the sport actually reads "Racing - Gallops" and nothing anchored at
  * the start of it matched.
  */
-const SPORT_SINGLE = {
+export const SPORT_SINGLE = {
   bets: {
     'derived.is_racing': false,
     'derived.type': 'SINGLE',

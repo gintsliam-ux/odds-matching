@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, AlertTriangle, Clock, Link2, LogOut, Radio, TrendingDown, Users as UsersIcon } from 'lucide-react';
+import { Activity, AlertTriangle, Clock, Hourglass, Link2, LogOut, Radio, TrendingDown, Users as UsersIcon } from 'lucide-react';
 import { Link, Outlet, useMatch, useNavigate } from 'react-router-dom';
 import { Header } from './components/Header';
 import { FilterBar } from './components/FilterBar';
@@ -797,6 +797,16 @@ export default function App() {
                   <AlertTriangle size={14} />
                   Late Bets
                 </Link>
+                {/* Admin only, matching ADMIN_ONLY on the server. */}
+                {user?.role === 'admin' && (
+                  <Link
+                    to="/pending"
+                    className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
+                  >
+                    <Hourglass size={14} />
+                    Pending Bets
+                  </Link>
+                )}
               </>
             )}
           </div>

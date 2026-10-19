@@ -11,6 +11,7 @@ import UsersPage from './pages/UsersPage';
 import SearchPage from './pages/SearchPage';
 import SettlementPage from './pages/SettlementPage';
 import LateBetsPage from './pages/LateBetsPage';
+import PendingBetsPage from './pages/PendingBetsPage';
 import LoginPage from './pages/LoginPage';
 import { AuthProvider } from './lib/auth';
 import { useAuth } from './lib/useAuth';
@@ -87,6 +88,8 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/search" element={<LegacySearch />} />
         <Route path="/settlement" element={<DeskOnly><SettlementPage /></DeskOnly>} />
         <Route path="/late-bets" element={<DeskOnly><LateBetsPage /></DeskOnly>} />
+        {/* Our own position, bet by bet — admin only, and gated on the server too. */}
+        <Route path="/pending" element={<AdminOnly><PendingBetsPage /></AdminOnly>} />
         <Route path="/mapping" element={<DeskOnly><MappingPage /></DeskOnly>} />
         <Route path="/users" element={<AdminOnly><UsersPage /></AdminOnly>} />
       </Routes>

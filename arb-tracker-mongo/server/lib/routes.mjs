@@ -24,6 +24,7 @@ import {
 import { closeBets } from './betsMongo.mjs';
 import { cached, invalidate } from './cache.mjs';
 import { fetchPulse } from './pulse.mjs';
+import { pendingBets } from './pending.mjs';
 import {
   cachedBoard, eventById, eventDetails, eventsForDay, h2hPrices, oddsForFixture, searchEvents,
 } from './queries.mjs';
@@ -115,6 +116,18 @@ const ROUTES = {
    * still a feed and a feed half an hour behind is a lie.
    */
   'GET /api/ticker': () => cached('ticker', TTL.bets, betTicker, { maxStaleMs: 60_000 }),
+
+  /*
+   * Pending bets. Admin only — see ADMIN_ONLY below.
+   *
+   * Bounded staleness for the same reason the ticker has it: the whole point of
+   * the page is what the market has done SINCE a bet was struck, and an idle
+   * instance handing back a five-minute-old answer would report a firmer that
+   * had already reversed. Costlier to build than the ticker (it joins two brand
+   * stores on top of the fixtures and the field), so a longer TTL and the same
+   * one-minute ceiling on how stale a served copy may be.
+   */
+  'GET /api/pending': () => cached('pending', 60_000, pendingBets, { maxStaleMs: 60_000 }),
 
   'GET /api/bets': async (url) => {
     const id = url.searchParams.get('fixtureId') ?? '';
@@ -352,6 +365,22 @@ const MONGO_ONLY = {
  * decides otherwise. The opposite default would hand every new endpoint over
  * silently.
  */
+/**
+ * Routes only an admin may call, whatever else their role can do.
+ *
+ * The mirror image of TRADING_ALLOWED and enforced in the same place, for the
+ * same reason: a link the client does not draw is not a restriction. A
+ * DENY-list rather than an allow-list, because the default for a new route
+ * should be "available to the roles that can already see the page", and an
+ * admin-only route is the exception somebody has chosen.
+ */
+const ADMIN_ONLY = new Set([
+  // Pending bets shows our own current price beside what each customer took —
+  // the book's position, bet by bet. That is a trading-desk view, not a
+  // support one.
+  'GET /api/pending',
+]);
+
 const TRADING_ALLOWED = new Set([
   // The ticker, and what the page needs to render a row.
   'GET /api/ticker',
@@ -537,6 +566,10 @@ export async function handleApi({ method, pathname, searchParams, body, cookies 
 
   if (me?.role === 'trading' && !TRADING_ALLOWED.has(key)) {
     return { status: 403, body: { error: 'not available to this account' } };
+  }
+
+  if (ADMIN_ONLY.has(key) && me?.role !== 'admin') {
+    return { status: 403, body: { error: 'admins only' } };
   }
 
   if (!isMongo && MONGO_ONLY[key] && !(mirrorConfigured && MIRROR_SERVES.has(key))) {

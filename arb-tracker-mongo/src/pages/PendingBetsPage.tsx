@@ -1,0 +1,376 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { ArrowLeft, Hourglass, Loader2, TrendingDown } from 'lucide-react';
+import { BetsTableSkeleton } from '../components/Skeleton';
+import { SignOut } from '../components/SignOut';
+import { useParam } from '../lib/urlState';
+import { fetchPending, type Pending, type PendingBet } from '../lib/db';
+import { BookmakerLogo } from '../components/BookmakerLogo';
+import { brandById, BOOKMAKERS } from '../lib/markets';
+import { BRAND_LABEL, BRAND_TONE } from '../lib/brands';
+import { marketLabel } from '../lib/marketLabel';
+import { eventSlug } from '../lib/routing';
+
+/**
+ * Bets still live, and what the market has done to them since.
+ *
+ * The ticker's question is "what is being backed". This one's is "what are we
+ * holding, and is it still a price we would offer" — so the subject of every
+ * row is the pair of numbers at its centre: what the customer took, and what we
+ * show on the same selection now.
+ *
+ * A FIRMER is the second number being shorter than the first. That is the
+ * market agreeing with the customer, and it is the only thing on this page that
+ * is actionable while the bet is still open.
+ *
+ * Admin only, gated on the server as well — see ADMIN_ONLY in routes.mjs. A
+ * hidden link is not a restriction.
+ */
+
+const fmt = (n: number | null | undefined) => (n != null ? n.toFixed(2) : '–');
+
+const money = (n: number | null | undefined) =>
+  n == null
+    ? '–'
+    : `$${n.toLocaleString(undefined, {
+        minimumFractionDigits: Number.isInteger(n) ? 0 : 2,
+        maximumFractionDigits: 2,
+      })}`;
+
+const time = (v: string | null) =>
+  v ? new Date(v).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '–';
+
+const SUB = 'text-xs text-slate-500';
+
+/**
+ * Signed percent of implied probability, as the movers page writes it.
+ *
+ * Negative is a firmer, and firmers are the bad news on this page, so they take
+ * the warning colour. Positive means the market drifted away from the customer
+ * and the bet has got better for us.
+ */
+function Move({ pct }: { pct: number | null }) {
+  if (pct == null) return <span className="text-slate-700">–</span>;
+  if (Math.abs(pct) < 0.01) return <span className="text-slate-500">level</span>;
+  const firmed = pct < 0;
+  return (
+    <span className={firmed ? 'font-semibold text-rose-300' : 'text-emerald-300/80'}>
+      {firmed ? '▼' : '▲'} {Math.abs(pct).toFixed(2)}%
+    </span>
+  );
+}
+
+/** The book columns, in the board's order, plus whatever else the feed carries. */
+function bookColumns(bets: PendingBet[]): string[] {
+  const core = BOOKMAKERS.map((b) => b.id);
+  const seen = new Set<string>();
+  for (const b of bets) for (const k of Object.keys(b.prices ?? {})) seen.add(k);
+  return [...core, ...[...seen].filter((id) => !core.includes(id)).sort()];
+}
+
+export default function PendingBetsPage() {
+  const [data, setData] = useState<Pending | null>(null);
+  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [error, setError] = useState<string | null>(null);
+  /** `?view=firmers`, All being the default — the page is the book, not the alarm. */
+  const [view, setView] = useParam('view', 'all');
+  const firmersOnly = view === 'firmers';
+  const [brand, setBrand] = useParam('brand', 'all');
+  const [sport, setSport] = useParam('sport', 'all');
+
+  useEffect(() => {
+    let cancelled = false;
+    setState((prev) => (prev === 'ready' ? prev : 'loading'));
+    const load = () =>
+      fetchPending()
+        .then((d) => {
+          if (cancelled) return;
+          setData(d);
+          setState('ready');
+        })
+        .catch((e) => {
+          if (cancelled) return;
+          setError(e instanceof Error ? e.message : 'could not load');
+          setState('error');
+        });
+    load();
+    // A minute, matching the server's own TTL: the brand stores are scraped on
+    // that order and polling faster cannot return anything newer.
+    const id = setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  // Memoised so the three lists below are not rebuilt on every render: `data?.bets
+  // ?? []` is a new array each time, which is enough to invalidate all of them.
+  const bets = useMemo(() => data?.bets ?? [], [data]);
+  const sports = useMemo(
+    () => [...new Set(bets.map((b) => b.sport).filter(Boolean))].sort() as string[],
+    [bets],
+  );
+
+  const shown = useMemo(
+    () =>
+      bets.filter(
+        (b) =>
+          (!firmersOnly || b.firmed) &&
+          (brand === 'all' || b.brand === brand) &&
+          (sport === 'all' || b.sport === sport),
+      ),
+    [bets, firmersOnly, brand, sport],
+  );
+
+  const columns = useMemo(() => bookColumns(bets), [bets]);
+  const c = data?.counts;
+  const CHIP = 'rounded-md px-2.5 py-1 text-xs font-medium transition';
+
+  return (
+    <div className="flex h-dvh flex-col bg-surface text-slate-200">
+      <header className="shrink-0 border-b border-surface-border">
+        <div className="flex flex-wrap items-center gap-3 px-4 py-2.5">
+          <Link
+            to="/"
+            className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500 transition hover:text-slate-300"
+          >
+            <ArrowLeft size={14} /> Board
+          </Link>
+          <div className="min-w-0">
+            <h1 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-slate-100">
+              <Hourglass size={16} className="text-sky-400" />
+              Pending Bets
+            </h1>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Open singles, with the price we show now beside the price the customer took
+            </p>
+          </div>
+
+          {c && (
+            <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
+              <span>
+                <b className="tabular-nums text-rose-300">{c.firmed}</b> firmed
+              </span>
+              <span>
+                <b className="tabular-nums text-amber-300">{money(c.firmedStake)}</b> on them
+              </span>
+              <span>
+                <b className="tabular-nums text-slate-300">{c.judgeable}</b> judgeable ·{' '}
+                {money(c.stake)}
+              </span>
+              <span
+                title={`Of ${c.open} open singles: ${c.noOurPrice} have no current price of our own on that selection, ${c.noFieldPrice} have no other book priced on it. A row missing either cannot be compared, so it is counted here rather than shown as a bet nobody has an opinion on.`}
+              >
+                of <b className="tabular-nums text-slate-400">{c.open}</b> open
+              </span>
+              {state === 'loading' && <Loader2 size={13} className="animate-spin text-slate-600" />}
+            </div>
+          )}
+          <span className="ml-auto">
+            <SignOut />
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-surface-border/60 px-4 py-2">
+          {[false, true].map((v) => (
+            <button
+              key={String(v)}
+              type="button"
+              onClick={() => setView(v ? 'firmers' : 'all')}
+              title={
+                v
+                  ? 'Only bets whose price has shortened since they were struck — the market moving towards the customer.'
+                  : 'Every open single we can compare.'
+              }
+              className={`${CHIP} ${
+                firmersOnly === v
+                  ? 'bg-rose-500/15 text-rose-300'
+                  : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+              }`}
+            >
+              {v ? (
+                <span className="inline-flex items-center gap-1">
+                  <TrendingDown size={12} /> Firmers
+                </span>
+              ) : (
+                'All'
+              )}
+              <span className="ml-1.5 tabular-nums opacity-60">
+                {v ? bets.filter((b) => b.firmed).length : bets.length}
+              </span>
+            </button>
+          ))}
+          <span className="mx-1 h-4 w-px bg-surface-border" />
+          {(['all', 'swiftbet', 'mybet', 'multis'] as const).map((b) => (
+            <button
+              key={b}
+              type="button"
+              onClick={() => setBrand(b)}
+              className={`${CHIP} ${
+                brand === b
+                  ? 'bg-white/10 text-slate-100'
+                  : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+              }`}
+            >
+              {b === 'all' ? 'All brands' : BRAND_LABEL[b] ?? b}
+            </button>
+          ))}
+          <select
+            value={sport}
+            onChange={(e) => setSport(e.target.value)}
+            className="rounded-md border border-surface-border bg-surface-raised px-2 py-1 text-xs text-slate-300 outline-none"
+          >
+            <option value="all">All sports</option>
+            {sports.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          <span className="ml-auto text-xs text-slate-600">{shown.length} shown</span>
+        </div>
+      </header>
+
+      {state === 'loading' && !data && <BetsTableSkeleton rows={12} cols={8} />}
+
+      {state === 'error' && (
+        <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-slate-500">
+          {error ?? 'Could not load pending bets.'}
+        </div>
+      )}
+
+      {data && state !== 'error' && shown.length === 0 && (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
+          <p className="text-sm text-slate-300">
+            {firmersOnly ? 'Nothing has firmed.' : 'Nothing open to compare.'}
+          </p>
+          <p className="max-w-md text-xs text-slate-600">
+            {c
+              ? `${c.open} open singles, ${c.judgeable} of them with both our price and another book's on the same selection.`
+              : ''}
+          </p>
+        </div>
+      )}
+
+      {data && state !== 'error' && shown.length > 0 && (
+        <div className="min-h-0 flex-1 overflow-auto">
+          <table className="w-full border-collapse text-sm">
+            <thead className="sticky top-0 z-10 bg-surface-raised text-[11px] uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="w-[5rem] px-3 py-2 text-left font-medium">Brand</th>
+                <th className="w-[7rem] px-2 py-2 text-left font-medium">Placed</th>
+                <th className="px-2 py-2 text-left font-medium">Event</th>
+                <th className="px-2 py-2 text-left font-medium">Selection</th>
+                <th className="border-l border-surface-border px-2 py-2 text-right font-medium">
+                  Stake
+                </th>
+                {/*
+                  The three columns the page is for, in their own block: what
+                  they took, what we show, and the distance between the two.
+                */}
+                <th className="border-l border-surface-border px-2 py-2 text-center font-medium">
+                  Took
+                </th>
+                <th className="px-2 py-2 text-center font-medium">Ours now</th>
+                <th className="px-2 py-2 text-center font-medium">Move</th>
+                {columns.map((id) => {
+                  const b = brandById(id);
+                  return (
+                    <th key={id} className="border-l border-surface-border px-1.5 py-2">
+                      <div className="flex justify-center">
+                        {b ? <BookmakerLogo brand={b} size={15} /> : id}
+                      </div>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((b) => (
+                <tr
+                  key={`${b.brand}:${b.id}`}
+                  className={`border-b border-surface-border/50 hover:bg-white/[0.02] ${
+                    b.firmed ? 'bg-rose-500/[0.05]' : ''
+                  }`}
+                >
+                  <td className="whitespace-nowrap px-3 py-1.5">
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${
+                        BRAND_TONE[b.brand] ?? 'bg-white/10 text-slate-300'
+                      }`}
+                    >
+                      {BRAND_LABEL[b.brand] ?? b.brand}
+                    </span>
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-1.5 tabular-nums">
+                    <div className="text-slate-200">{time(b.placedAt)}</div>
+                    <div className={SUB} title="bet · user">
+                      {b.betId ?? '–'}
+                    </div>
+                  </td>
+                  <td className="max-w-[15rem] px-2 py-1.5" title={b.event ?? ''}>
+                    <div className="truncate text-slate-200">
+                      {b.fixtureId && b.event ? (
+                        <Link
+                          to={`/event/${eventSlug(b.event)}/${b.fixtureId}`}
+                          className="hover:text-emerald-300"
+                        >
+                          {b.event}
+                        </Link>
+                      ) : (
+                        b.event ?? '–'
+                      )}
+                    </div>
+                    <div className={`truncate ${SUB}`}>
+                      {[b.sport, b.tournament].filter(Boolean).join(' · ') || '–'}
+                    </div>
+                  </td>
+                  <td className="max-w-[14rem] px-2 py-1.5" title={b.outcome ?? ''}>
+                    <div className="truncate text-slate-200">{b.outcome ?? '–'}</div>
+                    <div className={`truncate ${SUB}`}>{marketLabel(b.market) || '–'}</div>
+                  </td>
+                  <td className="whitespace-nowrap border-l border-surface-border px-2 py-1.5 text-right tabular-nums text-slate-300">
+                    {money(b.stake)}
+                  </td>
+                  <td className="border-l border-surface-border px-2 py-1.5 text-center font-semibold tabular-nums text-slate-100">
+                    {fmt(b.price)}
+                  </td>
+                  <td
+                    className="px-2 py-1.5 text-center tabular-nums"
+                    title={
+                      b.ourAt
+                        ? `our own book, last seen ${new Date(b.ourAt).toLocaleString()}${
+                            b.ourOpen != null ? ` — opened ${fmt(b.ourOpen)}` : ''
+                          }`
+                        : undefined
+                    }
+                  >
+                    <span className={b.ourSuspended ? 'text-slate-600 line-through' : 'text-slate-200'}>
+                      {fmt(b.ourNow)}
+                    </span>
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-center tabular-nums">
+                    <Move pct={b.movePct} />
+                  </td>
+                  {columns.map((id) => {
+                    const p = (b.prices ?? {})[id];
+                    return (
+                      <td
+                        key={id}
+                        className={`border-l border-surface-border px-1.5 py-1.5 text-center tabular-nums ${
+                          p != null ? 'text-slate-300' : 'text-slate-700'
+                        }`}
+                      >
+                        {fmt(p)}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}

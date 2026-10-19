@@ -103,6 +103,47 @@ export const fetchOdds = (event: SportEvent): Promise<OddsRow[]> =>
     `/api/odds?fixtureId=${encodeURIComponent(event.id)}&sport=${encodeURIComponent(event.league.id)}`,
   );
 
+/**
+ * A bet still live on the book, beside what the market has done since.
+ *
+ * Everything the ticker shows, plus our OWN current price on the same
+ * selection — which is the comparison the page exists for. `movePct` is the
+ * change in implied probability from the price the customer took to the price
+ * we show now, signed the way the movers page signs it: negative means the
+ * price SHORTENED, which is a firmer and a position getting worse.
+ */
+export interface PendingBet extends TickerBet {
+  /** Our current price on this selection, from the brand's own store. */
+  ourNow: number | null;
+  /** What we opened it at, for the bets taken after we had already moved. */
+  ourOpen: number | null;
+  /** When that brand event was last scraped. */
+  ourAt: string | null;
+  /** The brand has pulled this selection — eliminated, or no longer trading. */
+  ourSuspended: boolean;
+  movePct: number | null;
+  vsOpenPct: number | null;
+  firmed: boolean;
+}
+
+export interface Pending {
+  configured: boolean;
+  bets: PendingBet[];
+  counts: {
+    open: number;
+    judgeable: number;
+    noOurPrice: number;
+    noFieldPrice: number;
+    firmed: number;
+    stake: number;
+    firmedStake: number;
+  } | null;
+  pricesError?: string;
+}
+
+/** Open singles with our price beside the customer's. Admin only; see ADMIN_ONLY. */
+export const fetchPending = (): Promise<Pending> => apiGet<Pending>('/api/pending');
+
 /** Best (highest) H2H decimal price for each side of a fixture. */
 export interface H2HPrices {
   home: number | null;
