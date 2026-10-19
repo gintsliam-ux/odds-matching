@@ -422,7 +422,11 @@ const BOARD_MARKET = 'h2h';
  * `date_to`. Asking for the whole thing and discarding most of it is what made
  * a cold board take 38 seconds; bounded, all fourteen sports come back in three.
  */
-const WINDOW_BACK_DAYS = 2;
+/*
+ * Three, not two, because the date picker is allowed to reach back three and a
+ * day the board does not hold is a day the picker cannot show.
+ */
+const WINDOW_BACK_DAYS = 3;
 /*
  * A full week forward, not one day.
  *
@@ -1193,14 +1197,37 @@ export async function apiFixtures(sport) {
   return buildFixtures(sport, boardWindow());
 }
 
-async function buildFixtures(sport, window) {
+/**
+ * One sport's fixtures for ONE calendar day, whatever the board window holds.
+ *
+ * The board reaches three days back and seven forward, and the date picker is
+ * allowed past both ends. Filtering an already-built board cannot answer for a
+ * day outside it — it returned an empty board and said nothing — so a day out
+ * there is asked for directly. One request per sport per day, cached, which is
+ * why it is not how the board itself is built.
+ */
+export async function apiFixturesForDay(sport, date) {
+  return buildFixtures(sport, { date_from: date, date_to: date }, `:day:${date}`);
+}
+
+/**
+ * `keySuffix` exists because the drain keys below deliberately carry no window.
+ *
+ * The board shares one cached drain per sport with apiOddsForSport, and that
+ * sharing is load bearing — see the notes on each key. The consequence is that
+ * the `window` argument is ignored the moment the cache is warm, so asking for
+ * a different window with the same keys returns the BOARD's rows and nothing
+ * says so. A per-day request passes its date as the suffix and gets its own
+ * entry; the board passes nothing and keeps the shared one.
+ */
+async function buildFixtures(sport, window, keySuffix = '') {
   const [closing, liveAll, liveActive] = await Promise.all([
     // SAME key apiOddsForSport uses. These two drain the identical request and
     // deliberately share one cached result; giving this one a window-specific
     // key split them in two, doubled the upstream work per sport, and the extra
     // drains then failed — which `pricesFor` swallows, so the deployed ticker
     // simply showed no comparison prices at all and said nothing was wrong.
-    cachedDrain(`odds:${sport}:false`, () =>
+    cachedDrain(`odds:${sport}:false${keySuffix}`, () =>
       drainSpan({ sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED },
         window.date_from, window.date_to),
     ),
@@ -1213,7 +1240,7 @@ async function buildFixtures(sport, window) {
     // closing drain above shares one: the request is byte-identical, and two
     // keys over one request is two drains. The pulse bar reads these rows for
     // the live heartbeat and must not pay for a second copy of them.
-    cachedDrain(`odds:${sport}:true`, () =>
+    cachedDrain(`odds:${sport}:true${keySuffix}`, () =>
       drainSpan({ sport, live: 'true', include_stale: 'true', market: BOARD_MARKET },
         window.date_from, window.date_to),
     ).catch(() => []),

@@ -5,13 +5,22 @@ import {
   expireStaleLive, FIXTURE_PROJECTION, LIVE, SKIP_SPORTS, toEvents,
 } from './events.mjs';
 import { isApi } from './source.mjs';
-import { apiFixtureById, apiFixtures, apiOddsForFixture, apiOddsForSport, apiSports } from './sportApi.mjs';
+import { apiFixtureById, apiFixtures, apiOddsForFixture, apiOddsForSport, apiSports, apiFixturesForDay, boardWindow } from './sportApi.mjs';
 
 /** BSON Dates on the wire are ISO strings. */
 const iso = (v) => (v instanceof Date ? v.toISOString() : v ?? null);
 
 /** How far back to load finished events (the UI drops finals after 24h). */
-const WINDOW_MS = 48 * 60 * 60 * 1000;
+/*
+ * Three days back, matching the date picker's own floor.
+ *
+ * This was 48 hours while the picker was unbounded, so choosing three days ago
+ * returned an empty rail: the drain fetched the day and this cutoff then
+ * dropped it. The two numbers have to agree — the board's back edge, the
+ * surface drain's back edge and the earliest date the picker will accept are
+ * one decision, not three.
+ */
+const WINDOW_MS = 72 * 60 * 60 * 1000;
 
 /** How far forward the mirrored schedule is read — matches WINDOW_FWD_DAYS, so
  *  the schedule half of the board covers the same span the odds half does. */
@@ -288,14 +297,38 @@ export async function eventsForDay(dateStr) {
   const start = new Date(`${dateStr}T00:00:00`);
   if (Number.isNaN(start.getTime())) return [];
   if (isApi) {
-    // The surface publishes a rolling window only; a day inside it can be
-    // filtered out of the board, and one outside it simply is not available.
     const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-    const all = await cachedBoard();
-    return all.filter((e) => {
-      const t = new Date(e.startsAt).getTime();
-      return t >= start.getTime() && t < end.getTime();
+    const w = boardWindow();
+    const inBoard = dateStr >= w.date_from && dateStr <= w.date_to;
+    /*
+     * A day the board already holds is filtered out of it, which is free.
+     *
+     * A day OUTSIDE it used to be filtered out of it too, and so came back
+     * empty with nothing to say why: the picker let you choose March and the
+     * rail went blank. The board reaches three days back and seven forward
+     * because that is what it is for; the picker is allowed past both ends, so
+     * a day past them is asked for directly — one request per sport for that
+     * single date, cached. Deliberately not how the board is built: fifteen
+     * requests is fine for a day somebody chose and not fine on every load.
+     */
+    if (inBoard) {
+      const all = await cachedBoard();
+      return all.filter((e) => {
+        const t = new Date(e.startsAt).getTime();
+        return t >= start.getTime() && t < end.getTime();
+      });
+    }
+    const sports = (await apiSports()).filter((sp) => !SKIP_SPORTS.has(sp));
+    const perSport = await Promise.all(
+      sports.map((sp) => apiFixturesForDay(sp, dateStr).catch(() => [])),
+    );
+    // Bounded to the day asked for: a single-date request can still answer with
+    // a fixture either side of it.
+    const onDay = perSport.flat().filter((f) => {
+      const t = f.scheduled_start ? new Date(f.scheduled_start).getTime() : NaN;
+      return Number.isFinite(t) && t >= start.getTime() && t < end.getTime();
     });
+    return toEvents(onDay);
   }
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
   return toEvents(await fixturesInWindow(start, end));

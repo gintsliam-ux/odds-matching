@@ -31,8 +31,32 @@ function useOutsideClose(onClose: () => void) {
   return ref;
 }
 
+/**
+ * The earliest date the board can answer for.
+ *
+ * Three days, matching the server exactly — WINDOW_BACK_DAYS in sportApi.mjs
+ * sets how far the surface is drained and WINDOW_MS in queries.mjs sets how far
+ * the board keeps what was drained. All three are one decision, and the picker
+ * is the only one of them a person sees: left unbounded it happily accepted a
+ * date from March and returned an empty rail with nothing to explain it.
+ *
+ * There is deliberately no ceiling. Future fixtures are limited by what the
+ * books have listed rather than by anything here, and a day past the board's
+ * forward edge is fetched on demand — see eventsForDay.
+ */
+const BACK_DAYS = 3;
+
+/** Local YYYY-MM-DD, matching how the filters compare dates elsewhere. */
+function localDay(at: number): string {
+  const d = new Date(at);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+    d.getDate(),
+  ).padStart(2, '0')}`;
+}
+
 /** Pill that opens the native calendar; shows the picked date or "Date". */
 function DatePill({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const min = localDay(Date.now() - BACK_DAYS * 86_400_000);
   const inputRef = useRef<HTMLInputElement>(null);
   const label = value
     ? new Date(`${value}T00:00:00`).toLocaleDateString(undefined, {
@@ -73,7 +97,14 @@ function DatePill({ value, onChange }: { value: string; onChange: (v: string) =>
         ref={inputRef}
         type="date"
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        min={min}
+        // Anything earlier is greyed out in the native calendar rather than
+        // selectable-and-empty. No `max`: the future is open.
+        onChange={(e) => {
+          // A typed date can still beat `min`, which only constrains the picker.
+          if (e.target.value && e.target.value < min) return;
+          onChange(e.target.value);
+        }}
         className="pointer-events-none absolute inset-0 h-full w-full opacity-0 [color-scheme:dark]"
         tabIndex={-1}
       />
