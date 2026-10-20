@@ -1129,6 +1129,30 @@ export function parseBetMarket(market, outcome, sport) {
     return null;
   }
 
+  /*
+   * Sets after the first have no market either.
+   *
+   * `/limits` carries `1s_*` and nothing for later sets, and "set 2 total games
+   * 2way 9.5" matched none of the period patterns above — so it became the
+   * FULL-MATCH total games, a different market and a different number.
+   */
+  if (/\b(2nd|second|3rd|third|4th|fourth|5th|fifth) set\b|\bset [2-5]\b/.test(km)) {
+    return null;
+  }
+
+  /*
+   * Innings after the first, likewise: `/limits` stops at `1inn_`.
+   *
+   * "5th Inning - Money Line | Milwaukee Brewers" matched no period pattern, so
+   * it resolved to the FULL-GAME moneyline — a different bet entirely. It was
+   * previously read as a handicap at line 5, the 5 coming out of "5th", which
+   * at least found nothing; resolving it to the match winner would have priced
+   * it confidently and wrongly.
+   */
+  if (/\b(2nd|second|3rd|third|4th|fourth|5th|fifth|6th|7th|8th|9th) inn(ing)?s?\b|\binn(ing)?s? [2-9]\b/.test(km)) {
+    return null;
+  }
+
   // Period scope. The surface carries these as a prefix on the market id, and
   // they used to be rejected outright — which threw away every first-half and
   // opening-set bet even though `1h_total` and `1s_total` were sitting there.
@@ -1171,9 +1195,21 @@ export function parseBetMarket(market, outcome, sport) {
 
   // The line can be written on either side: "handicap -3.5" carries it in the
   // market, "Over +228.5" in the outcome. The outcome wins when both have one.
+  /*
+   * STANDALONE numbers only, which is the same rule `name` below already uses.
+   *
+   * This matched digits anywhere, so "First Team Touchdown | San Francisco
+   * 49ers" came back as a handicap at line 49 — read out of "49ers". The 76ers,
+   * the Adelaide 36ers and Schalke 04 all have the same problem, and a market
+   * that says "handicap" with no line would then take the line from the team's
+   * name.
+   */
   const numIn = (t) => {
-    const hit = String(t).match(/[-+]?\d+(?:\.\d+)?/g);
-    return hit ? Number(hit[hit.length - 1]) : null;
+    // Brackets count as a boundary: these brands write the line as "(+1.5)" at
+    // least as often as " +1.5", and requiring whitespace broke every
+    // "1st Half - Handicap (-1.5) | Sturm Graz (+1.5)" into no market at all.
+    const hit = String(t).match(/(?:^|[\s([])([-+]?\d+(?:\.\d+)?)(?=[)\]\s]|$)/g);
+    return hit ? Number(hit[hit.length - 1].replace(/[^-+\d.]/g, '')) : null;
   };
   const line = numIn(o) ?? numIn(m);
 
@@ -1181,6 +1217,16 @@ export function parseBetMarket(market, outcome, sport) {
 
   // A total is the only market whose outcome is a side rather than a runner.
   if (side != null && line != null) {
+    /*
+     * Sets are counted by their own market, `total_sets` in /limits — not by
+     * the games total and not by a team total. "number of sets | Over 2.5" was
+     * being sent to `team_total` with a qualifier of "number of", which could
+     * only ever match nothing. No period, because a per-set games total is
+     * `1s_total` and the prefix below handles it.
+     */
+    if (!period && /\bsets\b/.test(km)) {
+      return { kind: 'total', marketIds: ['total_sets'], side, line };
+    }
     /*
      * Whose total, though. "total Korea Republic goals 1.5" is that team's
      * goals; the match total at the same 1.5 is a different market and a
@@ -1221,13 +1267,44 @@ export function parseBetMarket(market, outcome, sport) {
     // anywhere turned "Adelaide 36ers" into "Adelaide ers", which matched no
     // selection on the fixture — and would do the same to the 76ers or
     // Schalke 04.
+    //
+    // Brackets count as standing on their own: "Sturm Graz (+1.5)" otherwise
+    // kept its line, and pickByName compares the bet's tokens against the
+    // surface's selection, where "(+1.5)" appears in neither.
+    .replace(/[([]\s*[-+]?\d+(?:\.\d+)?\s*[)\]]/g, ' ')
     .replace(/(^|\s)[-+]?\d+(?:\.\d+)?(?=\s|$)/g, ' ')
     .replace(/\b(points?|goals?|runs?|games?|sets?|yards?)\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
-  // A market that SAYS handicap is one.
-  if (/\b(handicap|line|spread|point spread)\b/.test(km) && line != null) {
+  /*
+   * A SET handicap is not the game handicap, and the surface prices both.
+   *
+   * `/limits` has three: `spread` (for tennis, the game handicap), `1s_spread`
+   * (1st-set games) and `set_spread` (sets). Measured on one fixture at the
+   * same -1.5 line: set_spread 3.52, spread 2.25, 1s_spread 2.31 — so sending
+   * a set-handicap bet to `spread` compared it against a game line 56% away.
+   * Eight bets a fortnight, and one of them was the third-largest row in the
+   * settled list: 1.83 taken against a "1.422 close" that belonged to another
+   * market.
+   *
+   * Only when no period is detected: "1st set game handicap" is 1s_spread and
+   * the period prefix below already resolves it.
+   */
+  if (!period && /\bset\b/.test(km) && /\b(handicap|lines?|spread)\b/.test(km) && line != null) {
+    return { kind: 'spread', marketIds: ['set_spread'], name, line };
+  }
+
+  /*
+   * A market that SAYS handicap is one — including in the PLURAL.
+   *
+   * "Alternate Lines - Sydney Kings | Sydney Kings -29.5" is the handicap at a
+   * non-main line, and `\bline\b` does not match "lines", so every one of them
+   * missed this branch and fell through to the last-resort spread below. When
+   * that was removed they became unjudgeable, which is how a deliberate
+   * handicap market got mistaken for a novelty.
+   */
+  if (/\b(handicap|lines?|spread|point spread)\b/.test(km) && line != null) {
     return { kind: 'spread', marketIds: handicapIds(period, line, sport), name, line };
   }
 
@@ -1247,10 +1324,27 @@ export function parseBetMarket(market, outcome, sport) {
     };
   }
 
-  // Otherwise a line in the text is the only sign it is a handicap at all.
-  if (line != null && !/\btotal\b/.test(km)) {
-    return { kind: 'spread', marketIds: handicapIds(period, line, sport), name, line };
-  }
+  /*
+   * There is no last-resort handicap. A number in the text is not evidence.
+   *
+   * This used to end with "a line in the text is the only sign it is a handicap
+   * at all", and treated any leftover market carrying a number as a spread.
+   * Audited over fourteen days: 396 bets took that branch and NOT ONE was a
+   * handicap. They were player props and novelties — "Kyren Williams 4+
+   * Receptions" at line 4, "M. Stafford 250+ Passing Yards" at line 250,
+   * "player home-runs Shohei Ohtani" at line 1, "Time of First Goal - 10 mins"
+   * at line -10 — and bet 6675431, First Team Touchdown on the 49ers at 1.60,
+   * judged against the NFL point spread at +1.
+   *
+   * The big lines were merely noisy, because no spread market exists at 250.
+   * The small ones are the damage: 198 of the 396 carried a line a real
+   * handicap market also quotes, so they matched and were priced against a
+   * market the customer never bet into.
+   *
+   * A market that is a handicap says so, and that branch is above. Everything
+   * else goes unjudged, which is this file's standing rule: no comparison is
+   * better than one against the wrong market.
+   */
   return null;
 }
 
