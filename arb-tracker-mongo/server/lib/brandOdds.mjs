@@ -34,6 +34,13 @@ const num = (v) => {
   return Number.isFinite(n) && n > 1 ? n : null;
 };
 
+/*
+ * Dates out of Mongo are BSON Dates; the client's OddsRow contract says
+ * `current_at: string | null`, ISO. These rows are appended AFTER
+ * serializeOdds has run on the surface's, so nothing else converts them.
+ */
+const iso = (v) => (v instanceof Date ? v.toISOString() : typeof v === 'string' ? v : null);
+
 const norm = (s) =>
   String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 const words = (s) => new Set(norm(s).split(/[^a-z0-9]+/).filter(Boolean));
@@ -91,7 +98,7 @@ function row({ book, marketId, selection, outcomeNo, line, price, open, at }) {
     current_price: price,
     open_price: open ?? null,
     status: null,
-    current_at: at ?? null,
+    current_at: iso(at),
     open_at: null,
     close_price: null,
     closed_at: null,
@@ -170,11 +177,60 @@ function swiftRows(ev, { home, away, sport }) {
 
 /* --------------------------------------------------------------------- mybet */
 
+/**
+ * The market as it stood just before mybet took it down.
+ *
+ * mybet does not suspend a live market, it ZEROES it: at kickoff every field in
+ * `match` becomes 0 — prices, lines, the lot. 28,695 events past their start
+ * time are in that state against 2,008 still priced, so for most of a match day
+ * the live column would simply be blank.
+ *
+ * `flucs` keeps the way back: one array per field of `{v, at}`, ending in the
+ * zero. Al Ahli's ALineDiv reads ...1.05 at 17:17:37Z, then 0 at 18:00:03Z —
+ * and 18:00:03Z is 05:00:03 local against an outcomeAt of 05:00:00, so the zero
+ * IS the kickoff. That gives both halves of what this needs: the last price
+ * anyone could have taken, and the moment it stopped being available.
+ *
+ * Returns the last non-zero value per field plus `wentLiveAt`, the timestamp of
+ * the zero that followed it — not `lastChangedAt`, which is only the last write
+ * of any kind and drifts if anything changes afterwards.
+ */
+function beforeZero(ev) {
+  const flucs = ev?.flucs;
+  if (!flucs || typeof flucs !== 'object') return null;
+  const vals = {};
+  let wentLiveAt = null;
+  for (const [field, hist] of Object.entries(flucs)) {
+    if (!Array.isArray(hist) || !hist.length) continue;
+    for (let i = hist.length - 1; i >= 0; i--) {
+      if (Number(hist[i]?.v) === 0) continue;
+      vals[field] = Number(hist[i].v);
+      // The entry after the last good one is the zero that ended it. Only the
+      // price fields date the kickoff; a line can stop changing earlier.
+      // Normalised before comparing: these arrive as BSON Dates, and comparing
+      // a Date against a string silently picks the wrong one.
+      const zero = iso(hist[i + 1]?.at);
+      if (zero && /Win|Div|Draw/.test(field) && (!wentLiveAt || zero < wentLiveAt)) wentLiveAt = zero;
+      break;
+    }
+  }
+  return Object.keys(vals).length ? { vals, wentLiveAt } : null;
+}
+
 function mybetRows(ev, { home, away }) {
-  const m = ev?.match;
+  const live = ev?.match && Number(ev.match.AWin) === 0 && Number(ev.match.BWin) === 0;
+  const prior = live ? beforeZero(ev) : null;
+  /*
+   * Read through the pre-kickoff snapshot when the market has been zeroed, so
+   * every field — price AND line — comes from the same moment. Taking the price
+   * from history and the line from `match` would pair a real price with a line
+   * of 0.
+   */
+  const m = prior ? { ...ev.match, ...prior.vals } : ev?.match;
   if (!m) return [];
   const open = ev?.opening ?? {};
-  const at = ev?.lastChangedAt ?? ev?.lastSeenAt ?? null;
+  // When it was last available, not when the row was written.
+  const at = prior?.wentLiveAt ?? ev?.lastChangedAt ?? ev?.lastSeenAt ?? null;
   const out = [];
 
   /*
