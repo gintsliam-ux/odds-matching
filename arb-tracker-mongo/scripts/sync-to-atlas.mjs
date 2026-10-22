@@ -22,6 +22,23 @@
 // neighbour: a small pool, unordered bulk writes in chunks, and — for the two
 // big collections — only the documents that changed since the last run.
 //
+// WHERE THIS ACTUALLY RUNS, which is not here.
+//
+// The deployed copy lives on the Air at
+// ~/gutsy/odds-matching-mongo/scripts/sync-to-atlas.mjs, called hourly by
+// live-fixtures/scripts/run-mapping-mongo.sh right after the matcher. It is
+// there rather than in this repo because it imports only `mongodb`, which that
+// repo already has, and because nothing under ~/gutsy is a git checkout — every
+// directory on that machine is a hand-made copy, so a second application
+// checkout would be a second thing to remember.
+//
+// Which means: CHANGE THIS FILE AND COPY IT ACROSS. A change made only here
+// never runs. The failure is silent by nature — the site simply serves an older
+// mirror — so the runner now exits non-zero when the script is missing, which
+// it did not on 2026-10-20, when the path it used (../arb-tracker-mongo) stopped
+// existing and the sync failed hourly for three days while launchctl reported
+// the job healthy and the desk showed fixtures as unmapped.
+//
 // Usage:
 //   node --env-file=.env scripts/sync-to-atlas.mjs             incremental
 //   node --env-file=.env scripts/sync-to-atlas.mjs --full      re-copy everything
