@@ -109,19 +109,58 @@ const fileOf = (url) => {
   try { return decodeURIComponent(String(url).split('?')[0].split('/').pop() || ''); }
   catch { return String(url); }
 };
-const badImage = (url) => {
+/* The club's own name, as a filename would spell it: "Asplöven HC" -> asplovenhc. */
+const stem = (s) => norm(s).replace(/[^a-z0-9]/g, '');
+
+const badImage = (url, name) => {
   const f = fileOf(url);
   if (LOGO_WORD.test(f)) return false;
-  return NOT_A_CREST.test(f) || /\.jpe?g$/i.test(f);
+  if (NOT_A_CREST.test(f)) return true;
+  if (!/\.jpe?g$/i.test(f)) return false;
+  /* A .jpg is a photograph -- unless its filename IS the club, in which case it
+     is the crest, uploaded as a JPEG by someone who did not know better.
+     Asplöven HC's is literally "AsplovenHC.jpg" and the blanket .jpg rule threw
+     it away. Equality, not a prefix: Sollentuna HC's rejected candidate is
+     "Sollentuna_Centrum_huvudentrén.JPG" (a shopping centre), whose stem is
+     nothing like "sollentunahc", and a prefix rule would have taken it. */
+  return stem(f.replace(/\.[a-z]+$/i, '')) !== stem(name ?? '');
 };
-const rejected = (url) => badImage(url);
+const rejected = (url, name) => badImage(url, name);
 function normaliseThumb(url) {
   if (!url) return url;
   return url.replace(/\?utm_[^]*$/, '').replace(/\/(\d{1,3})px-/, (m, w) => (Number(w) < 160 ? '/160px-' : m));
 }
 
+/* The feed strips Swedish diacritics, and å becomes "aa" -- so "Tranås AIF"
+   arrives as "Tranaas AIF" and "Borås HC" as "Boraas HC". Wikipedia finds
+   NOTHING for either spelling: not a wrong article, no results at all. Restoring
+   the å finds both, with a proper crest on each (Tranas_AIF_logo.svg.png,
+   Boras_Hockey_logo.svg.png).
+
+   Only this one substitution, because it is the only one that loses a letter and
+   so the only one search cannot absorb: ä and ö arrive as plain a and o, which
+   Wikipedia's own normalisation already matches ("Järfälla" <-> "Jarfalla").
+   Returns null when there is nothing to try. */
+const nordicVariant = (name) => (/aa/i.test(name) ? name.replace(/aa/gi, 'å') : null);
+
 /** url | null (looked, nothing) | undefined (request failed) */
 async function teamLogo(name, hint) {
+  const first = await searchLogo(name, name, hint);
+  /* Only on a clean miss. `undefined` is a failed request, which must not be
+     retried here or recorded as a miss -- see wiki(). */
+  if (first !== null) return first;
+  const alt = nordicVariant(name);
+  if (!alt) return null;
+  /* Judged against the variant, not the feed's spelling. "Borås HC" is found by
+     the retry but scores 0 against "Boraas HC": the only token either name has
+     is the place (HC is two letters and dropped), and "boraas" is not "boras".
+     The variant is what we asked for, so it is what the answer is measured
+     against. */
+  return searchLogo(alt, alt, hint);
+}
+
+/** One search, judged against `relName`. url | null | undefined */
+async function searchLogo(name, relName, hint) {
   const q = encodeURIComponent(`${name} ${hint}`);
   /* `pilicense=any` is load-bearing. A club crest is a non-free file and
      pageimages omits those by default, so without it every single team comes
@@ -133,11 +172,11 @@ async function teamLogo(name, hint) {
   const pages = d?.query?.pages;
   if (!pages) return null;
   const ranked = Object.values(pages)
-    .filter((p) => relevant(name, p.title || ''))
+    .filter((p) => relevant(relName, p.title || ''))
     .sort((a, b) => (a.index ?? 99) - (b.index ?? 99));
   for (const p of ranked) {
     const thumb = p?.thumbnail?.source;
-    if (thumb && !rejected(thumb)) return normaliseThumb(thumb);
+    if (thumb && !rejected(thumb, relName)) return normaliseThumb(thumb);
   }
   return null;
 }
