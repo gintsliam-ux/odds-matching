@@ -474,6 +474,24 @@ function beginDrain(key, produce, hit) {
 const BOARD_MARKET = 'h2h';
 
 /**
+ * Sports whose book is an OUTRIGHT, so the h2h drain finds them nothing.
+ *
+ * The board discovers its fixtures from the odds pivot filtered to h2h, and
+ * golf has no h2h market at all: `market=h2h` returns 0 rows for it while
+ * `market=outright` returns the tournament. So golf was drained on every cold
+ * board and contributed nothing — 0 golf events of 2,546 — even though the rest
+ * of the pipeline is built for it: events.mjs flags a fixture with no teams as
+ * an outright, queries.mjs knows the player is in the odds selections rather
+ * than the fixture, and markets.ts carries its own outright market and the
+ * US-books-plus-TAB column set it is priced by. Only reaching it was missing.
+ *
+ * Golf also runs 2-player matchups, which DO have home and away and arrive on
+ * the h2h drain as ordinary events — so both drains matter for it.
+ */
+const OUTRIGHT_MARKET = 'outright';
+const OUTRIGHT_SPORTS = new Set(['golf']);
+
+/**
  * How much of the surface's week the board actually wants, as `date_from` /
  * `date_to`. Asking for the whole thing and discarding most of it is what made
  * a cold board take 38 seconds; bounded, all fourteen sports come back in three.
@@ -1281,7 +1299,7 @@ export function apiFixtureIndex(sport) {
   // CPU the ticker was repeating on each build even when the drains were warm.
   return cached(`fxindex:${sport}`, PIVOT_TTL_MS, async () => {
     const w = boardWindow();
-    const [closing, liveAll] = await Promise.all([
+    const [closing, liveAll, outrights] = await Promise.all([
       cachedDrain(`odds:${sport}:false`, () =>
         drainSpan({ sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED },
           w.date_from, w.date_to),
@@ -1292,10 +1310,11 @@ export function apiFixtureIndex(sport) {
         drainSpan({ sport, live: 'true', include_stale: 'true', market: BOARD_MARKET },
           w.date_from, w.date_to),
       ),
+      outrightDrain(sport, w),
     ]);
     const now = Date.now();
     const byId = new Map();
-    for (const r of [...liveAll, ...closing]) {
+    for (const r of [...liveAll, ...closing, ...outrights]) {
       if (!r.optic_fixture_id || byId.has(r.optic_fixture_id)) continue;
       // No live set: this index makes no claim about what is in play.
       byId.set(r.optic_fixture_id, fixtureFromPivot(r, sport, now, NO_LIVE));
@@ -1305,6 +1324,21 @@ export function apiFixtureIndex(sport) {
 }
 
 const NO_LIVE = new Set();
+
+/**
+ * The outright pivot for a sport that needs one, or nothing.
+ *
+ * Shared by buildFixtures and apiFixtureIndex under one cache key, for the same
+ * reason the h2h drains are: the request is byte-identical, and two keys over
+ * one request is two drains.
+ */
+function outrightDrain(sport, window, keySuffix = '') {
+  if (!OUTRIGHT_SPORTS.has(String(sport).toLowerCase())) return Promise.resolve([]);
+  return cachedDrain(`outright:${sport}${keySuffix}`, () =>
+    drainSpan({ sport, include_stale: 'true', market: OUTRIGHT_MARKET, ...UNSETTLED },
+      window.date_from, window.date_to),
+  ).catch(() => []);
+}
 
 export async function apiFixtures(sport) {
   return buildFixtures(sport, boardWindow());
@@ -1334,7 +1368,7 @@ export async function apiFixturesForDay(sport, date) {
  * entry; the board passes nothing and keeps the shared one.
  */
 async function buildFixtures(sport, window, keySuffix = '') {
-  const [closing, liveAll] = await Promise.all([
+  const [closing, liveAll, outrights] = await Promise.all([
     // SAME key apiOddsForSport uses. These two drain the identical request and
     // deliberately share one cached result; giving this one a window-specific
     // key split them in two, doubled the upstream work per sport, and the extra
@@ -1357,6 +1391,10 @@ async function buildFixtures(sport, window, keySuffix = '') {
       drainSpan({ sport, live: 'true', include_stale: 'true', market: BOARD_MARKET },
         window.date_from, window.date_to),
     ),
+    // Awaited, unlike the live drain above: for golf this is the ONLY place its
+    // fixtures come from, so deferring it would mean a board with no golf on it
+    // rather than one missing a handful of in-play rows.
+    outrightDrain(sport, window, keySuffix),
   ]);
   /*
    * The live-ACTIVE drain is now fetched only if something actually needs it.
@@ -1375,7 +1413,7 @@ async function buildFixtures(sport, window, keySuffix = '') {
    * outlives its game, so the stale drain's rows would report finished matches
    * as in play.
    */
-  const rows = [...liveAll, ...closing];
+  const rows = [...liveAll, ...closing, ...outrights];
   const unknown = (r) => {
     const t = String(r.fixture_status ?? '').toLowerCase();
     return !t || t === 'unknown';
