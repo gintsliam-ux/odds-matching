@@ -1153,6 +1153,20 @@ export function parseBetMarket(market, outcome, sport) {
     return null;
   }
 
+  /*
+   * And hockey PERIODS, which `/limits` has no market for at all.
+   *
+   * The period prefixes this file knows are halves, quarters, sets and the
+   * first innings; "1st period result" matches none of them and so resolved to
+   * the FULL-MATCH moneyline — a three-way regulation market read as the
+   * two-way game line. Swiftbet's Senators v Sharks carried six of those plus
+   * four "3rd period total goals" rows, every one of which would have been
+   * priced against the whole game.
+   */
+  if (/\b(1st|first|2nd|second|3rd|third|4th|fourth) period\b|\bperiod [1-4]\b/.test(km)) {
+    return null;
+  }
+
   // Period scope. The surface carries these as a prefix on the market id, and
   // they used to be rejected outright — which threw away every first-half and
   // opening-set bet even though `1h_total` and `1s_total` were sitting there.

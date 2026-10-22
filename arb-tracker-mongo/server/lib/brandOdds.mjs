@@ -101,16 +101,43 @@ function row({ book, marketId, selection, outcomeNo, line, price, open, at }) {
 
 /* ------------------------------------------------------------------ swiftbet */
 
+/*
+ * A combination is not a selection, and swiftbet puts the combination in the
+ * SELECTION where a bet puts it in the market.
+ *
+ * parseBetMarket rejects a combo by looking at the market string — "/" or the
+ * word "and" — which is where a bet carries it. Swiftbet's is "Featured Same
+ * Game Multis", 128 selections deep, with names like "Senators to win, Macklin
+ * Celebrini to score" and "Over 5.5 goals & Over 1.5". None of those trip the
+ * market test, and "Over 1.5" inside the text made them parse as team totals:
+ * thirteen junk rows at 6.75, 19 and 23 on the Senators v Sharks grid.
+ *
+ * Comma and ampersand, not the word "and": "Bosnia and Herzegovina" is a team.
+ */
+const COMBO_MARKET = /same game|multi/i;
+const COMBO_SELECTION = /,|&/;
+
 function swiftRows(ev, { home, away, sport }) {
   const out = [];
   const at = ev?.scraped_at ?? null;
   for (const m of ev?.markets ?? []) {
     const mName = String(m?.name ?? '');
-    if (!mName) continue;
+    if (!mName || COMBO_MARKET.test(mName)) continue;
+    /*
+     * A market with a Draw in it is the THREE-way, and parseBetMarket offers
+     * both ids for a moneyline because a bet slip never says which it was.
+     * Here the selections do say: swiftbet lists "head to head" (Senators 1.68,
+     * two-way, including overtime) AND a regulation three-way (Senators 2.08,
+     * Draw 4.00) on the same game, and taking marketIds[0] for both put two
+     * different markets' prices on one row — the grid would have shown 2.08
+     * against the field's two-way line.
+     */
+    const hasDraw = (m?.selections ?? []).some((x) => /\bdraw\b/i.test(String(x?.name ?? '')));
     for (const s of m?.selections ?? []) {
       const price = num(s?.odds);
       if (price == null) continue;
       const sName = String(s?.name ?? '');
+      if (COMBO_SELECTION.test(sName)) continue;
       /*
        * The bet parser decides the market, so a market it refuses — a player
        * prop, a combo, a period nothing prices — is refused here too. That is
@@ -124,9 +151,12 @@ function swiftRows(ev, { home, away, sport }) {
         : p.kind === 'btts' ? (/^yes$/i.test(p.name ?? '') ? 1 : /^no$/i.test(p.name ?? '') ? 2 : null)
         : sideOfName(p.name || sName, home, away);
       if (outcomeNo == null) continue;
+      const marketId = hasDraw
+        ? (p.marketIds.find((id) => id.endsWith('_3way')) ?? p.marketIds[0])
+        : p.marketIds[0];
       out.push(row({
         book: SWIFT_BOOK,
-        marketId: p.marketIds[0],
+        marketId,
         selection: sName,
         outcomeNo,
         line: p.line ?? null,
