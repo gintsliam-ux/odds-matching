@@ -1,4 +1,5 @@
 import { cached } from './cache.mjs';
+import { brandOddsFor } from './brandOdds.mjs';
 import { coll, mirrorConfigured } from './mongo.mjs';
 import { fixtureMapping } from './fixtureMapping.mjs';
 import {
@@ -789,12 +790,24 @@ async function tabOddsFor(fixtureId) {
 
 export async function oddsForFixture(fixtureId, sport) {
   if (!fixtureId) return [];
+  /*
+   * Our own two brands are appended to whatever the field is, on every path.
+   *
+   * They are not on the odds surface — they are OUR books — so they come from
+   * their own stores through `event_mapping`. Fetched alongside rather than
+   * after, because the page waits on this call and the brand read is two
+   * indexed lookups.
+   */
+  const ours = brandOddsFor(fixtureId, await fixtureSides(fixtureId, sport));
+
   if (isApi) {
     // Checked first and returned whole: a fixture with mirrored TAB odds has
     // nothing on the surface to merge with.
     const tab = await tabOddsFor(fixtureId);
-    if (tab.length) return foldBookAliases(tab.map(serializeOdds), await bookAliases());
-    return apiOddsForFixture(fixtureId, sport);
+    if (tab.length) {
+      return [...foldBookAliases(tab.map(serializeOdds), await bookAliases()), ...(await ours)];
+    }
+    return [...(await apiOddsForFixture(fixtureId, sport)), ...(await ours)];
   }
   const [rows, aliases] = await Promise.all([
     (await coll('odds'))
@@ -804,7 +817,23 @@ export async function oddsForFixture(fixtureId, sport) {
       .toArray(),
     bookAliases(),
   ]);
-  return foldBookAliases(rows.map(serializeOdds), aliases);
+  return [...foldBookAliases(rows.map(serializeOdds), aliases), ...(await ours)];
+}
+
+/**
+ * The fixture's two sides, which is all brandOddsFor needs to place a price.
+ *
+ * Both brands name their selections, not their outcome numbers, so a row can
+ * only be put on the right side of the grid by matching the name. Read from
+ * the mirrored schedule where there is one, else from the odds-derived list.
+ */
+async function fixtureSides(fixtureId, sport) {
+  const doc = await mirrorFixtureDoc(fixtureId);
+  if (doc) return { home: doc.home_team, away: doc.away_team, sport: doc.sport ?? sport };
+  if (!isApi) return { home: null, away: null, sport };
+  const list = await apiFixtures(sport).catch(() => []);
+  const f = list.find((x) => x.fixture_id === fixtureId);
+  return { home: f?.home_team ?? null, away: f?.away_team ?? null, sport };
 }
 
 /**

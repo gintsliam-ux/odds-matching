@@ -45,6 +45,23 @@ const TAB_BOOK: Bookmaker = { id: 'tab', name: 'TAB', color: '#009845', mark: 'T
  */
 const OPTIONAL_BOOKS: Bookmaker[] = [FANDUEL, DRAFTKINGS, FANATICS, BETMGM];
 
+/**
+ * Our own two brands, which are not on the odds surface — they come from their
+ * own stores through `event_mapping` (see brandOdds.mjs server-side).
+ *
+ * Optional in the same sense the US books are: a column appears only where a
+ * row carries a price for it, so a fixture neither brand is mapped to looks
+ * exactly as it did before. Leftmost, because the whole point of the page is
+ * our price against the field, and a comparison reads better from its subject.
+ *
+ * No logo files for these, which is fine — BookmakerLogo falls back to a
+ * coloured mark chip, and the colours match BRAND_TONE on the bet pages so the
+ * same brand is the same colour wherever it appears.
+ */
+const SWIFTBET: Bookmaker = { id: 'swiftbet', name: 'Swiftbet', color: '#0ea5e9', mark: 'SB' };
+const MYBET: Bookmaker = { id: 'mybet', name: 'Mybet', color: '#10b981', mark: 'MB' };
+const OUR_BOOKS: Bookmaker[] = [SWIFTBET, MYBET];
+
 // Golf outrights are priced by mostly-US books plus TAB — a different set from
 // the core AU columns, so golf uses its own list.
 const GOLF_BOOKS: Bookmaker[] = [TAB_BOOK, DRAFTKINGS, FANDUEL, BETMGM, FANATICS];
@@ -112,10 +129,11 @@ export function eventBooks(rows: OddsRow[], leagueId?: string): Bookmaker[] {
   const present = booksWithOdds(rows);
   // Golf uses an entirely separate (US) book set; every column is optional and
   // shown only when priced.
+  const ours = OUR_BOOKS.filter((b) => present.has(b.id));
   const base =
     leagueId === 'golf'
-      ? GOLF_BOOKS.filter((b) => present.has(b.id))
-      : [...BOOKMAKERS, ...OPTIONAL_BOOKS.filter((b) => present.has(b.id))];
+      ? [...ours, ...GOLF_BOOKS.filter((b) => present.has(b.id))]
+      : [...ours, ...BOOKMAKERS, ...OPTIONAL_BOOKS.filter((b) => present.has(b.id))];
   const has = base.filter((b) => present.has(b.id));
   const missing = base.filter((b) => !present.has(b.id));
   return [...has, ...missing];
@@ -133,7 +151,7 @@ export const BETFAIR: Bookmaker = {
 const BETFAIR_LAY_ID = 'betfair_lay';
 
 const BY_ID: Record<string, Bookmaker> = Object.fromEntries(
-  [...BOOKMAKERS, ...OPTIONAL_BOOKS, ...GOLF_BOOKS, BETFAIR].map((b) => [b.id, b]),
+  [...BOOKMAKERS, ...OPTIONAL_BOOKS, ...GOLF_BOOKS, ...OUR_BOOKS, BETFAIR].map((b) => [b.id, b]),
 );
 
 export function brandById(id: string): Bookmaker | undefined {
