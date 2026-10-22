@@ -33,20 +33,32 @@ export default function EventView() {
 
   const selected = events.find((e) => e.id === fixtureId) ?? null;
 
-  const [markets, setMarkets] = useState<MarketGroup[]>([]);
-  const [books, setBooks] = useState<Bookmaker[]>([]);
-  const [oddsLoading, setOddsLoading] = useState(false);
+  /*
+   * The odds are stored WITH the fixture they belong to, and "loading" is
+   * derived from that rather than tracked alongside it.
+   *
+   * It was three pieces of state — markets, books and an oddsLoading flag set
+   * inside the effect — and an effect runs after the render that schedules it.
+   * So the first frame in which `selected` appeared still had empty markets and
+   * a loading flag of false, which is exactly the "No odds available for this
+   * event." branch: it flashed on every hard load of an event URL before the
+   * skeleton even started. The same frame on a navigation showed the PREVIOUS
+   * event's grid, for the same reason.
+   *
+   * Keyed state cannot be out of step with the render: either what we hold is
+   * for the fixture being shown or it isn't, and if it isn't, we are loading.
+   */
+  const [odds, setOdds] = useState<{ id: string; markets: MarketGroup[]; books: Bookmaker[] } | null>(null);
+  const ready = !!selected && odds?.id === selected.id;
+  const markets = ready ? odds!.markets : [];
+  const books = ready ? odds!.books : [];
 
   // Initial load for a newly selected event — the only time we show the loading
   // state (keyed on the fixture id, so it fires on navigation, not on a poll).
   useEffect(() => {
-    if (!selected) {
-      setMarkets([]);
-      setBooks([]);
-      return;
-    }
+    if (!selected) return;
+    const id = selected.id;
     let cancelled = false;
-    setOddsLoading(true);
     /*
      * One retry before giving up.
      *
@@ -61,8 +73,7 @@ export default function EventView() {
         .then((rows) => {
           if (cancelled) return;
           const built = buildMarkets(rows, selected.home, selected.away, selected.league.id);
-          setMarkets(built.groups);
-          setBooks(built.books);
+          setOdds({ id, markets: built.groups, books: built.books });
         })
         .catch((e) => {
           if (cancelled) return;
@@ -70,13 +81,12 @@ export default function EventView() {
             return new Promise<void>((r) => setTimeout(r, 1200)).then(() => load(1));
           }
           console.error(e);
-          setMarkets([]);
+          // Stamped with the id so the page stops loading and says so, rather
+          // than showing a skeleton for a request that is not coming back.
+          setOdds({ id, markets: [], books: [] });
         });
 
-    load()
-      .finally(() => {
-        if (!cancelled) setOddsLoading(false);
-      });
+    load();
     return () => {
       cancelled = true;
     };
@@ -93,8 +103,9 @@ export default function EventView() {
         .then((rows) => {
           if (cancelled) return;
           const built = buildMarkets(rows, selected.home, selected.away, selected.league.id);
-          setMarkets(built.groups);
-          setBooks(built.books);
+          // Same id, so this updates in place and `ready` never drops — which
+          // is what keeps a refresh from flashing the grid.
+          setOdds({ id: selected.id, markets: built.groups, books: built.books });
         })
         .catch(() => {});
     }, 30_000);
@@ -119,7 +130,7 @@ export default function EventView() {
         now={now}
         markets={markets}
         books={books}
-        loading={oddsLoading}
+        loading={!ready}
       />
     );
   }
