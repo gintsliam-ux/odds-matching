@@ -54,12 +54,20 @@ const OPTIONAL_BOOKS: Bookmaker[] = [FANDUEL, DRAFTKINGS, FANATICS, BETMGM];
  * exactly as it did before. Leftmost, because the whole point of the page is
  * our price against the field, and a comparison reads better from its subject.
  *
- * No logo files for these, which is fine — BookmakerLogo falls back to a
- * coloured mark chip, and the colours match BRAND_TONE on the bet pages so the
- * same brand is the same colour wherever it appears.
+ * The marks are the brands' own, lifted from margin-dashboard's BookLogo so the
+ * same logo appears on both desks. The colours are kept as well, because
+ * BookmakerLogo falls back to a coloured chip if an image ever fails to load,
+ * and they match BRAND_TONE on the bet pages — blue Swiftbet, green Mybet,
+ * whichever of the two renders.
  */
-const SWIFTBET: Bookmaker = { id: 'swiftbet', name: 'Swiftbet', color: '#0ea5e9', mark: 'SB' };
-const MYBET: Bookmaker = { id: 'mybet', name: 'Mybet', color: '#10b981', mark: 'MB' };
+const SWIFTBET: Bookmaker = {
+  id: 'swiftbet', name: 'Swiftbet', color: '#0ea5e9', mark: 'SB',
+  logoUrl: '/logos/brands/swiftbet.png',
+};
+const MYBET: Bookmaker = {
+  id: 'mybet', name: 'Mybet', color: '#10b981', mark: 'MB',
+  logoUrl: '/logos/brands/mybet.png',
+};
 const OUR_BOOKS: Bookmaker[] = [SWIFTBET, MYBET];
 
 // Golf outrights are priced by mostly-US books plus TAB — a different set from
