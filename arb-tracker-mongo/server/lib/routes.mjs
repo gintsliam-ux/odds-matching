@@ -166,14 +166,16 @@ const ROUTES = {
   // built when the page asks.
   // Head-to-head prices that have moved, and who has not moved with them.
   /*
-   * The whole upcoming book swept for where our own price is longest, which
-   * costs an odds read plus two brand lookups per fixture. Cached for five
-   * minutes with the same ceiling on staleness: prices move, but a list of
-   * where we are out of line is still true a few minutes later, and nobody
-   * should pay a minute's build to open a tab.
+   * The whole upcoming book swept for where our own price is longest.
+   *
+   * Ten minutes, with the same ceiling on staleness, because the build is 46
+   * upstream calls and about 11 seconds. Prices move, but a list of where we
+   * are out of line is still worth reading ten minutes later — and with
+   * stale-while-revalidate only the first caller on a cold instance waits at
+   * all; everyone after that gets the last copy while the next builds behind.
    */
   'GET /api/top-price': () =>
-    cached('top-price', 5 * 60_000, topPrices, { maxStaleMs: 5 * 60_000 }),
+    cached('top-price', 10 * 60_000, topPrices, { maxStaleMs: 10 * 60_000 }),
 
   'GET /api/movers': (url) => {
     const win = url.searchParams.get('window') ?? '6h';

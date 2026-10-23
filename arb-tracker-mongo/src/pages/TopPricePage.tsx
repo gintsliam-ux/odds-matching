@@ -57,9 +57,9 @@ export default function TopPricePage() {
           setState('error');
         });
     load();
-    // Five minutes, matching the route's own cache — polling faster cannot
-    // return anything newer.
-    const id = setInterval(load, 5 * 60_000);
+    // Ten minutes, matching the route's own cache — polling faster cannot
+    // return anything newer, only rebuild work nobody asked for.
+    const id = setInterval(load, 10 * 60_000);
     return () => {
       cancelled = true;
       clearInterval(id);
