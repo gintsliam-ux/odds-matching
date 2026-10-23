@@ -70,6 +70,61 @@ function drift(a: string | null | undefined, b: string | null | undefined): stri
 }
 
 /**
+ * When each system thinks this starts, in one place.
+ *
+ * Every provider keeps its own start time and they disagree often enough that
+ * the disagreement is the useful part — a bet that will not match, or a price
+ * that looks stale, usually traces back to one of these three saying something
+ * different. They were already on the page, but one per provider card, so
+ * comparing them meant scrolling between two cards and doing the arithmetic.
+ *
+ * Optic is the reference, and shows its ACTUAL start as well when it has one:
+ * a suspended or resumed fixture is exactly the case where scheduled and actual
+ * part company, and where the brands tend to follow one or the other.
+ *
+ * mybet has no start field as such — `outcomeAt` is when it settles the market,
+ * which it sets to kickoff and is the closest thing it keeps.
+ */
+function StartTimes({
+  scheduled, actual, swift, mybet,
+}: {
+  scheduled: string | null;
+  actual: string | null;
+  swift: string | null | undefined;
+  mybet: string | null | undefined;
+}) {
+  const rows: { label: string; at: string | null | undefined; note?: string }[] = [
+    { label: 'Optic', at: scheduled, note: 'scheduled' },
+    ...(actual ? [{ label: 'Optic', at: actual, note: 'actual' }] : []),
+    { label: 'Swiftbet', at: swift },
+    { label: 'Mybet', at: mybet, note: 'outcome at' },
+  ];
+  return (
+    <Section title="Start time">
+      <div className="space-y-1">
+        {rows.map((r, i) => {
+          const d = r.note === 'scheduled' ? null : drift(r.at, scheduled);
+          return (
+            <div key={`${r.label}:${i}`} className="flex items-baseline gap-2 text-xs">
+              <span className="w-16 shrink-0 text-slate-500">{r.label}</span>
+              <span className={r.at ? 'tabular-nums text-slate-200' : 'text-slate-600'}>
+                {r.at ? stamp(r.at) : 'not mapped'}
+              </span>
+              {r.note && <span className="text-[10px] uppercase text-slate-600">{r.note}</span>}
+              {d && (
+                <span className="ml-auto tabular-nums text-amber-500/80" title="Against Optic's scheduled start">
+                  {d}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
+/**
  * One provider's record of this fixture.
  *
  * Every system keeps its own id, start time and notion of "finished", and they
@@ -366,6 +421,13 @@ export function EventDetailsPanel({ fixtureId, sport }: { fixtureId: string; spo
           <p className="mt-3 text-xs text-slate-500">No odds rows are stored for this fixture.</p>
         )}
       </Section>
+
+      <StartTimes
+        scheduled={t.scheduledStart}
+        actual={t.actualStart}
+        swift={details.mapping?.swift?.event?.startsAt}
+        mybet={details.mapping?.mybet?.event?.outcomeAt}
+      />
 
       <Section title="Timeline">
         <Grid>
