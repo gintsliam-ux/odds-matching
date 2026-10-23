@@ -122,7 +122,17 @@ function row({ book, marketId, selection, outcomeNo, line, price, open, at }) {
  * Comma and ampersand, not the word "and": "Bosnia and Herzegovina" is a team.
  */
 const COMBO_MARKET = /same game|multi/i;
-const COMBO_SELECTION = /,|&/;
+/*
+ * Comma, ampersand or SLASH. The slash is swiftbet's "double result" and
+ * "half time/full time": selections like "Miami RedHawks/Miami RedHawks",
+ * whose market name carries neither "/" nor "and", so parseBetMarket's own
+ * combo guard never sees it. The name then matches a team by subset and the
+ * market's Draw routes the whole thing to moneyline_3way — a 9.00 row against
+ * the field's 2.35.
+ *
+ * Still not the word "and": "Bosnia and Herzegovina" is a team.
+ */
+const COMBO_SELECTION = /,|&|\//;
 
 function swiftRows(ev, { home, away, sport }) {
   const out = [];

@@ -1069,7 +1069,26 @@ export function parseBetMarket(market, outcome, sport) {
    * teams to score" reads "Mexico and Yes" on the outcome, so requiring the
    * outcome to be nothing but yes/no is what separates them.
    */
-  const btts = /\bboth teams to score\b/.test(km) && /^(yes|no)$/.test(ko);
+  /*
+   * The market must BE both-teams-to-score, not merely contain it.
+   *
+   * Swiftbet lists "both teams to score", "both teams to score 2+ goals" and
+   * "both teams to score in both halves" on the same game, all with Yes/No
+   * selections — so a `contains` test called all three `btts` and put a 10.00
+   * Yes (from the 2+ goals market) beside the field's 2.39. Stripping the
+   * period words first keeps "half time both teams to score" working, which is
+   * genuinely 1h_btts; anything with words left over is a different market and
+   * falls through to the combo guard below.
+   */
+  const bttsCore = km
+    .replace(PERIOD_WORDS, ' ')
+    // PERIOD_WORDS has "half" but not "time", so "half time both teams to
+    // score" kept a stray "time" and failed the equality — while "1st half
+    // both teams to score", the same market, passed.
+    .replace(/\b(time|full|ht|halftime)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const btts = bttsCore === 'both teams to score' && /^(yes|no)$/.test(ko);
 
   // Two markets in one bet — "1st quarter winner / 1st quarter total points",
   // "half time result and both teams to score". The surface prices each leg
@@ -1086,7 +1105,7 @@ export function parseBetMarket(market, outcome, sport) {
    * Blank is the honest answer for these. A comparison against a market the
    * bet was not struck in is worse than no comparison at all.
    */
-  if (!btts && /\b(correct score|tri bet|winning margin|margin|scorer|anytime|to score|race to|odd\/even|odd or even)\b/.test(km)) {
+  if (!btts && /\b(correct score|tri bet|winning margin|margin|scorer|anytime|to score|race to|odd\/even|odd or even|double result)\b/.test(km)) {
     return null;
   }
 
