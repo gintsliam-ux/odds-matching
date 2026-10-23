@@ -12,9 +12,13 @@
 // observation put back, on its own rather than bolted to the hourly matcher,
 // because an hourly job can only date a kickoff to the hour.
 //
-// Accuracy is one scrape interval. The stamp is the event's own `scraped_at`,
-// not the time this script ran: the scraper is what saw the change, and it runs
-// far more often than this will.
+// Accuracy is THIS script's interval, not the scraper's. The stamp is the
+// event's `scraped_at`, which sounds better than it is: the scraper rewrites
+// every document on each pass, so that field is the time of its last pass, not
+// of the status change. Run this every minute and a kickoff is dated to within
+// about a minute — one run caught 02:55:07 against a scheduled 02:55:00, and
+// another, run by hand thirteen minutes late, dated a 03:05 kickoff 03:18.
+// Running it rarely does not make it inaccurate quietly; it makes it late.
 //
 // Writes `gutsy.swift_event_status` on Atlas, NOT event_mapping on the NAS.
 // Two reasons: the deployed site reads Atlas directly, so a start time is
@@ -29,12 +33,14 @@
 // Usage:
 //   node --env-file=.env scripts/watch-swift-starts.mjs
 //   node --env-file=.env scripts/watch-swift-starts.mjs --dry-run
+//   node --env-file=.env scripts/watch-swift-starts.mjs --quiet    (say nothing unless something changed)
 //   node --env-file=.env scripts/watch-swift-starts.mjs --back 12 --fwd 24
 
 import { MongoClient } from 'mongodb';
 
 const argv = process.argv.slice(2);
 const DRY = argv.includes('--dry-run');
+const QUIET = argv.includes('--quiet');
 const optNum = (n, d) => {
   const i = argv.indexOf(n);
   return i === -1 ? d : Number(argv[i + 1]);
@@ -117,11 +123,19 @@ try {
     writes.push({ updateOne: { filter: { _id: id }, update: { $set: doc }, upsert: true } });
   }
 
-  console.log(
-    `${live.length} swiftbet events in [-${BACK_H}h, +${FWD_H}h]; ` +
-      `${changed} status change${changed === 1 ? '' : 's'}, ${started} kickoff${started === 1 ? '' : 's'} observed` +
-      (DRY ? '  [DRY RUN — nothing written]' : ''),
-  );
+  /*
+   * Quiet when nothing moved. This runs every minute, so a line per run is
+   * 1,440 a day of "nothing happened" and the one line that matters — a
+   * kickoff, or a failure — is buried in it. launchd records the exit status
+   * either way, so silence here still means healthy.
+   */
+  if (changed || !QUIET) {
+    console.log(
+      `${live.length} swiftbet events in [-${BACK_H}h, +${FWD_H}h]; ` +
+        `${changed} status change${changed === 1 ? '' : 's'}, ${started} kickoff${started === 1 ? '' : 's'} observed` +
+        (DRY ? '  [DRY RUN — nothing written]' : ''),
+    );
+  }
   for (const w of writes.filter((x) => x.updateOne.update.$set.actualStart).slice(0, 10)) {
     const d = w.updateOne.update.$set;
     console.log(`   kicked off ${d.actualStart}  (scheduled ${d.startDate})  ${String(d.name).slice(0, 44)}`);
