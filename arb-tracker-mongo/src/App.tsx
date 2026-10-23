@@ -1,5 +1,5 @@
 import { Children, useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, AlertTriangle, ChevronDown, Clock, Hourglass, Link2, LogOut, Radio, Settings, TrendingDown, Trophy, Users as UsersIcon, Wrench } from 'lucide-react';
+import { Activity, AlertTriangle, ChevronDown, Clock, Hourglass, Link2, LogOut, Radio, Settings, TrendingDown, Users as UsersIcon, Wrench } from 'lucide-react';
 import { Link, Outlet, useMatch, useNavigate } from 'react-router-dom';
 import { Header } from './components/Header';
 import { FilterBar } from './components/FilterBar';
@@ -851,9 +851,6 @@ export default function App() {
             onToggle={() => toggleGroup('tools')}
           >
             {caps.bets && <RailLink to="/ticker" icon={Radio}>Ticker</RailLink>}
-            {/* Needs the board's odds AND our brand stores to have anything to
-                compare, so it rides with the other desk-only tabs. */}
-            {deskOnly && <RailLink to="/top-price" icon={Trophy}>Top Price</RailLink>}
             {/* Movers reads the same price ladder the board already holds, so
                 it works on either source — no mapping tables involved. */}
             {deskOnly && <RailLink to="/movers" icon={TrendingDown}>Movers</RailLink>}

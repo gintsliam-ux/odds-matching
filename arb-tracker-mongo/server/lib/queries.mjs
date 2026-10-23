@@ -788,7 +788,7 @@ async function tabOddsFor(fixtureId) {
   }
 }
 
-export async function oddsForFixture(fixtureId, sport, { brands = true, currentOnly = false } = {}) {
+export async function oddsForFixture(fixtureId, sport) {
   if (!fixtureId) return [];
   /*
    * Our own two brands are appended to whatever the field is, on every path.
@@ -798,13 +798,7 @@ export async function oddsForFixture(fixtureId, sport, { brands = true, currentO
    * after, because the page waits on this call and the brand read is two
    * indexed lookups.
    */
-  /*
-   * `brands: false` for callers that already hold our prices — the Top Price
-   * sweep batches all of them in three queries up front, and re-joining here
-   * would be a mapping read plus two event reads per fixture for rows it
-   * already has.
-   */
-  const ours = brands ? brandOddsFor(fixtureId, await fixtureSides(fixtureId, sport)) : Promise.resolve([]);
+  const ours = brandOddsFor(fixtureId, await fixtureSides(fixtureId, sport));
 
   if (isApi) {
     // Checked first and returned whole: a fixture with mirrored TAB odds has
@@ -813,13 +807,7 @@ export async function oddsForFixture(fixtureId, sport, { brands = true, currentO
     if (tab.length) {
       return [...foldBookAliases(tab.map(serializeOdds), await bookAliases()), ...(await ours)];
     }
-    /*
-     * `currentOnly` buys the cheap shape: no fluctuation ladder, and no second
-     * odds-sp-api call for opening prices. A caller comparing current prices
-     * wants neither, and on the Top Price sweep those two cost 104 upstream
-     * calls where 55 would do.
-     */
-    return [...(await apiOddsForFixture(fixtureId, sport, { currentOnly, opens: !currentOnly })), ...(await ours)];
+    return [...(await apiOddsForFixture(fixtureId, sport)), ...(await ours)];
   }
   const [rows, aliases] = await Promise.all([
     (await coll('odds'))

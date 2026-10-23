@@ -213,47 +213,6 @@ export interface Pending {
 export const fetchPending = (view: 'open' | 'settled' = 'open'): Promise<Pending> =>
   apiGet<Pending>(`/api/pending${view === 'settled' ? '?view=settled' : ''}`);
 
-/**
- * One selection where our own price is longer than the whole field's.
- *
- * "Longest" is against the BEST of the field, not its average — a price merely
- * better than the worst book is not news. `fieldBooks` says how many books the
- * comparison had to draw on, which is how much the claim is worth.
- */
-export interface TopPriceRow {
-  fixtureId: string;
-  event: string;
-  sport: string;
-  league: string | null;
-  startsAt: string | null;
-  brand: 'swiftbet' | 'mybet' | string;
-  market: string;
-  line: number | null;
-  selection: string;
-  price: number;
-  best: number;
-  bestBook: string;
-  fieldBooks: number;
-  edge: number;
-  at: string | null;
-}
-
-export interface TopPrice {
-  configured: boolean;
-  rows: TopPriceRow[];
-  counts: {
-    fixtures: number;
-    withOurs: number;
-    comparable: number;
-    longest: number;
-    equal: number;
-  } | null;
-  builtAt: string | null;
-}
-
-/** Admin/desk: every upcoming selection we are longest on. */
-export const fetchTopPrice = (): Promise<TopPrice> => apiGet<TopPrice>('/api/top-price');
-
 /** Best (highest) H2H decimal price for each side of a fixture. */
 export interface H2HPrices {
   home: number | null;
