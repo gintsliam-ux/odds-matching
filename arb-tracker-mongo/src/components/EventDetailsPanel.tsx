@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Database, Info, Link2, Link2Off } from 'lucide-react';
+import { Check, Copy, Database, Info, Link2, Link2Off } from 'lucide-react';
 import { fetchEventDetails, type EventDetails, type ProviderEventMapping } from '../lib/db';
 import { useCapabilities } from '../lib/capabilitiesContext';
 import { PanelNotice } from './EventTabs';
@@ -52,12 +52,41 @@ const Chip = ({ children }: { children: React.ReactNode }) => (
 );
 
 /** A copyable identifier — an id you can\'t select is half an id. */
+/**
+ * An id you can take away with you.
+ *
+ * These are the values you quote when asking why something mapped the way it
+ * did — a fixture id, a brand's event id, a league id — and they were
+ * `select-all` text, which means a careful triple-click and hoping the
+ * selection did not run into the next field. Clicking copies, and the tick
+ * says so; the full value stays visible because this panel is where you read
+ * it, not just carry it.
+ */
 function Id({ value }: { value: string | null | undefined }) {
+  const [copied, setCopied] = useState(false);
   if (!value) return <span className="text-slate-600">–</span>;
   return (
-    <code className="select-all break-all text-[11px] text-slate-300" title={value}>
-      {value}
-    </code>
+    <button
+      type="button"
+      title={`${value} — click to copy`}
+      onClick={() => {
+        navigator.clipboard?.writeText(value).then(
+          () => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          },
+          () => {},
+        );
+      }}
+      className="group inline-flex max-w-full items-center gap-1 rounded text-left transition hover:bg-white/5"
+    >
+      <code className="break-all text-[11px] text-slate-300 group-hover:text-slate-100">{value}</code>
+      {copied ? (
+        <Check size={10} className="shrink-0 text-emerald-400" />
+      ) : (
+        <Copy size={10} className="shrink-0 opacity-0 transition group-hover:opacity-50" />
+      )}
+    </button>
   );
 }
 
@@ -67,61 +96,6 @@ function drift(a: string | null | undefined, b: string | null | undefined): stri
   const mins = Math.round((new Date(a).getTime() - new Date(b).getTime()) / 60000);
   if (!Number.isFinite(mins) || mins === 0) return null;
   return `${mins > 0 ? '+' : ''}${mins}m`;
-}
-
-/**
- * When each system thinks this starts, in one place.
- *
- * Every provider keeps its own start time and they disagree often enough that
- * the disagreement is the useful part — a bet that will not match, or a price
- * that looks stale, usually traces back to one of these three saying something
- * different. They were already on the page, but one per provider card, so
- * comparing them meant scrolling between two cards and doing the arithmetic.
- *
- * Optic is the reference, and shows its ACTUAL start as well when it has one:
- * a suspended or resumed fixture is exactly the case where scheduled and actual
- * part company, and where the brands tend to follow one or the other.
- *
- * mybet has no start field as such — `outcomeAt` is when it settles the market,
- * which it sets to kickoff and is the closest thing it keeps.
- */
-function StartTimes({
-  scheduled, actual, swift, mybet,
-}: {
-  scheduled: string | null;
-  actual: string | null;
-  swift: string | null | undefined;
-  mybet: string | null | undefined;
-}) {
-  const rows: { label: string; at: string | null | undefined; note?: string }[] = [
-    { label: 'Optic', at: scheduled, note: 'scheduled' },
-    ...(actual ? [{ label: 'Optic', at: actual, note: 'actual' }] : []),
-    { label: 'Swiftbet', at: swift },
-    { label: 'Mybet', at: mybet, note: 'outcome at' },
-  ];
-  return (
-    <Section title="Start time">
-      <div className="space-y-1">
-        {rows.map((r, i) => {
-          const d = r.note === 'scheduled' ? null : drift(r.at, scheduled);
-          return (
-            <div key={`${r.label}:${i}`} className="flex items-baseline gap-2 text-xs">
-              <span className="w-16 shrink-0 text-slate-500">{r.label}</span>
-              <span className={r.at ? 'tabular-nums text-slate-200' : 'text-slate-600'}>
-                {r.at ? stamp(r.at) : 'not mapped'}
-              </span>
-              {r.note && <span className="text-[10px] uppercase text-slate-600">{r.note}</span>}
-              {d && (
-                <span className="ml-auto tabular-nums text-amber-500/80" title="Against Optic's scheduled start">
-                  {d}
-                </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </Section>
-  );
 }
 
 /**
@@ -180,16 +154,17 @@ function ProviderMapping({
         <>
           <Grid>
             <Field label="Event ID" value={<Id value={data.link?.eventId} />} />
-            <Field label="Mapped" value={stamp(data.link?.resolvedAt ?? null)} />
-            {data.link?.actualStart && (
-              <Field label="Observed jump" value={stamp(data.link.actualStart)} />
-            )}
-            <Field label="Competition" value={e?.competition} />
-            <Field label="Competition ID" value={<Id value={e?.competitionId} />} />
-            <Field label="Sport" value={e?.sport} />
-            {e?.status !== undefined && <Field label="Status" value={e?.status} />}
-            {e?.viewStatus !== undefined && <Field label="View status" value={e?.viewStatus} />}
-            {e?.finished != null && <Field label="Finished" value={String(e.finished)} />}
+            {/*
+              This provider's own start time, directly under its id, because
+              comparing it against Optic's is the reason anyone opens this card
+              — a bet that will not match or a price that looks stale usually
+              traces back to one of them saying something different. The amber
+              number is the drift from Optic's scheduled start.
+
+              swiftbet keeps a start; mybet keeps `outcomeAt`, which is when it
+              settles the market and which it sets to kickoff. Labelled as what
+              each one is rather than both relabelled "Starts".
+            */}
             {e?.startsAt !== undefined && (
               <Field
                 label="Starts"
@@ -201,9 +176,6 @@ function ProviderMapping({
                 }
               />
             )}
-            {e?.finishedAt !== undefined && <Field label="Finished at" value={stamp(e?.finishedAt ?? null)} />}
-            {e?.marketCount != null && <Field label="Markets" value={e.marketCount} />}
-            {e?.feedId !== undefined && <Field label="Feed ID" value={<Id value={e?.feedId} />} />}
             {e?.outcomeAt !== undefined && (
               <Field
                 label="Outcome at"
@@ -215,6 +187,19 @@ function ProviderMapping({
                 }
               />
             )}
+            <Field label="Mapped" value={stamp(data.link?.resolvedAt ?? null)} />
+            {data.link?.actualStart && (
+              <Field label="Observed jump" value={stamp(data.link.actualStart)} />
+            )}
+            <Field label="Competition" value={e?.competition} />
+            <Field label="Competition ID" value={<Id value={e?.competitionId} />} />
+            <Field label="Sport" value={e?.sport} />
+            {e?.status !== undefined && <Field label="Status" value={e?.status} />}
+            {e?.viewStatus !== undefined && <Field label="View status" value={e?.viewStatus} />}
+            {e?.finished != null && <Field label="Finished" value={String(e.finished)} />}
+            {e?.finishedAt !== undefined && <Field label="Finished at" value={stamp(e?.finishedAt ?? null)} />}
+            {e?.marketCount != null && <Field label="Markets" value={e.marketCount} />}
+            {e?.feedId !== undefined && <Field label="Feed ID" value={<Id value={e?.feedId} />} />}
             {e?.suspendAt !== undefined && <Field label="Suspends" value={stamp(e?.suspendAt ?? null)} />}
             {e?.firstSeenAt !== undefined && <Field label="First seen" value={stamp(e?.firstSeenAt ?? null)} />}
             {e?.lastSeenAt !== undefined && <Field label="Last seen" value={stamp(e?.lastSeenAt ?? null)} />}
@@ -347,21 +332,54 @@ export function EventDetailsPanel({ fixtureId, sport }: { fixtureId: string; spo
 
   return (
     <div className="flex-1 space-y-4 overflow-auto p-4">
-      <Section title="Event">
+      {/*
+        Everything Optic says, in one place at the top.
+        It was spread over three sections — "Event" here, the ids under
+        "Source" at the bottom, and the start times under "Timeline" between
+        them — so reading one fixture's record meant scrolling past the two
+        brands to collect it. The brands each carry their own start time in
+        their own card, which is where a disagreement is actually read.
+      */}
+      <Section title="Optic">
         <Grid>
-          <Field label="Venue" value={details.venue} />
-          <Field label="Location" value={details.location} />
-          <Field label="Season" value={details.season} />
-          <Field label="Season type" value={details.seasonType} />
+          <Field label="Fixture ID" value={<Id value={details.fixtureId} />} />
+          <Field label="Optic league" value={details.opticLeague} />
+          <Field label="Optic league ID" value={<Id value={details.opticLeagueId} />} />
           <Field label="Competition" value={details.tournament} />
           <Field label="Category" value={details.category} />
           <Field label="Stage" value={details.tournamentStage} />
           <Field label="Round" value={details.currentRound} />
-          <Field label="Tier" value={details.tier} />
-          <Field label="Broadcast" value={details.broadcast} />
           <Field label="Status" value={details.status} />
           <Field label="Feed status" value={details.opticStatus} />
+          {/* Optic's own start times sit with the rest of its record. Its
+              ACTUAL start is the one that moves: a suspended or resumed
+              fixture is exactly where the two part company. */}
+          <Field label="Scheduled" value={stamp(t.scheduledStart)} />
+          <Field label="Actual start" value={stamp(t.actualStart)} />
+          <Field label="Ends" value={stamp(t.endDate)} />
+          <Field label="Settled" value={stamp(t.settledAt)} />
+          <Field label="Venue" value={details.venue} />
+          <Field label="Location" value={details.location} />
+          <Field label="Season" value={details.season} />
+          <Field label="Season type" value={details.seasonType} />
+          <Field label="Tier" value={details.tier} />
+          <Field label="Broadcast" value={details.broadcast} />
+          <Field label="has_odds" value={String(details.hasOdds)} />
+          <Field label="has_sp" value={String(details.hasSp)} />
+          <Field label="Created" value={stamp(t.createdAt)} />
+          <Field label="Updated" value={stamp(t.updatedAt)} />
         </Grid>
+        <p className="mt-3 flex items-center gap-1.5 text-[11px] text-slate-600">
+          <Database size={12} />
+          {/* Where this panel's numbers actually came from. On a deployed
+              instance there is no `fixtures` document and `odds` cannot be
+              aggregated, so it is assembled from the board, the mirrored
+              mapping tables and the rows this page already loaded — saying
+              gutsys_sport there would be untrue. */}
+          {source === 'mongo'
+            ? 'gutsys_sport · fixtures + odds'
+            : 'sport.gutsysapi.com · board + odds, mapping from the mirror'}
+        </p>
         {place && <p className="sr-only">{place}</p>}
       </Section>
 
@@ -422,45 +440,6 @@ export function EventDetailsPanel({ fixtureId, sport }: { fixtureId: string; spo
         )}
       </Section>
 
-      <StartTimes
-        scheduled={t.scheduledStart}
-        actual={t.actualStart}
-        swift={details.mapping?.swift?.event?.startsAt}
-        mybet={details.mapping?.mybet?.event?.outcomeAt}
-      />
-
-      <Section title="Timeline">
-        <Grid>
-          <Field label="Scheduled" value={stamp(t.scheduledStart)} />
-          <Field label="Actual start" value={stamp(t.actualStart)} />
-          <Field label="Ends" value={stamp(t.endDate)} />
-          <Field label="Settled" value={stamp(t.settledAt)} />
-          <Field label="Created" value={stamp(t.createdAt)} />
-          <Field label="Updated" value={stamp(t.updatedAt)} />
-        </Grid>
-      </Section>
-
-      <Section title="Source">
-        <Grid>
-          <Field label="Fixture ID" value={<code className="text-[11px]">{details.fixtureId}</code>} />
-          <Field label="Feed" value={details.source} />
-          <Field label="Optic league" value={details.opticLeague} />
-          <Field label="Optic league ID" value={details.opticLeagueId} />
-          <Field label="has_odds" value={String(details.hasOdds)} />
-          <Field label="has_sp" value={String(details.hasSp)} />
-        </Grid>
-        <p className="mt-3 flex items-center gap-1.5 text-[11px] text-slate-600">
-          <Database size={12} />
-          {/* Where this panel's numbers actually came from. On a deployed
-              instance there is no `fixtures` document and `odds` cannot be
-              aggregated, so it is assembled from the board, the mirrored
-              mapping tables and the rows this page already loaded — saying
-              gutsys_sport there would be untrue. */}
-          {source === 'mongo'
-            ? 'gutsys_sport · fixtures + odds'
-            : 'sport.gutsysapi.com · board + odds, mapping from the mirror'}
-        </p>
-      </Section>
     </div>
   );
 }
