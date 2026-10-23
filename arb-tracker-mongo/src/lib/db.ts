@@ -275,6 +275,13 @@ export interface ProviderEventMapping {
     sport: string | null;
     /** Swiftbet only. */
     status?: string | null;
+    /**
+     * When we WATCHED it go in-play — swiftbet publishes a status but never
+     * says when it changed, so this is observed rather than reported, and is
+     * null when nobody was watching at the time.
+     */
+    actualStart?: string | null;
+    statusAt?: string | null;
     viewStatus?: string | null;
     feedStatus?: string | null;
     finished?: boolean | null;

@@ -176,6 +176,26 @@ function ProviderMapping({
                 }
               />
             )}
+            {/*
+              The kickoff we WATCHED, against the one it published. swiftbet
+              never says when its status changed, so this is observed by
+              watch-swift-starts.mjs catching prematch -> inprogress, and is
+              absent when nobody was watching — which is honest, and better than
+              a confident guess sitting next to Optic's.
+            */}
+            {e?.actualStart && (
+              <Field
+                label="Actual start"
+                value={
+                  <span>
+                    {stamp(e.actualStart)}
+                    {drift(e.actualStart, e.startsAt) && (
+                      <span className="ml-1.5 text-amber-500/80">{drift(e.actualStart, e.startsAt)}</span>
+                    )}
+                  </span>
+                }
+              />
+            )}
             {e?.outcomeAt !== undefined && (
               <Field
                 label="Outcome at"

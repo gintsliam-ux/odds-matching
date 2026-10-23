@@ -40,9 +40,29 @@ async function competitionMapping(opticLeague) {
 
 /** The Swiftbet event behind a mapping. */
 async function swiftEvent(db, id) {
-  const e = await db.collection('events').findOne({ _id: id });
+  /*
+   * The observed kickoff rides along with the event.
+   *
+   * Swiftbet publishes a status but never says when it changed, and the
+   * scraper updates each document in place, so the previous status is gone the
+   * moment it moves. `swift_event_status` is written by watch-swift-starts.mjs,
+   * which watches for prematch -> inprogress and stamps the scrape that saw it
+   * — accurate to one scrape interval, measured at eight seconds on a 02:55
+   * kickoff.
+   *
+   * Read here rather than from `event_mapping.swift_actual_start`, which held
+   * this until 2026-09-16 and is mirrored to Atlas only hourly: a start time
+   * that arrives an hour late is no use while the match is on.
+   */
+  const [e, seen] = await Promise.all([
+    db.collection('events').findOne({ _id: id }),
+    db.collection('swift_event_status').findOne({ _id: String(id) }).catch(() => null),
+  ]);
   if (!e) return null;
   return {
+    /** When we watched it go in-play, or null if nobody was watching. */
+    actualStart: seen?.actualStart ?? null,
+    statusAt: seen?.statusAt ?? null,
     id: String(e._id),
     name: e.name ?? null,
     competition: e.competition?.name ?? null,
