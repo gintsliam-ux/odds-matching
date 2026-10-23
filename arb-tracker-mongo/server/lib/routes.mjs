@@ -25,6 +25,7 @@ import { closeBets } from './betsMongo.mjs';
 import { cached, invalidate } from './cache.mjs';
 import { fetchPulse } from './pulse.mjs';
 import { attachEm, pendingBets, settledBets } from './pending.mjs';
+import { topPrices } from './topPrice.mjs';
 import {
   cachedBoard, eventById, eventDetails, eventsForDay, h2hPrices, oddsForFixture, searchEvents,
 } from './queries.mjs';
@@ -164,6 +165,16 @@ const ROUTES = {
   // Expensive (it reads squads from three feeds), so it is cached and only
   // built when the page asks.
   // Head-to-head prices that have moved, and who has not moved with them.
+  /*
+   * The whole upcoming book swept for where our own price is longest, which
+   * costs an odds read plus two brand lookups per fixture. Cached for five
+   * minutes with the same ceiling on staleness: prices move, but a list of
+   * where we are out of line is still true a few minutes later, and nobody
+   * should pay a minute's build to open a tab.
+   */
+  'GET /api/top-price': () =>
+    cached('top-price', 5 * 60_000, topPrices, { maxStaleMs: 5 * 60_000 }),
+
   'GET /api/movers': (url) => {
     const win = url.searchParams.get('window') ?? '6h';
     const minMove = Number(url.searchParams.get('minMove') ?? 5);

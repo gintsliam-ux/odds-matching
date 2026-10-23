@@ -19,6 +19,7 @@ import EventView from './EventView';
  */
 const TickerPage = lazy(() => import('./pages/TickerPage'));
 const MoversPage = lazy(() => import('./pages/MoversPage'));
+const TopPricePage = lazy(() => import('./pages/TopPricePage'));
 const MappingPage = lazy(() => import('./pages/MappingPage'));
 import { CapabilitiesProvider } from './lib/capabilities';
 const UsersPage = lazy(() => import('./pages/UsersPage'));
@@ -97,6 +98,10 @@ createRoot(document.getElementById('root')!).render(
         </Route>
         {/* Full-width: the mapping table has no use for the event rail. */}
         <Route path="/movers" element={<DeskOnly><MoversPage /></DeskOnly>} />
+        {/* Reads the board's odds plus our two brand stores — desk-only, like
+            Movers, because a deployed instance without them has nothing to
+            compare. */}
+        <Route path="/top-price" element={<DeskOnly><TopPricePage /></DeskOnly>} />
         {/* The two a trading account has. */}
         <Route path="/ticker" element={<TickerPage />} />
         {/*

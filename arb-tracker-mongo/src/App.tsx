@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, AlertTriangle, Clock, Hourglass, Link2, LogOut, Radio, TrendingDown, Users as UsersIcon } from 'lucide-react';
+import { Children, useCallback, useEffect, useMemo, useState } from 'react';
+import { Activity, AlertTriangle, ChevronDown, Clock, Hourglass, Link2, LogOut, Radio, Settings, TrendingDown, Trophy, Users as UsersIcon, Wrench } from 'lucide-react';
 import { Link, Outlet, useMatch, useNavigate } from 'react-router-dom';
 import { Header } from './components/Header';
 import { FilterBar } from './components/FilterBar';
@@ -24,6 +24,63 @@ import { useAuth } from './lib/useAuth';
 import { eventPath } from './lib/routing';
 import type { EventStatus, SportEvent } from './lib/types';
 import type { LayoutContext } from './EventView';
+
+/** One rail link, so eight of them do not repeat eight sets of classes. */
+function RailLink({ to, icon: Icon, children }: { to: string; icon: typeof Radio; children: React.ReactNode }) {
+  return (
+    <Link
+      to={to}
+      className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
+    >
+      <Icon size={14} />
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * A collapsible group of rail links, one open at a time.
+ *
+ * The rail had grown to eight links in two unlabelled blocks, which is a list
+ * rather than a structure. Grouping them puts the daily tabs under Tools and
+ * the things you change rather than read under Settings — and the accordion
+ * keeps the event list, which is the rail's actual job, from being pushed off
+ * the bottom by navigation.
+ *
+ * Renders nothing when every child is gated away: `Children.toArray` drops the
+ * `false` that a `{cond && <RailLink/>}` leaves behind, so a group with no
+ * visible links does not appear as an empty heading.
+ */
+function RailGroup({
+  label, icon: Icon, open, onToggle, children,
+}: {
+  label: string;
+  icon: typeof Radio;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  const items = Children.toArray(children);
+  if (!items.length) return null;
+  return (
+    <div className="shrink-0 border-t border-surface-border">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 transition hover:text-slate-300"
+      >
+        <Icon size={13} />
+        {label}
+        <ChevronDown
+          size={13}
+          className={`ml-auto transition-transform ${open ? '' : '-rotate-90'}`}
+        />
+      </button>
+      {open && <div className="px-2 pb-2">{items}</div>}
+    </div>
+  );
+}
 
 /**
  * Who is signed in, pinned to the very bottom of the rail.
@@ -418,6 +475,13 @@ export default function App() {
   // Below md the rail is a drawer, hidden until the logo opens it; from md up
   // it's always in-flow and this flag is inert (md: styles override it).
   const [railOpen, setRailOpen] = useState(false);
+  /*
+   * One group open at a time. Tools by default — it holds the tabs used daily,
+   * where Settings holds the two you open to change something.
+   */
+  const [openGroup, setOpenGroup] = useState<'tools' | 'settings' | null>('tools');
+  const toggleGroup = (g: 'tools' | 'settings') =>
+    setOpenGroup((cur) => (cur === g ? null : g));
 
   const sportOptions = useMemo(
     () => Array.from(new Set(allEvents.map((e) => e.sport))).sort(),
@@ -769,82 +833,48 @@ export default function App() {
               ))
             )}
           </nav>
-          {/* Pinned to the bottom of the rail, below the scrolling event list. */}
-          <div className="shrink-0 border-t border-surface-border p-2">
+          {/*
+            Two groups, one open at a time — see RailGroup.
+
+            Tools is what you open during a shift; Settings is what you open to
+            change something. Each link keeps its own gate rather than the group
+            carrying it: the Ticker once sat inside `caps.mapping` and so was
+            switched by the tournament mapping tables, which it has nothing to
+            do with — it reads the bets cluster, exactly like Settlement and
+            Late Bets. The two were only ever accidentally equal, because the
+            mirror makes `caps.mapping` true.
+          */}
+          <RailGroup
+            label="Tools"
+            icon={Wrench}
+            open={openGroup === 'tools'}
+            onToggle={() => toggleGroup('tools')}
+          >
+            {caps.bets && <RailLink to="/ticker" icon={Radio}>Ticker</RailLink>}
+            {/* Needs the board's odds AND our brand stores to have anything to
+                compare, so it rides with the other desk-only tabs. */}
+            {deskOnly && <RailLink to="/top-price" icon={Trophy}>Top Price</RailLink>}
             {/* Movers reads the same price ladder the board already holds, so
                 it works on either source — no mapping tables involved. */}
-            {deskOnly && (
-              <Link
-                to="/movers"
-                className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
-              >
-                <TrendingDown size={14} />
-                Movers
-              </Link>
+            {deskOnly && <RailLink to="/movers" icon={TrendingDown}>Movers</RailLink>}
+            {caps.bets && <RailLink to="/settlement" icon={Clock}>Settlement</RailLink>}
+            {caps.bets && <RailLink to="/late-bets" icon={AlertTriangle}>Late Bets</RailLink>}
+            {/* Admin only, matching ADMIN_ONLY on the server. */}
+            {caps.bets && user?.role === 'admin' && (
+              <RailLink to="/pending" icon={Hourglass}>Pending Bets</RailLink>
             )}
-            {/* Both read the bets cluster, so both are shown wherever the
-                ticker is — and to every role, trading included. */}
-            {caps.bets && (
-              <>
-                <Link
-                  to="/settlement"
-                  className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
-                >
-                  <Clock size={14} />
-                  Settlement
-                </Link>
-                <Link
-                  to="/late-bets"
-                  className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
-                >
-                  <AlertTriangle size={14} />
-                  Late Bets
-                </Link>
-                {/* Admin only, matching ADMIN_ONLY on the server. */}
-                {user?.role === 'admin' && (
-                  <Link
-                    to="/pending"
-                    className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
-                  >
-                    <Hourglass size={14} />
-                    Pending Bets
-                  </Link>
-                )}
-              </>
-            )}
-          </div>
-          {/*
-            Gated per link, not per block.
-            The Ticker sat inside `caps.mapping` and so was switched by the
-            tournament mapping tables, which it has nothing to do with — it
-            reads the bets cluster, exactly like Settlement and Late Bets above.
-            It showed anyway because the mirror makes `caps.mapping` true, so
-            the two were only ever accidentally equal; the board is the admin
-            landing page and the Ticker is the tab you leave it by, which is not
-            a thing to leave resting on a coincidence.
-          */}
-          {(caps.bets || caps.mapping) && (
-            <div className="shrink-0 border-t border-surface-border p-2">
-              {caps.bets && (
-                <Link
-                  to="/ticker"
-                  className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
-                >
-                  <Radio size={14} />
-                  Ticker
-                </Link>
-              )}
-              {caps.mapping && deskOnly && (
-                <Link
-                  to="/mapping"
-                  className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
-                >
-                  <Link2 size={14} />
-                  Mapping
-                </Link>
-              )}
-            </div>
-          )}
+          </RailGroup>
+
+          <RailGroup
+            label="Settings"
+            icon={Settings}
+            open={openGroup === 'settings'}
+            onToggle={() => toggleGroup('settings')}
+          >
+            {caps.mapping && deskOnly && <RailLink to="/mapping" icon={Link2}>Mapping</RailLink>}
+            {user?.role === 'admin' && <RailLink to="/users" icon={UsersIcon}>Users</RailLink>}
+          </RailGroup>
+
           <SignedInAs />
         </aside>
 
