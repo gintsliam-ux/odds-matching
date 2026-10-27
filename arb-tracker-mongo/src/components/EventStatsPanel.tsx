@@ -57,12 +57,24 @@ const LABELS: Record<string, string> = {
  */
 type Scorer = { player: string | null; position: string | null; value: number };
 
+/**
+ * Minutes is not a stat, it is the opportunity to record one.
+ *
+ * A ranked list of who was on court longest answers nothing this view is
+ * consulted for — nobody prices minutes — and it sat at the top of the
+ * basketball blocks pushing points down the page. It stays in the All box
+ * score, where it is the context you read the other columns against, and it
+ * still orders that table server-side.
+ */
+const NOT_A_STAT = new Set(['minutes']);
+
 function scorersByStat(
   teams: PlayerStats['teams'],
   fields: string[],
 ): { field: string; perTeam: Scorer[][] }[] {
   const out: { field: string; perTeam: Scorer[][] }[] = [];
   for (const field of fields) {
+    if (NOT_A_STAT.has(field)) continue;
     const perTeam = teams.map((t) =>
       t.players
         .map((p) => ({ player: p.player, position: p.position, value: Number(p[field]) }))
