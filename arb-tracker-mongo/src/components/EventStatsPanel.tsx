@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { BarChart3, ChevronDown, Info } from 'lucide-react';
-import { fetchPlayerStats, type PlayerStats, type PlayerStatLine } from '../lib/db';
+import { fetchBets, fetchPlayerStats, type Bet, type FixtureBets, type PlayerStats, type PlayerStatLine } from '../lib/db';
 import { PanelNotice, SubTabs } from './EventTabs';
 
 /**
@@ -88,6 +88,99 @@ function scorersByStat(
 
 const num = (v: PlayerStatLine[string]) =>
   v == null || v === '' ? <span className="text-slate-700">–</span> : String(v);
+
+/**
+ * Which bets on this fixture are about a player's stats, and how they landed.
+ *
+ * A bet counts when its market or selection NAMES one of the players in this
+ * box score. That is exact where a vocabulary is not: matching on words like
+ * "points" or "yards" also catches "Match total points handicap - PYOL" and
+ * "total points 234.5", which are team markets wearing the same nouns. The
+ * box score is the authority on who played, so it is the authority on what is
+ * a player bet.
+ */
+const words = (s: string) =>
+  s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
+
+/**
+ * Which player a bet is about, and whether we are sure it is him.
+ *
+ * The surname does the finding — books write "J. Chase" and "Ja'Marr Chase"
+ * for the same man, so requiring every part would drop half of them — but a
+ * surname alone does not IDENTIFY anyone, and the two failures it produces are
+ * both silent:
+ *
+ *   Juwan Johnson      several Johnsons play; keying a played/did-not-play map
+ *                      on "johnson" let another one's row overwrite his, and
+ *                      his anytime-touchdown bets read VOID when he started
+ *                      and caught a pass for seven yards.
+ *   Marvin Harrison Jr small-sample worse — he has no box-score row at all, so
+ *                      "harrison" found the only Harrison who does, Malik, and
+ *                      called the bet void off a stranger's empty line.
+ *
+ * So a void needs the given name as well, as a whole word or as the initial
+ * the book abbreviated it to ("N. Folk" confirms Nick Folk). Without that
+ * confirmation the bet is still shown under the name it mentions — that part
+ * was never in doubt — but `exact` is false and no void is claimed from it.
+ */
+/**
+ * What became of a bet: the brand's own word for it, or void when the man it
+ * names never took the field.
+ */
+type Landed = 'won' | 'lost' | 'void' | 'pending';
+
+const SUFFIX = new Set(['jr', 'sr', 'ii', 'iii', 'iv', 'v']);
+
+/** Given names, then surname — with "Jr"/"III" set aside, which are neither. */
+function nameParts(name: string): { given: string[]; surname: string } {
+  const w = words(name).filter((x) => !SUFFIX.has(x));
+  return { given: w.slice(0, -1), surname: w[w.length - 1] ?? '' };
+}
+
+/** Does the bet's text name THIS man and not merely his surname? */
+function confirmsGiven(given: string[], hay: Set<string>): boolean {
+  return given.some((g) => (g.length > 1 && hay.has(g)) || hay.has(g[0]));
+}
+
+type Match = { player: PlayerStatLine; exact: boolean } | null;
+
+function namesPlayer(bet: Bet, players: PlayerStatLine[]): Match {
+  const hay = new Set(words(`${bet.market ?? ''} ${bet.selection ?? ''}`));
+  const hit = players.filter((p) => {
+    const { surname } = nameParts(p.player ?? '');
+    return surname.length > 2 && hay.has(surname);
+  });
+  if (!hit.length) return null;
+  const sure = hit.filter((p) => confirmsGiven(nameParts(p.player ?? '').given, hay));
+  if (sure.length === 1) return { player: sure[0], exact: true };
+  // Either nobody's given name is in the text, or more than one man's is.
+  return { player: hit[0], exact: false };
+}
+
+function landed(bet: Bet, match: Match): Landed {
+  /*
+   * Void is claimed only when we know WHICH player, and the box score has him
+   * recording nothing anywhere (the server's `played`, judged over his whole
+   * line — the stat columns on this page would call every kicker absent).
+   * An ambiguous surname falls through to the brand's own result: being unsure
+   * which Johnson a bet is on is not evidence that he sat out, and "void" is
+   * too confident a thing to say on a guess.
+   */
+  if (match?.exact && match.player.played === false) return 'void';
+  const r = (bet.result ?? '').toLowerCase();
+  if (/cancel|void|refund/.test(r)) return 'void';
+  if (/^won\b/.test(r) || /^return @/.test(r)) return 'won';
+  if (/^lost\b/.test(r) || /no return/.test(r)) return 'lost';
+  // Settled but in a wording we do not know, or genuinely not settled yet.
+  return 'pending';
+}
+
+const LANDED_TONE: Record<Landed, string> = {
+  won: 'bg-emerald-500/15 text-emerald-300',
+  lost: 'bg-rose-500/15 text-rose-300',
+  void: 'bg-slate-500/15 text-slate-400',
+  pending: 'bg-amber-500/15 text-amber-300',
+};
 
 /** One block per stat: every player who recorded it, in order, by team. */
 function Leaders({
@@ -180,10 +273,125 @@ function Leaders({
   );
 }
 
+/**
+ * Player-stat bets on this fixture, grouped by the brand's own market name.
+ *
+ * Grouped by market rather than by player or by result, because the market is
+ * the unit the book actually offered and the one it is listed under in
+ * mybet/multis — so a group is "everything we took on Player points Cade
+ * Cunningham", which is the exposure question.
+ */
+function StatBets({
+  fixtureId,
+  teams,
+}: {
+  fixtureId: string;
+  teams: PlayerStats['teams'];
+}) {
+  const [bets, setBets] = useState<FixtureBets | null>(null);
+  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
+
+  useEffect(() => {
+    let cancelled = false;
+    setState('loading');
+    fetchBets(fixtureId)
+      .then((d) => {
+        if (cancelled) return;
+        setBets(d);
+        setState('ready');
+      })
+      .catch(() => !cancelled && setState('error'));
+    return () => {
+      cancelled = true;
+    };
+  }, [fixtureId]);
+
+  const groups = useMemo(() => {
+    if (!bets) return [];
+    /*
+     * Every player in the box score, as one list: a bet names a man, not a
+     * team, and the same surname can appear on both.
+     */
+    const players = teams.flatMap((t) => t.players).filter((p) => p.player);
+
+    const all: { brand: string; bet: Bet; landed: Landed }[] = [];
+    for (const brand of ['swiftbet', 'mybet', 'multis'] as const) {
+      for (const bet of bets[brand]?.bets ?? []) {
+        const match = namesPlayer(bet, players);
+        if (!match) continue;
+        all.push({ brand, bet, landed: landed(bet, match) });
+      }
+    }
+
+    const byMarket = new Map<string, typeof all>();
+    for (const row of all) {
+      const key = row.bet.market ?? row.bet.selection ?? 'Unknown market';
+      byMarket.set(key, [...(byMarket.get(key) ?? []), row]);
+    }
+    return [...byMarket.entries()]
+      .map(([market, rows]) => ({
+        market,
+        rows,
+        stake: rows.reduce((t, r) => t + (Number(r.bet.stake) || 0), 0),
+      }))
+      .sort((a, b) => b.stake - a.stake);
+  }, [bets, teams]);
+
+  if (state === 'loading') {
+    return <div className="h-40 animate-pulse rounded-xl bg-surface-raised/40" />;
+  }
+  if (state === 'error') {
+    return <p className="text-xs text-slate-500">Couldn't load bets for this fixture.</p>;
+  }
+  if (!groups.length) {
+    return (
+      <p className="text-xs text-slate-500">
+        No bets on this fixture name a player in the box score.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {groups.map(({ market, rows, stake }) => (
+        <div key={market} className="overflow-hidden rounded-xl bg-surface-raised/40">
+          <div className="flex items-baseline gap-2 border-b border-surface-border px-3 py-1.5">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+              {market}
+            </span>
+            <span className="ml-auto text-[11px] text-slate-600">
+              {rows.length} bet{rows.length === 1 ? '' : 's'} · ${Math.round(stake).toLocaleString()}
+            </span>
+          </div>
+          <table className="w-full border-collapse text-sm">
+            <tbody>
+              {rows.map(({ brand, bet, landed: l }) => (
+                <tr key={bet.id} className="border-t border-surface-border/60 hover:bg-white/[0.02]">
+                  <td className="w-16 px-3 py-1">
+                    <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${LANDED_TONE[l]}`}>
+                      {l}
+                    </span>
+                  </td>
+                  <td className="px-2 py-1 text-slate-200">{bet.selection}</td>
+                  <td className="w-20 px-2 py-1 text-right tabular-nums text-slate-400">
+                    ${Math.round(Number(bet.stake) || 0).toLocaleString()}
+                  </td>
+                  <td className="w-14 px-2 py-1 text-right tabular-nums text-slate-300">{bet.price}</td>
+                  <td className="w-16 px-2 py-1 text-right text-[10px] uppercase text-slate-600">{brand}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function EventStatsPanel({ fixtureId }: { fixtureId: string }) {
   const [data, setData] = useState<PlayerStats | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [view, setView] = useState<'all' | 'leaders'>('all');
+  const [view, setView] = useState<'all' | 'leaders' | 'bets'>('all');
 
   useEffect(() => {
     let cancelled = false;
@@ -234,12 +442,15 @@ export function EventStatsPanel({ fixtureId }: { fixtureId: string }) {
         tabs={[
           { key: 'all' as const, label: 'All' },
           { key: 'leaders' as const, label: 'Leaders' },
+          { key: 'bets' as const, label: 'Bets' },
         ]}
         active={view}
         onChange={setView}
       />
 
       {view === 'leaders' && <Leaders teams={data.teams} fields={fields} />}
+
+      {view === 'bets' && <StatBets fixtureId={fixtureId} teams={data.teams} />}
 
       {view === 'all' && data.teams.map((t) => (
         <div key={`${t.side}:${t.team}`} className="overflow-hidden rounded-xl bg-surface-raised/40">

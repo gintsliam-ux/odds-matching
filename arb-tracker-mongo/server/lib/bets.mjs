@@ -1,4 +1,5 @@
 import { coll } from './mongo.mjs';
+import { COUNTER_ENTRY, SATELLITE_SKEW_MS, VOID_BET } from './betVocab.mjs';
 import { betsConfigured, betsDb } from './betsMongo.mjs';
 import { eventById } from './queries.mjs';
 
@@ -140,24 +141,11 @@ function swiftSelection(bet, gutsyEventId) {
  * Matched on the status, not a zero stake, which does not separate them: 65
  * counter-entries carry a non-zero amount and 13 real bets carry none.
  */
-/**
- * How far a market-specific mybet event may sit from its own match event.
- *
- * Shared with the ticker's satellite resolver, which pairs them the other way
- * round, so the two cannot disagree about what counts as the same game.
- */
-export const SATELLITE_SKEW_MS = 90 * 60_000;
-
-export const COUNTER_ENTRY = /^(Return of|Cancellation of)/;
-
-/**
- * A bet that never stood. Both halves of a cancellation say so in `bet_type` —
- * the original ("Cancelled at Tkt: 6490828", +250) and its reversal
- * ("Cancellation of Tkt: 6490674", -250) — so that field removes the pair in
- * one condition, where the status alone caught only the reversal and left 46
- * cancelled bets on the feed over three days.
- */
-export const VOID_BET = /cancellation/i;
+// Moved to a module that imports nothing, to break an import cycle — see
+// betVocab.mjs. Imported AND re-exported: `export ... from` alone re-exports
+// without binding the names locally, and this file uses SATELLITE_SKEW_MS
+// itself, so that form left it undefined at the point of use.
+export { COUNTER_ENTRY, SATELLITE_SKEW_MS, VOID_BET };
 
 /**
  * Tidy a free-text field from either source. Swiftbet selections arrive padded

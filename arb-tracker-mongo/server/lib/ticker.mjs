@@ -1,7 +1,10 @@
 import { coll, mongoConfigured } from './mongo.mjs';
 import { apiFixtureIndex, apiOddsForFixture, apiOddsForSport } from './sportApi.mjs';
 import { betsConfigured, betsDb } from './betsMongo.mjs';
-import { betInstant, COUNTER_ENTRY, SATELLITE_SKEW_MS, VOID_BET } from './bets.mjs';
+import { betInstant } from './bets.mjs';
+// From betVocab, not bets.mjs: these three are read at module load, and
+// reading them through the cycle left them undefined. See betVocab.mjs.
+import { COUNTER_ENTRY, SATELLITE_SKEW_MS, VOID_BET } from './betVocab.mjs';
 import { fairsFor, groupKey } from './fair.mjs';
 
 /**

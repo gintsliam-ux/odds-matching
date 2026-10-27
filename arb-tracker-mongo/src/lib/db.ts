@@ -226,6 +226,12 @@ export interface PlayerStatLine {
   position: string | null;
   number: number | null;
   starter: boolean;
+  /**
+   * Whether he recorded anything at all, judged on the full box score rather
+   * than on the columns below — a kicker's three field goals are in neither.
+   * This is the only evidence of participation the rows carry.
+   */
+  played: boolean;
   [stat: string]: string | number | boolean | null;
 }
 

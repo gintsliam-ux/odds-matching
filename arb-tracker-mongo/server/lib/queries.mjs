@@ -920,6 +920,23 @@ const NFL_FIELDS = [
   'touchdowns',
 ];
 
+/**
+ * Did this man take the field?
+ *
+ * Nothing in the row says so outright: `player_status` is "completed" on every
+ * row we have, and there is no snaps or participation key, so the only
+ * evidence is whether he recorded anything. The test has to run over the WHOLE
+ * `stats` sub-object and not over the columns this module projects — those are
+ * passing, rushing and receiving, which a kicker never touches. Nick Folk went
+ * 3 from 3 and Jason Myers 2 from 2; both had passing_yards 0, rushing_yards 0,
+ * receiving_yards 0, and judged on those they had not played, so the bets on
+ * them were called void while the brand was paying them out as winners.
+ *
+ * `stats` carries seventy-odd keys per player and the client needs one bit of
+ * it, so the bit is computed here and the object is dropped.
+ */
+const tookPart = (row) => Object.values(row?.stats ?? {}).some((v) => Number(v) > 0);
+
 export async function playerStats(fixtureId) {
   if (!fixtureId) return null;
   const rows = await (await coll('playerStats'))
@@ -929,6 +946,8 @@ export async function playerStats(fixtureId) {
       player: 1, player_id: 1, position: 1, number: 1, is_starter: 1,
       home_team: 1, away_team: 1, fixture_status: 1, updated_at: 1,
       ...Object.fromEntries([...NBA_FIELDS, ...NFL_FIELDS].map((f) => [f, 1])),
+      // Read for `played` only, and deliberately not returned — see below.
+      stats: 1,
     })
     .toArray()
     .catch(() => []);
@@ -957,6 +976,7 @@ export async function playerStats(fixtureId) {
       position: r.position ?? null,
       number: r.number ?? null,
       starter: !!r.is_starter,
+      played: tookPart(r),
       ...Object.fromEntries(fields.map((f) => [f, r[f] ?? null])),
     });
     byTeam.set(key, t);

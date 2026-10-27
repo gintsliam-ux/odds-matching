@@ -1,6 +1,7 @@
 import { coll } from './mongo.mjs';
 import { betsDb } from './betsMongo.mjs';
-import { betInstant, COUNTER_ENTRY } from './bets.mjs';
+import { betInstant } from './bets.mjs';
+import { COUNTER_ENTRY } from './betVocab.mjs';
 
 /**
  * Two things a desk wants to be told rather than go looking for: a market that
