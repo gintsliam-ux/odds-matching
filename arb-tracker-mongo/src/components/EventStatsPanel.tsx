@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BarChart3, Info } from 'lucide-react';
+import { BarChart3, ChevronDown, Info } from 'lucide-react';
 import { fetchPlayerStats, type PlayerStats, type PlayerStatLine } from '../lib/db';
 import { PanelNotice, SubTabs } from './EventTabs';
 
@@ -98,6 +98,20 @@ function Leaders({
   fields: string[];
 }) {
   const blocks = useMemo(() => scorersByStat(teams, fields), [teams, fields]);
+  /*
+   * Collapsed by exception, and independently — these are not an accordion.
+   * Gridiron puts nine blocks on the page and you may want passing and
+   * receiving open together while rushing attempts and targets are out of the
+   * way, which one-at-a-time would not allow.
+   */
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggle = (field: string) =>
+    setCollapsed((cur) => {
+      const next = new Set(cur);
+      if (next.has(field)) next.delete(field);
+      else next.add(field);
+      return next;
+    });
   if (!blocks.length) {
     return <p className="text-xs text-slate-500">Nobody recorded any of these stats in this game.</p>;
   }
@@ -105,10 +119,30 @@ function Leaders({
     <div className="space-y-3">
       {blocks.map(({ field, perTeam }) => (
         <div key={field} className="overflow-hidden rounded-xl bg-surface-raised/40">
-          <div className="border-b border-surface-border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          <button
+            type="button"
+            onClick={() => toggle(field)}
+            aria-expanded={!collapsed.has(field)}
+            className="flex w-full items-center gap-2 border-b border-surface-border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400 transition hover:bg-white/[0.03] hover:text-slate-200"
+          >
+            <ChevronDown
+              size={12}
+              className={`transition-transform ${collapsed.has(field) ? '-rotate-90' : ''}`}
+            />
             {LABELS[field] ?? field}
-          </div>
-          <div className="grid grid-cols-1 gap-px bg-surface-border sm:grid-cols-2">
+            {/* The count stays visible when the block is shut, so a collapsed
+                stat still says whether anyone recorded it and how deep it
+                goes. A header that collapses to nothing but its own name
+                makes you open it again to find that out. */}
+            <span className="ml-auto font-normal normal-case text-slate-600">
+              {perTeam.map((l) => l.length).join(' · ')}
+            </span>
+          </button>
+          <div
+            className={`grid grid-cols-1 gap-px bg-surface-border sm:grid-cols-2 ${
+              collapsed.has(field) ? 'hidden' : ''
+            }`}
+          >
             {perTeam.map((list, i) => (
               <div key={i} className="bg-surface-raised/40 p-2">
                 <div className="px-1 pb-1 text-[11px] text-slate-500">{teams[i]?.team}</div>
