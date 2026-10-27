@@ -602,124 +602,149 @@ export default function TickerPage() {
           </span>
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          {(['all', 'swiftbet', 'mybet', 'multis'] as const).map((b) => (
-            <button
-              key={b}
-              type="button"
-              onClick={() => setBrand(b)}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                brand === b
-                  ? 'bg-white/10 text-slate-100'
-                  : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-              }`}
-            >
-              {b === 'all' ? 'All brands' : BRAND_LABEL[b]}
-              <span className="ml-1.5 tabular-nums opacity-60">{counts[b] ?? 0}</span>
-            </button>
-          ))}
-          <span className="mx-1 h-4 w-px bg-surface-border" />
-          <button
-            type="button"
-            onClick={() => setSport('all')}
-            className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-              sport === 'all'
-                ? 'bg-white/10 text-slate-100'
-                : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-            }`}
+        <div className="mt-3 flex items-start gap-2">
+          {/*
+            * "Filter" set on its side, reading downwards.
+            *
+            * The strip it labels is a dozen buttons that already wrap onto two
+            * rows on a narrow window, so a horizontal label would cost a whole
+            * button's width on every one of them to say something you only
+            * need told once. Turned on its side the box is one character wide
+            * instead of six, and it sits beside the first row rather than
+            * pushing it along.
+            *
+            * `vertical-rl` rather than a rotate: a transform would move the
+            * glyphs but leave the box the width of the word, so the row would
+            * still be indented by "Filter" and the label would hang outside
+            * its own space. Writing mode changes the box too, which is the
+            * part that buys the room.
+            */}
+          <span
+            aria-hidden="true"
+            className="mt-0.5 shrink-0 select-none text-[10px] uppercase leading-none tracking-widest text-slate-600 [writing-mode:vertical-rl]"
           >
-            All sports
-          </button>
-          {sports.map(([s, n]) => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => setSport(s)}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                sport === s
-                  ? 'bg-white/10 text-slate-100'
-                  : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-              }`}
-            >
-              {s}
-              <span className="ml-1.5 tabular-nums opacity-60">{n}</span>
-            </button>
-          ))}
-          <span className="mx-1 h-4 w-px bg-surface-border" />
-          {/* Over the odds, or everything. The one on the left is the default
-              for a trading account. */}
-          {([true, false] as const).map((v) => (
-            <button
-              key={String(v)}
-              type="button"
-              onClick={() => setOnlyOut(v)}
-              title={
-                v
-                  ? 'Only bets struck ABOVE the fair price — the market with the margin divided out, Pinnacle where it priced the market and the blend otherwise. A bet can be under every book on the row and still be over the fair.'
-                  : 'Every bet on the feed.'
-              }
-              className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                onlyOut === v
-                  ? 'bg-rose-500/15 text-rose-300'
-                  : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-              }`}
-            >
-              {v ? 'Overs' : 'All'}
-              <span className="ml-1.5 tabular-nums opacity-60">
-                {v ? outCounts.byMargin[0] : bets.length}
-              </span>
-            </button>
-          ))}
-          {onlyOut && (
-            <>
-              {OUT_MARGINS.map((m, i) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => setOutMargin(m)}
-                  className={`rounded-md px-2 py-1 text-xs font-medium tabular-nums transition ${
-                    outMargin === m
-                      ? 'bg-white/10 text-slate-100'
-                      : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-                  }`}
-                >
-                  {m === 0 ? 'any' : `≥${m}%`}
-                  <span className="ml-1 tabular-nums opacity-60">{outCounts.byMargin[i]}</span>
-                </button>
-              ))}
-              <span
-                className="text-xs text-slate-600"
-                title="Bets with a fair price to answer to. The rest are unjudged — the market was not complete enough to divide to 100%, usually a book having pulled one side."
-              >
-                of {outCounts.comparable} judgeable
-              </span>
-            </>
-          )}
-          <span className="mx-1 h-4 w-px bg-surface-border" />
-          <label
-            className="flex items-center gap-1.5 text-xs text-slate-600"
-            title="Stake on the bet, before any bonus. Blank shows everything."
-          >
-            stake ≥
-            <span className="relative">
-              <span className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-600">
-                $
-              </span>
-              <input
-                value={stakeText}
-                onChange={(e) => setStakeText(e.target.value.replace(/[^\d.]/g, ''))}
-                inputMode="decimal"
-                placeholder="0"
-                aria-label="Minimum stake"
-                className={`w-20 rounded-md border bg-surface-raised/40 py-1 pl-4 pr-1.5 text-xs tabular-nums text-slate-100 outline-none placeholder:text-slate-600 ${
-                  minStake > 0 ? 'border-emerald-500/40' : 'border-surface-border'
+            Filter
+          </span>
+
+          <div role="group" aria-label="Filter" className="flex flex-wrap items-center gap-1.5">
+            {(['all', 'swiftbet', 'mybet', 'multis'] as const).map((b) => (
+              <button
+                key={b}
+                type="button"
+                onClick={() => setBrand(b)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                  brand === b
+                    ? 'bg-white/10 text-slate-100'
+                    : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
                 }`}
-              />
-            </span>
-            {minStake > 0 && (
-              <span className="tabular-nums text-slate-500">{shown.length}</span>
+              >
+                {b === 'all' ? 'All brands' : BRAND_LABEL[b]}
+                <span className="ml-1.5 tabular-nums opacity-60">{counts[b] ?? 0}</span>
+              </button>
+            ))}
+            <span className="mx-1 h-4 w-px bg-surface-border" />
+            <button
+              type="button"
+              onClick={() => setSport('all')}
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                sport === 'all'
+                  ? 'bg-white/10 text-slate-100'
+                  : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+              }`}
+            >
+              All sports
+            </button>
+            {sports.map(([s, n]) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setSport(s)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                  sport === s
+                    ? 'bg-white/10 text-slate-100'
+                    : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                }`}
+              >
+                {s}
+                <span className="ml-1.5 tabular-nums opacity-60">{n}</span>
+              </button>
+            ))}
+            <span className="mx-1 h-4 w-px bg-surface-border" />
+            {/* Over the odds, or everything. The one on the left is the default
+                for a trading account. */}
+            {([true, false] as const).map((v) => (
+              <button
+                key={String(v)}
+                type="button"
+                onClick={() => setOnlyOut(v)}
+                title={
+                  v
+                    ? 'Only bets struck ABOVE the fair price — the market with the margin divided out, Pinnacle where it priced the market and the blend otherwise. A bet can be under every book on the row and still be over the fair.'
+                    : 'Every bet on the feed.'
+                }
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                  onlyOut === v
+                    ? 'bg-rose-500/15 text-rose-300'
+                    : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                }`}
+              >
+                {v ? 'Overs' : 'All'}
+                <span className="ml-1.5 tabular-nums opacity-60">
+                  {v ? outCounts.byMargin[0] : bets.length}
+                </span>
+              </button>
+            ))}
+            {onlyOut && (
+              <>
+                {OUT_MARGINS.map((m, i) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setOutMargin(m)}
+                    className={`rounded-md px-2 py-1 text-xs font-medium tabular-nums transition ${
+                      outMargin === m
+                        ? 'bg-white/10 text-slate-100'
+                        : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                    }`}
+                  >
+                    {m === 0 ? 'any' : `≥${m}%`}
+                    <span className="ml-1 tabular-nums opacity-60">{outCounts.byMargin[i]}</span>
+                  </button>
+                ))}
+                <span
+                  className="text-xs text-slate-600"
+                  title="Bets with a fair price to answer to. The rest are unjudged — the market was not complete enough to divide to 100%, usually a book having pulled one side."
+                >
+                  of {outCounts.comparable} judgeable
+                </span>
+              </>
             )}
-          </label>
+            <span className="mx-1 h-4 w-px bg-surface-border" />
+            <label
+              className="flex items-center gap-1.5 text-xs text-slate-600"
+              title="Stake on the bet, before any bonus. Blank shows everything."
+            >
+              stake ≥
+              <span className="relative">
+                <span className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-600">
+                  $
+                </span>
+                <input
+                  value={stakeText}
+                  onChange={(e) => setStakeText(e.target.value.replace(/[^\d.]/g, ''))}
+                  inputMode="decimal"
+                  placeholder="0"
+                  aria-label="Minimum stake"
+                  className={`w-20 rounded-md border bg-surface-raised/40 py-1 pl-4 pr-1.5 text-xs tabular-nums text-slate-100 outline-none placeholder:text-slate-600 ${
+                    minStake > 0 ? 'border-emerald-500/40' : 'border-surface-border'
+                  }`}
+                />
+              </span>
+              {minStake > 0 && (
+                <span className="tabular-nums text-slate-500">{shown.length}</span>
+              )}
+            </label>
+          </div>
         </div>
       </header>
 
