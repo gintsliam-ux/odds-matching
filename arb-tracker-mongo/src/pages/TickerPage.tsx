@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { BetsTableSkeleton } from '../components/Skeleton';
 import { useNumParam, useParam } from '../lib/urlState';
+import { IS_MAIN_SPORT, MAIN_LEAGUES, MAIN_SPORTS, inLeague, type MainSport } from '../lib/leagues';
 import { SignOut } from '../components/SignOut';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Gift, Loader2, Radio } from 'lucide-react';
@@ -354,6 +355,21 @@ export default function TickerPage() {
   const brand = brandParam as 'all' | 'swiftbet' | 'mybet' | 'multis';
   const [sport, setSport] = useParam('sport', 'all');
   /*
+   * The league, by its chip label, scoped to the sport above it.
+   *
+   * Labels are unique within a sport but not across them — basketball has a
+   * Champions League of its own and both codes have a Super League — so this
+   * is only ever read alongside `sport`, and choosing a new sport clears it.
+   */
+  const [league, setLeague] = useParam('league', 'all');
+  const leagues = IS_MAIN_SPORT.has(sport) ? MAIN_LEAGUES[sport as MainSport] : [];
+  const activeLeague = leagues.find((l) => l.label === league) ?? null;
+  const pickSport = (s: string) => {
+    setSport(s);
+    // A league from the sport you just left would filter everything away.
+    setLeague('all');
+  };
+  /*
    * Kept as the typed text, not a number. Parsing on every keystroke turns "1."
    * into 1 and then fights the caret when the next character arrives; the value
    * is read as a number only where it is used.
@@ -503,11 +519,41 @@ export default function TickerPage() {
     };
   }, []);
 
-  const sports = useMemo(() => {
+  /*
+   * How many bets per sport, and which sports are not one of the eight.
+   *
+   * The eight are drawn from the fixed list so they hold their places; `other`
+   * is what is left, still ordered by count as the whole row used to be. A
+   * cricket or volleyball bet is reachable exactly as before — it just sits
+   * after the sports that are always there rather than ahead of them.
+   */
+  const { bySport, other } = useMemo(() => {
     const c = new Map<string, number>();
     for (const b of bets) if (b.sport) c.set(b.sport, (c.get(b.sport) ?? 0) + 1);
-    return [...c.entries()].sort((a, b) => b[1] - a[1]);
+    return {
+      bySport: c,
+      other: [...c.entries()]
+        .filter(([s]) => !IS_MAIN_SPORT.has(s))
+        .sort((a, b) => b[1] - a[1]),
+    };
   }, [bets]);
+
+  /*
+   * The league chips: this sport's main leagues that something has been struck
+   * on, plus whichever one is selected so the chip you just clicked cannot
+   * vanish under you when the feed turns over.
+   *
+   * Only the ones with bets, unlike the sports above. Soccer has twenty main
+   * leagues and the feed holds two hundred bets, so a fixed row would be
+   * mostly zeroes — and a league with nothing on it is not a filter, it is an
+   * empty table you have to click back out of.
+   */
+  const leagueChips = useMemo(() => {
+    const inSport = bets.filter((b) => b.sport === sport);
+    return leagues
+      .map((l) => ({ league: l, n: inSport.filter((b) => inLeague(b, l)).length }))
+      .filter(({ league: l, n }) => n > 0 || l.label === league);
+  }, [bets, sport, leagues, league]);
 
   const shown = useMemo(
     () =>
@@ -515,12 +561,13 @@ export default function TickerPage() {
         (b) =>
           (brand === 'all' || b.brand === brand) &&
           (sport === 'all' || b.sport === sport) &&
+          (!activeLeague || inLeague(b, activeLeague)) &&
           // A missing stake is not a small stake — it fails the filter rather
           // than being counted as zero and silently dropped at every threshold.
           (minStake === 0 || (typeof b.stake === 'number' && b.stake >= minStake)) &&
           (!onlyOut || overTheOdds(b, outMargin)),
       ),
-    [bets, brand, sport, minStake, onlyOut, outMargin],
+    [bets, brand, sport, activeLeague, minStake, onlyOut, outMargin],
   );
 
   const columns = useMemo(() => bookColumns(bets), [bets]);
@@ -540,7 +587,10 @@ export default function TickerPage() {
   // all — the second number is what stops the first being read as a rate.
   const outCounts = useMemo(() => {
     const base = bets.filter(
-      (b) => (brand === 'all' || b.brand === brand) && (sport === 'all' || b.sport === sport),
+      (b) =>
+        (brand === 'all' || b.brand === brand) &&
+        (sport === 'all' || b.sport === sport) &&
+        (!activeLeague || inLeague(b, activeLeague)),
     );
     return {
       // Judgeable means there IS a fair to answer to, not that a book priced
@@ -549,7 +599,7 @@ export default function TickerPage() {
       comparable: base.filter((b) => overFair(b).fair != null).length,
       byMargin: OUT_MARGINS.map((m) => base.filter((b) => overTheOdds(b, m)).length),
     };
-  }, [bets, brand, sport]);
+  }, [bets, brand, sport, activeLeague]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface">
@@ -626,124 +676,202 @@ export default function TickerPage() {
             Filter
           </span>
 
-          <div role="group" aria-label="Filter" className="flex flex-wrap items-center gap-1.5">
-            {(['all', 'swiftbet', 'mybet', 'multis'] as const).map((b) => (
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <div role="group" aria-label="Filter" className="flex flex-wrap items-center gap-1.5">
+              {(['all', 'swiftbet', 'mybet', 'multis'] as const).map((b) => (
+                <button
+                  key={b}
+                  type="button"
+                  onClick={() => setBrand(b)}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                    brand === b
+                      ? 'bg-white/10 text-slate-100'
+                      : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                  }`}
+                >
+                  {b === 'all' ? 'All brands' : BRAND_LABEL[b]}
+                  <span className="ml-1.5 tabular-nums opacity-60">{counts[b] ?? 0}</span>
+                </button>
+              ))}
+              <span className="mx-1 h-4 w-px bg-surface-border" />
               <button
-                key={b}
                 type="button"
-                onClick={() => setBrand(b)}
+                onClick={() => pickSport('all')}
                 className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                  brand === b
+                  sport === 'all'
                     ? 'bg-white/10 text-slate-100'
                     : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
                 }`}
               >
-                {b === 'all' ? 'All brands' : BRAND_LABEL[b]}
-                <span className="ml-1.5 tabular-nums opacity-60">{counts[b] ?? 0}</span>
+                All sports
               </button>
-            ))}
-            <span className="mx-1 h-4 w-px bg-surface-border" />
-            <button
-              type="button"
-              onClick={() => setSport('all')}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                sport === 'all'
-                  ? 'bg-white/10 text-slate-100'
-                  : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-              }`}
-            >
-              All sports
-            </button>
-            {sports.map(([s, n]) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setSport(s)}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                  sport === s
-                    ? 'bg-white/10 text-slate-100'
-                    : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-                }`}
-              >
-                {s}
-                <span className="ml-1.5 tabular-nums opacity-60">{n}</span>
-              </button>
-            ))}
-            <span className="mx-1 h-4 w-px bg-surface-border" />
-            {/* Over the odds, or everything. The one on the left is the default
-                for a trading account. */}
-            {([true, false] as const).map((v) => (
-              <button
-                key={String(v)}
-                type="button"
-                onClick={() => setOnlyOut(v)}
-                title={
-                  v
-                    ? 'Only bets struck ABOVE the fair price — the market with the margin divided out, Pinnacle where it priced the market and the blend otherwise. A bet can be under every book on the row and still be over the fair.'
-                    : 'Every bet on the feed.'
-                }
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                  onlyOut === v
-                    ? 'bg-rose-500/15 text-rose-300'
-                    : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-                }`}
-              >
-                {v ? 'Overs' : 'All'}
-                <span className="ml-1.5 tabular-nums opacity-60">
-                  {v ? outCounts.byMargin[0] : bets.length}
-                </span>
-              </button>
-            ))}
-            {onlyOut && (
-              <>
-                {OUT_MARGINS.map((m, i) => (
+              {/*
+                * The eight, always, in alphabetical order — see MAIN_SPORTS.
+                *
+                * Shown even with nothing struck on them, which is the whole
+                * point of a fixed list: the chip for the sport you want is in
+                * the same place every time you look, instead of moving as the
+                * feed re-sorts itself by count. One with no bets is dimmed and
+                * still clickable; the empty table it gives you is the honest
+                * answer to "has anything gone through on the NFL".
+                */}
+              {MAIN_SPORTS.map((s) => {
+                const n = bySport.get(s) ?? 0;
+                return (
                   <button
-                    key={m}
+                    key={s}
                     type="button"
-                    onClick={() => setOutMargin(m)}
-                    className={`rounded-md px-2 py-1 text-xs font-medium tabular-nums transition ${
-                      outMargin === m
+                    onClick={() => pickSport(s)}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                      sport === s
                         ? 'bg-white/10 text-slate-100'
+                        : n === 0
+                          ? 'text-slate-700 hover:bg-white/5 hover:text-slate-400'
+                          : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                    }`}
+                  >
+                    {s}
+                    <span className="ml-1.5 tabular-nums opacity-60">{n}</span>
+                  </button>
+                );
+              })}
+              {/* Whatever else the feed is carrying, as the whole row used to be. */}
+              {other.length > 0 && <span className="mx-1 h-4 w-px bg-surface-border" />}
+              {other.map(([s, n]) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => pickSport(s)}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                    sport === s
+                      ? 'bg-white/10 text-slate-100'
+                      : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                  }`}
+                >
+                  {s}
+                  <span className="ml-1.5 tabular-nums opacity-60">{n}</span>
+                </button>
+              ))}
+              <span className="mx-1 h-4 w-px bg-surface-border" />
+              {/* Over the odds, or everything. The one on the left is the default
+                  for a trading account. */}
+              {([true, false] as const).map((v) => (
+                <button
+                  key={String(v)}
+                  type="button"
+                  onClick={() => setOnlyOut(v)}
+                  title={
+                    v
+                      ? 'Only bets struck ABOVE the fair price — the market with the margin divided out, Pinnacle where it priced the market and the blend otherwise. A bet can be under every book on the row and still be over the fair.'
+                      : 'Every bet on the feed.'
+                  }
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                    onlyOut === v
+                      ? 'bg-rose-500/15 text-rose-300'
+                      : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                  }`}
+                >
+                  {v ? 'Overs' : 'All'}
+                  <span className="ml-1.5 tabular-nums opacity-60">
+                    {v ? outCounts.byMargin[0] : bets.length}
+                  </span>
+                </button>
+              ))}
+              {onlyOut && (
+                <>
+                  {OUT_MARGINS.map((m, i) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setOutMargin(m)}
+                      className={`rounded-md px-2 py-1 text-xs font-medium tabular-nums transition ${
+                        outMargin === m
+                          ? 'bg-white/10 text-slate-100'
+                          : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                      }`}
+                    >
+                      {m === 0 ? 'any' : `≥${m}%`}
+                      <span className="ml-1 tabular-nums opacity-60">{outCounts.byMargin[i]}</span>
+                    </button>
+                  ))}
+                  <span
+                    className="text-xs text-slate-600"
+                    title="Bets with a fair price to answer to. The rest are unjudged — the market was not complete enough to divide to 100%, usually a book having pulled one side."
+                  >
+                    of {outCounts.comparable} judgeable
+                  </span>
+                </>
+              )}
+              <span className="mx-1 h-4 w-px bg-surface-border" />
+              <label
+                className="flex items-center gap-1.5 text-xs text-slate-600"
+                title="Stake on the bet, before any bonus. Blank shows everything."
+              >
+                stake ≥
+                <span className="relative">
+                  <span className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-600">
+                    $
+                  </span>
+                  <input
+                    value={stakeText}
+                    onChange={(e) => setStakeText(e.target.value.replace(/[^\d.]/g, ''))}
+                    inputMode="decimal"
+                    placeholder="0"
+                    aria-label="Minimum stake"
+                    className={`w-20 rounded-md border bg-surface-raised/40 py-1 pl-4 pr-1.5 text-xs tabular-nums text-slate-100 outline-none placeholder:text-slate-600 ${
+                      minStake > 0 ? 'border-emerald-500/40' : 'border-surface-border'
+                    }`}
+                  />
+                </span>
+                {minStake > 0 && (
+                  <span className="tabular-nums text-slate-500">{shown.length}</span>
+                )}
+              </label>
+            </div>
+
+            {/*
+              * The leagues of the sport above, on their own line.
+              *
+              * A second row rather than more chips on the first: the leagues
+              * only mean anything under a chosen sport, and run in beside the
+              * brands they would read as another twenty sports. The row is
+              * absent until a sport is picked, so the strip is the height it
+              * always was until you ask for it.
+              *
+              * Only the leagues with bets on them — see leagueChips — and the
+              * one already selected, which stays so the chip cannot disappear
+              * from under the pointer when the feed turns over.
+              */}
+            {leagueChips.length > 0 && (
+              <div role="group" aria-label="League" className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setLeague('all')}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                    league === 'all'
+                      ? 'bg-white/10 text-slate-100'
+                      : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                  }`}
+                >
+                  All leagues
+                </button>
+                {leagueChips.map(({ league: l, n }) => (
+                  <button
+                    key={l.label}
+                    type="button"
+                    onClick={() => setLeague(l.label)}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                      league === l.label
+                        ? 'bg-emerald-500/15 text-emerald-300'
                         : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
                     }`}
                   >
-                    {m === 0 ? 'any' : `≥${m}%`}
-                    <span className="ml-1 tabular-nums opacity-60">{outCounts.byMargin[i]}</span>
+                    {l.label}
+                    <span className="ml-1.5 tabular-nums opacity-60">{n}</span>
                   </button>
                 ))}
-                <span
-                  className="text-xs text-slate-600"
-                  title="Bets with a fair price to answer to. The rest are unjudged — the market was not complete enough to divide to 100%, usually a book having pulled one side."
-                >
-                  of {outCounts.comparable} judgeable
-                </span>
-              </>
+              </div>
             )}
-            <span className="mx-1 h-4 w-px bg-surface-border" />
-            <label
-              className="flex items-center gap-1.5 text-xs text-slate-600"
-              title="Stake on the bet, before any bonus. Blank shows everything."
-            >
-              stake ≥
-              <span className="relative">
-                <span className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-600">
-                  $
-                </span>
-                <input
-                  value={stakeText}
-                  onChange={(e) => setStakeText(e.target.value.replace(/[^\d.]/g, ''))}
-                  inputMode="decimal"
-                  placeholder="0"
-                  aria-label="Minimum stake"
-                  className={`w-20 rounded-md border bg-surface-raised/40 py-1 pl-4 pr-1.5 text-xs tabular-nums text-slate-100 outline-none placeholder:text-slate-600 ${
-                    minStake > 0 ? 'border-emerald-500/40' : 'border-surface-border'
-                  }`}
-                />
-              </span>
-              {minStake > 0 && (
-                <span className="tabular-nums text-slate-500">{shown.length}</span>
-              )}
-            </label>
           </div>
         </div>
       </header>
