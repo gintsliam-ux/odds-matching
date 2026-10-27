@@ -521,7 +521,10 @@ export default function PendingBetsPage() {
                     </span>
                   </td>
                   <td className="min-w-0 px-2 py-1.5">
-                    <IdChip value={b.userId} title="User" />
+                    <IdChip
+                      value={b.userPin ?? b.userId}
+                      title={b.userPin ? `Backoffice pin (account ${b.userId})` : 'User'}
+                    />
                     {(b.tags ?? []).length > 0 && (
                       <div className="mt-0.5">
                         <TagChip tags={b.tags ?? []} />

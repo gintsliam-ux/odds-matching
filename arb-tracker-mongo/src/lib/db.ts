@@ -370,6 +370,13 @@ export interface TickerBet {
   /** The book's own bet reference, and who struck it. Shown truncated, copied whole. */
   betId: string | null;
   userId: string | null;
+  /**
+   * The number that works in the backoffice. Apollo's pin for a mybet or
+   * multis customer is their account id plus 1000, so it is NOT `userId` —
+   * which stays the raw account id because every join keys on it.
+   */
+  userPin?: string | null;
+
   brand: 'swiftbet' | 'mybet' | 'multis';
   placedAt: string | null;
   startsAt: string | null;

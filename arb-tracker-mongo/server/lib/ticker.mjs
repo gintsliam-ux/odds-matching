@@ -392,6 +392,19 @@ export function mapMulti(m) {
     id: String(m._id),
     betId: m.transaction_id != null ? String(m.transaction_id) : null,
     userId: m.user_accountID != null ? String(m.user_accountID) : null,
+    /*
+     * The number that works in the backoffice, which is NOT the one the bet
+     * carries: Apollo's pin for a mybet or multis customer is their
+     * user_accountID plus 1000 — account 60560 is pin 61560.
+     *
+     * Derived alongside rather than replacing `userId`, because `userId` is the
+     * join key: multi_tags, user_scorecards and our own tables all key on the
+     * raw account id, and shifting it by 1000 would silently stop every tag
+     * from matching while the page still looked right.
+     */
+    userPin: Number.isFinite(Number(m.user_accountID))
+      ? String(Number(m.user_accountID) + 1000)
+      : null,
     brand: m.transaction_licenseid === 'MultisComAu' ? 'multis' : 'mybet',
     placedAt: iso(betInstant(m.transaction_date)),
     startsAt: null,
