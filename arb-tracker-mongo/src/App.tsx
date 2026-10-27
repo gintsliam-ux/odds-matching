@@ -239,9 +239,14 @@ export default function App() {
   // The mapping page reads tables the public odds surface does not publish.
   const caps = useCapabilities();
   /*
-   * A trading account is refused the movers page and the mapping tables by the
-   * server, so those two links are not offered to it — a link that 403s is
-   * worse than no link. Everything else in the rail is within its reach.
+   * The rail links a trading account is refused by the server, so none of them
+   * is offered to it — a link that 403s is worse than no link.
+   *
+   * It holds the board itself now, so the rail it draws is the admin's rail and
+   * every entry on it has to be checked rather than just the two that used to
+   * be. Movers, the mapping tables, settlement and late bets are all outside
+   * TRADING_ALLOWED; the ticker, the board and the event page beneath it are
+   * not. Pending has always been admin-only on its own line below.
    */
   const { user } = useAuth();
   const deskOnly = user?.role !== 'trading';
@@ -854,8 +859,8 @@ export default function App() {
             {/* Movers reads the same price ladder the board already holds, so
                 it works on either source — no mapping tables involved. */}
             {deskOnly && <RailLink to="/movers" icon={TrendingDown}>Movers</RailLink>}
-            {caps.bets && <RailLink to="/settlement" icon={Clock}>Settlement</RailLink>}
-            {caps.bets && <RailLink to="/late-bets" icon={AlertTriangle}>Late Bets</RailLink>}
+            {caps.bets && deskOnly && <RailLink to="/settlement" icon={Clock}>Settlement</RailLink>}
+            {caps.bets && deskOnly && <RailLink to="/late-bets" icon={AlertTriangle}>Late Bets</RailLink>}
             {/* Admin only, matching ADMIN_ONLY on the server. */}
             {caps.bets && user?.role === 'admin' && (
               <RailLink to="/pending" icon={Hourglass}>Pending Bets</RailLink>

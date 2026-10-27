@@ -25,7 +25,6 @@ import { EventStatsPanel } from './EventStatsPanel';
 import { EventDetailsPanel } from './EventDetailsPanel';
 import { BetsPanel } from './BetsPanel';
 import { useCapabilities } from '../lib/capabilitiesContext';
-import { useAuth } from '../lib/useAuth';
 
 // Selection + Best (+ Betfair back/lay for two-sided events), then one column
 // per fixed-odds book. Golf outrights have no exchange, so those two drop out.
@@ -198,7 +197,6 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
   // A deployed instance reads the public odds surface, which publishes no bets
   // and no mapping tables. Those tabs are dropped rather than shown empty.
   const caps = useCapabilities();
-  const { user } = useAuth();
   /*
    * A trading account is served the current price and nothing behind it — the
    * ladder is stripped from the payload, not merely hidden — so the hover card
@@ -353,13 +351,7 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
       <EventTabs
         tabs={[
           { key: 'markets' as const, label: 'Markets', badge: markets.length || null },
-          /*
-           * A trading account is refused /api/bets by the server, so offering
-           * the tab would only route it into a 403. Its own view is the ticker.
-           */
-          ...(caps.bets && user?.role !== 'trading'
-            ? [{ key: 'bets' as const, label: 'Bets' }]
-            : []),
+          ...(caps.bets ? [{ key: 'bets' as const, label: 'Bets' }] : []),
           ...(caps.mapping ? [{ key: 'details' as const, label: 'Details' }] : []),
           /*
            * NBA and NFL only — `player_stats` carries those two and nothing

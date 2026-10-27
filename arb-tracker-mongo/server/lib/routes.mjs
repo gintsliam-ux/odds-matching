@@ -391,17 +391,26 @@ const MONGO_ONLY = {
 /**
  * What a `trading` account may read.
  *
- * Two pages: the bet ticker, and the prices for one team or player. Nothing
- * that lists the market at large — not the board, not its live strip, not the
- * movers page, the mapping tables, settlement, late bets or the bets archive.
+ * The board, exactly as an admin sees it, minus the price history — plus the
+ * bet ticker and the prices page it already had. The board moved in and out of
+ * this list twice before settling here; what changed on the last pass is that
+ * the exclusion is now a specific one (the ladder) rather than the whole page,
+ * and the ladder is stripped from the payload a few lines below rather than
+ * hidden in the client.
  *
- * It was briefly wider, carrying the board and the strip above it. Narrowed
- * back on the desk's word: the role is for watching what we have taken and
- * checking a price, and a board is neither.
+ * What a trading account still does not get, and why none of it is the board:
+ *
+ *   /api/movers        ranks fixtures BY price movement. It is the history in
+ *                      page form, so serving it from a stripped payload would
+ *                      either fail or lie.
+ *   /api/settlement    their own pages, reached from Tools, not from the board.
+ *   /api/late-bets
+ *   /api/mapping/*     the tables behind the desk's matching.
+ *   /api/pending       admin only for everyone — see ADMIN_ONLY.
  *
  * Enforced HERE rather than only in the client's routing, because a hidden link
  * is not a restriction — the endpoints are a cookie and a curl away. The
- * client-side redirect exists so a trading user is never shown a page that
+ * client-side redirects exist so a trading user is never shown a page that
  * would then fail to load; this is the part that decides.
  *
  * An allow-list, so a route added later is denied to trading until someone
@@ -434,6 +443,19 @@ const TRADING_ALLOWED = new Set([
   'GET /api/event',
   'GET /api/event/details',
   'GET /api/health',
+  // The board: its fixture list, the day picker, the feed lights above it, and
+  // the h2h prices the rows carry. None of these payloads holds any history —
+  // checked field by field against HISTORY_FIELDS, not assumed.
+  'GET /api/events',
+  'GET /api/events/day',
+  'GET /api/pulse',
+  'GET /api/h2h',
+  'POST /api/h2h',
+  // The event page's own tabs, which are part of the board rather than
+  // somewhere else it can now reach. Bets is the same data as the ticker the
+  // role already lives on, one fixture at a time.
+  'GET /api/player-stats',
+  'GET /api/bets',
 ]);
 
 /**
@@ -444,11 +466,28 @@ const TRADING_ALLOWED = new Set([
  * draw is still a column it was sent. `current_price` and the per-book status
  * survive; the ladder, the opening and closing prices and the daily series do
  * not.
+ *
+ * `/api/odds` is the only allowed route that carries any of this, which was
+ * measured rather than assumed: of the payloads a trading account can now
+ * reach, the board list, the day list, the pulse, h2h, the event, its details,
+ * the player stats and the bets hold none of these fields, and `/api/odds`
+ * holds all eleven — on a flat array of price rows, which is the shape
+ * `stripHistory` needs to be able to see them.
  */
 const HISTORY_FIELDS = [
   'flucs', 'daily_prices', 'open_price', 'open_at', 'close_price', 'closed_at',
   'price_6h', 'price_3h', 'price_1h', 'price_30m', 'price_10m',
 ];
+
+/**
+ * The allowed routes whose payload holds any HISTORY_FIELDS.
+ *
+ * A set rather than the `key === 'GET /api/odds'` this used to compare against,
+ * because the list of routes a trading account can reach has stopped being two
+ * pages' worth — the next payload that carries a ladder should be added here
+ * and not have the condition rewritten around it.
+ */
+const HISTORY_ROUTES = new Set(['GET /api/odds']);
 
 function stripHistory(body) {
   if (!Array.isArray(body)) return body;
@@ -624,7 +663,7 @@ export async function handleApi({ method, pathname, searchParams, body, cookies 
   const url = { searchParams };
   const out = await handler(url, body);
   // The current price only — see HISTORY_FIELDS.
-  if (me?.role === 'trading' && key === 'GET /api/odds') {
+  if (me?.role === 'trading' && HISTORY_ROUTES.has(key)) {
     return { status: 200, body: stripHistory(out) };
   }
   return { status: 200, body: out };

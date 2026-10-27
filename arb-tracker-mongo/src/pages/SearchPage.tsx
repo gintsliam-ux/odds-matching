@@ -14,13 +14,13 @@ import type { SportEvent } from '../lib/types';
 /**
  * Find a team or a player, and see only their prices.
  *
- * This is the whole surface for the `trading` role — no board, no rail, nothing
- * that lists the market at large. You ask for a name and you get that name's
- * fixtures, and the grid underneath is the same markets-by-bookmaker table the
- * event page draws, because it is literally the same component.
+ * You ask for a name and you get that name's fixtures, and the grid underneath
+ * is the same markets-by-bookmaker table the event page draws, because it is
+ * literally the same component.
  *
- * Everyone else can reach it too; it is a quicker way to one team than scrolling
- * the rail.
+ * This was once the whole surface for the `trading` role, which had no board to
+ * put a rail on. It has one now, so this is what it always was for everybody
+ * else: a quicker way to one team than scrolling the rail.
  */
 
 /** Long enough that typing a name is one request, short enough to feel live. */

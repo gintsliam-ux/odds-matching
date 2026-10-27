@@ -556,15 +556,10 @@ export default function TickerPage() {
       <header className="shrink-0 border-b border-surface-border px-5 py-3">
         <div className="flex items-center gap-3">
           <Link
-            /*
-             * A trading account has the ticker and the prices page and nothing
-             * else, so Board would be a link straight back to here. The two
-             * cross-link instead.
-             */
-            to={user?.role === 'trading' ? '/prices' : '/'}
+            to="/"
             className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
           >
-            <ArrowLeft size={12} /> {user?.role === 'trading' ? 'Prices' : 'Board'}
+            <ArrowLeft size={12} /> Board
           </Link>
           <span className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-slate-100">
             <Radio
@@ -917,17 +912,7 @@ export default function TickerPage() {
                       <div className="truncate text-slate-200">
                         {b.fixtureId && b.event ? (
                           <Link
-                            /*
-                             * A trading account cannot open the event page — it
-                             * lives inside the board — so its link goes to the
-                             * prices page for the same fixture, which is the same
-                             * grid without the rail around it.
-                             */
-                            to={
-                              user?.role === 'trading'
-                                ? `/prices?fixture=${encodeURIComponent(b.fixtureId)}`
-                                : `/event/${eventSlug(b.event)}/${b.fixtureId}`
-                            }
+                            to={`/event/${eventSlug(b.event)}/${b.fixtureId}`}
                             className="hover:text-emerald-300"
                           >
                             {b.event}

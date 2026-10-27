@@ -6,9 +6,11 @@ import { useAuth } from '../lib/useAuth';
  *
  * The rail carries this already (see SignedInAs in App), which was fine while
  * every full-width page was somewhere you visited briefly from the board. It
- * stopped being fine once a role existed that lives on the ticker: sign-out was
- * only ever on the board, so a trading account had no way out of the page it
- * spends its day on without navigating somewhere it could not go.
+ * stopped being fine once a role existed that lived on the ticker and could not
+ * reach the board at all: sign-out was only ever on the board, so a trading
+ * account had no way out of the page it spends its day on. That role has the
+ * board again, but the reasoning survives it — these pages still have no rail,
+ * and a full-width page should not need a navigation to sign out of.
  *
  * Shared rather than repeated per page, so the way out cannot be present on
  * four of five and nobody notice which.

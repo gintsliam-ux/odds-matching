@@ -53,12 +53,15 @@ function AdminOnly({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * A `trading` account has two pages: the ticker, and the prices for one team or
- * player. Everything else lands it on the ticker.
+ * The pages a `trading` account does not have. Everything else lands it on the
+ * board, which it now shares with an admin.
  *
- * The whole layout is guarded and not just its index, so `/event/:slug/:id`
- * goes the same way — the event page is reached through the board's rail, and
- * the rail lists the market at large.
+ * The board and the event page beneath it used to be guarded here too. They
+ * are not any more: the one thing withheld from the role on those pages is the
+ * price history, and that is taken out of the payload server-side rather than
+ * by keeping it off the page. What is left behind this guard is the pages that
+ * are not the board — movers (which ranks by the very history the role does
+ * not get), settlement, late bets and the mapping tables.
  *
  * Note where the real restriction lives. This redirect is so a trading user is
  * never shown a surface that will not load for them -- the server refuses those
@@ -91,13 +94,13 @@ createRoot(document.getElementById('root')!).render(
       */}
       <Suspense fallback={null}>
       <Routes>
-        <Route path="/" element={<DeskOnly><App /></DeskOnly>}>
+        {/* The board, shared by every role — see DeskOnly. */}
+        <Route path="/" element={<App />}>
           <Route index element={<EventView />} />
           <Route path="event/:slug/:fixtureId" element={<EventView />} />
         </Route>
         {/* Full-width: the mapping table has no use for the event rail. */}
         <Route path="/movers" element={<DeskOnly><MoversPage /></DeskOnly>} />
-        {/* The two a trading account has. */}
         <Route path="/ticker" element={<TickerPage />} />
         {/*
           * `/prices` is what the page is called, in its own heading and in the
