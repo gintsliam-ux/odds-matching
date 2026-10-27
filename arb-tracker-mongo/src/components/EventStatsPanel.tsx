@@ -38,36 +38,38 @@ const LABELS: Record<string, string> = {
 };
 
 /**
- * Who led each team in each stat.
+ * Everyone who recorded each stat, in order, per team.
  *
  * Broken down BY STAT rather than by player, because that is the question
  * being asked: not "how did this player do" — the All view answers that — but
- * "who carried the rushing yards", with both teams side by side so the two are
+ * "who got the rushing yards", with both teams side by side so the two are
  * read against each other rather than looked up twice.
  *
- * A stat nobody recorded is dropped rather than printed as a row of dashes:
+ * Every player who recorded the stat is listed, longest first, not just the
+ * leader: the second and third names are the ones that decide a props market,
+ * and a view that stopped at the top one would hide exactly the depth it is
+ * being consulted for.
+ *
+ * A stat nobody recorded is dropped rather than printed as a column of dashes:
  * most of an NFL roster has no passing yards, and a block saying so of both
- * teams is noise. A team with no entry on a stat other teams have still shows a
- * dash, because there the absence is the information.
+ * teams is noise. A team with nobody on a stat the other team does have still
+ * shows a dash, because there the absence is the information.
  */
-type Leader = { player: string | null; position: string | null; value: number } | null;
+type Scorer = { player: string | null; position: string | null; value: number };
 
-function leadersByStat(
+function scorersByStat(
   teams: PlayerStats['teams'],
   fields: string[],
-): { field: string; perTeam: Leader[] }[] {
-  const out: { field: string; perTeam: Leader[] }[] = [];
+): { field: string; perTeam: Scorer[][] }[] {
+  const out: { field: string; perTeam: Scorer[][] }[] = [];
   for (const field of fields) {
-    const perTeam: Leader[] = teams.map((t) => {
-      let best: Leader = null;
-      for (const p of t.players) {
-        const v = Number(p[field]);
-        if (!Number.isFinite(v) || v <= 0) continue;
-        if (!best || v > best.value) best = { player: p.player, position: p.position, value: v };
-      }
-      return best;
-    });
-    if (perTeam.some(Boolean)) out.push({ field, perTeam });
+    const perTeam = teams.map((t) =>
+      t.players
+        .map((p) => ({ player: p.player, position: p.position, value: Number(p[field]) }))
+        .filter((x) => Number.isFinite(x.value) && x.value > 0)
+        .sort((a, b) => b.value - a.value),
+    );
+    if (perTeam.some((list) => list.length)) out.push({ field, perTeam });
   }
   return out;
 }
@@ -75,7 +77,7 @@ function leadersByStat(
 const num = (v: PlayerStatLine[string]) =>
   v == null || v === '' ? <span className="text-slate-700">–</span> : String(v);
 
-/** One stat, with each team's leader in it. */
+/** One block per stat: every player who recorded it, in order, by team. */
 function Leaders({
   teams,
   fields,
@@ -83,56 +85,51 @@ function Leaders({
   teams: PlayerStats['teams'];
   fields: string[];
 }) {
-  const rows = useMemo(() => leadersByStat(teams, fields), [teams, fields]);
-  if (!rows.length) {
-    return (
-      <p className="text-xs text-slate-500">
-        Nobody recorded any of these stats in this game.
-      </p>
-    );
+  const blocks = useMemo(() => scorersByStat(teams, fields), [teams, fields]);
+  if (!blocks.length) {
+    return <p className="text-xs text-slate-500">Nobody recorded any of these stats in this game.</p>;
   }
   return (
-    <div className="overflow-hidden rounded-xl bg-surface-raised/40">
-      <table className="w-full border-collapse text-sm">
-        <thead className="text-[11px] uppercase tracking-wide text-slate-500">
-          <tr>
-            <th className="w-28 px-3 py-1.5 text-left font-medium">Stat</th>
-            {teams.map((t) => (
-              <th key={`${t.side}:${t.team}`} className="px-3 py-1.5 text-left font-medium">
-                {t.team}
-                <span className="ml-1.5 text-[10px] normal-case text-slate-600">{t.side}</span>
-              </th>
+    <div className="space-y-3">
+      {blocks.map(({ field, perTeam }) => (
+        <div key={field} className="overflow-hidden rounded-xl bg-surface-raised/40">
+          <div className="border-b border-surface-border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+            {LABELS[field] ?? field}
+          </div>
+          <div className="grid grid-cols-1 gap-px bg-surface-border sm:grid-cols-2">
+            {perTeam.map((list, i) => (
+              <div key={i} className="bg-surface-raised/40 p-2">
+                <div className="px-1 pb-1 text-[11px] text-slate-500">{teams[i]?.team}</div>
+                {list.length === 0 ? (
+                  <div className="px-1 text-slate-700">–</div>
+                ) : (
+                  <ol className="space-y-0.5">
+                    {list.map((x, n) => (
+                      <li
+                        key={`${x.player}:${n}`}
+                        className="flex items-baseline gap-2 rounded px-1 py-0.5 text-sm hover:bg-white/[0.03]"
+                      >
+                        {/* The number first: on this view the value is what is
+                            being compared down the column and across to the
+                            other team, and the name answers "who" second. */}
+                        <b className="w-10 shrink-0 text-right tabular-nums text-slate-100">
+                          {x.value}
+                        </b>
+                        <span className="truncate text-slate-300">{x.player}</span>
+                        {x.position && (
+                          <span className="ml-auto shrink-0 text-[10px] text-slate-600">
+                            {x.position}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
             ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(({ field, perTeam }) => (
-            <tr key={field} className="border-t border-surface-border/60 hover:bg-white/[0.02]">
-              <td className="px-3 py-1.5 text-[11px] uppercase tracking-wide text-slate-500">
-                {LABELS[field] ?? field}
-              </td>
-              {perTeam.map((l, i) => (
-                <td key={i} className="px-3 py-1.5">
-                  {l ? (
-                    <span className="flex items-baseline gap-2">
-                      {/* The number first: on this view the value is what is
-                          being compared across the two columns, and the name
-                          answers "who" second. */}
-                      <b className="tabular-nums text-slate-100">{l.value}</b>
-                      <span className="truncate text-slate-300">{l.player}</span>
-                      {l.position && (
-                        <span className="text-[10px] text-slate-600">{l.position}</span>
-                      )}
-                    </span>
-                  ) : (
-                    <span className="text-slate-700">–</span>
-                  )}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
