@@ -604,120 +604,140 @@ export default function TickerPage() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface">
       <header className="shrink-0 border-b border-surface-border px-5 py-3">
-        <div className="flex items-center gap-3">
-          <Link
-            to="/"
-            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
-          >
-            <ArrowLeft size={12} /> Board
-          </Link>
-          <span className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-slate-100">
-            <Radio
-              size={15}
-              className={live ? 'animate-pulse text-emerald-400' : 'text-slate-600'}
-            />
-            Ticker
-          </span>
-          <span className="text-xs text-slate-600">
-            {live ? 'Live — bets appear as they are struck' : 'Latest single bets, every brand, every sport'}
-          </span>
-          {/*
-            * Both times, but labelled by what is actually carrying the feed.
-            *
-            * The first paint is a FETCH, not a push, so the rows on screen are
-            * always the fetch's until something is struck — and once the stream
-            * connects the 30s poll is stopped on purpose, so its timestamp just
-            * ages. Calling that "polled 1h ago" reads as broken when it is the
-            * healthy state. While the stream is up it is the load; only when
-            * the stream is down is polling the thing keeping the table current.
-            */}
-          <span className="flex items-center gap-2 text-xs tabular-nums text-slate-600">
-            <span title={lastPush ? new Date(lastPush).toLocaleString() : 'no bet struck since this page opened'}>
-              pushed <span className="text-slate-400">{ago(lastPush)}</span>
-            </span>
-            <span className="text-slate-700">·</span>
-            <span
-              title={
-                lastPoll
-                  ? `${new Date(lastPoll).toLocaleString()}${live ? ' — polling is off while the stream is up' : ''}`
-                  : 'not fetched yet'
-              }
-            >
-              {live ? 'loaded' : 'polled'} <span className="text-slate-400">{ago(lastPoll)}</span>
-            </span>
-          </span>
-          {state === 'loading' && <Loader2 size={13} className="animate-spin text-slate-600" />}
-          <span className="ml-auto">
-            <SignOut />
-          </span>
-        </div>
-
-        <div className="mt-3 flex items-start gap-2">
-          {/*
-            * "Filter" set on its side, reading downwards.
-            *
-            * The strip it labels is a dozen buttons that already wrap onto two
-            * rows on a narrow window, so a horizontal label would cost a whole
-            * button's width on every one of them to say something you only
-            * need told once. Turned on its side the box is one character wide
-            * instead of six, and it sits beside the first row rather than
-            * pushing it along.
-            *
-            * `vertical-rl` rather than a rotate: a transform would move the
-            * glyphs but leave the box the width of the word, so the row would
-            * still be indented by "Filter" and the label would hang outside
-            * its own space. Writing mode changes the box too, which is the
-            * part that buys the room.
-            */}
+        {/*
+          * "Filter" down the left of the header, reading downwards.
+          *
+          * It labels the chip rows below but is pinned up here level with the
+          * title, because the strip it belongs to is two rows deep and
+          * growing — brands and sports, then the leagues under the sport — and
+          * a label beside the first row alone reads as labelling that row
+          * rather than the block.
+          *
+          * `vertical-rl` rather than a rotate: a transform moves the glyphs
+          * but leaves the box as wide as the word, so everything to its right
+          * would still be indented by "Filter" and the label would hang
+          * outside its own space. Writing mode turns the box too, which is
+          * the part that buys the room — one character wide instead of six.
+          */}
+        <div className="flex items-stretch gap-2.5">
           <span
             aria-hidden="true"
-            className="mt-0.5 shrink-0 select-none text-[10px] uppercase leading-none tracking-widest text-slate-600 [writing-mode:vertical-rl]"
+            className="shrink-0 select-none pt-1 text-[10px] uppercase leading-none tracking-widest text-slate-500 [writing-mode:vertical-rl]"
           >
             Filter
           </span>
 
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <div role="group" aria-label="Filter" className="flex flex-wrap items-center gap-1.5">
-              {(['all', 'swiftbet', 'mybet', 'multis'] as const).map((b) => (
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="flex items-center gap-3">
+              <Link
+                to="/"
+                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-slate-500 transition hover:bg-white/5 hover:text-slate-300"
+              >
+                <ArrowLeft size={12} /> Board
+              </Link>
+              <span className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-slate-100">
+                <Radio
+                  size={15}
+                  className={live ? 'animate-pulse text-emerald-400' : 'text-slate-600'}
+                />
+                Ticker
+              </span>
+              <span className="text-xs text-slate-600">
+                {live ? 'Live — bets appear as they are struck' : 'Latest single bets, every brand, every sport'}
+              </span>
+              {/*
+                * Both times, but labelled by what is actually carrying the feed.
+                *
+                * The first paint is a FETCH, not a push, so the rows on screen are
+                * always the fetch's until something is struck — and once the stream
+                * connects the 30s poll is stopped on purpose, so its timestamp just
+                * ages. Calling that "polled 1h ago" reads as broken when it is the
+                * healthy state. While the stream is up it is the load; only when
+                * the stream is down is polling the thing keeping the table current.
+                */}
+              <span className="flex items-center gap-2 text-xs tabular-nums text-slate-600">
+                <span title={lastPush ? new Date(lastPush).toLocaleString() : 'no bet struck since this page opened'}>
+                  pushed <span className="text-slate-400">{ago(lastPush)}</span>
+                </span>
+                <span className="text-slate-700">·</span>
+                <span
+                  title={
+                    lastPoll
+                      ? `${new Date(lastPoll).toLocaleString()}${live ? ' — polling is off while the stream is up' : ''}`
+                      : 'not fetched yet'
+                  }
+                >
+                  {live ? 'loaded' : 'polled'} <span className="text-slate-400">{ago(lastPoll)}</span>
+                </span>
+              </span>
+              {state === 'loading' && <Loader2 size={13} className="animate-spin text-slate-600" />}
+              <span className="ml-auto">
+                <SignOut />
+              </span>
+            </div>
+
+            <div className="mt-3 flex min-w-0 flex-col gap-1.5">
+              <div role="group" aria-label="Filter" className="flex flex-wrap items-center gap-1.5">
+                {(['all', 'swiftbet', 'mybet', 'multis'] as const).map((b) => (
+                  <button
+                    key={b}
+                    type="button"
+                    onClick={() => setBrand(b)}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                      brand === b
+                        ? 'bg-white/10 text-slate-100'
+                        : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                    }`}
+                  >
+                    {b === 'all' ? 'All brands' : BRAND_LABEL[b]}
+                    <span className="ml-1.5 tabular-nums opacity-60">{counts[b] ?? 0}</span>
+                  </button>
+                ))}
+                <span className="mx-1 h-4 w-px bg-surface-border" />
                 <button
-                  key={b}
                   type="button"
-                  onClick={() => setBrand(b)}
+                  onClick={() => pickSport('all')}
                   className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                    brand === b
+                    sport === 'all'
                       ? 'bg-white/10 text-slate-100'
                       : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
                   }`}
                 >
-                  {b === 'all' ? 'All brands' : BRAND_LABEL[b]}
-                  <span className="ml-1.5 tabular-nums opacity-60">{counts[b] ?? 0}</span>
+                  All sports
                 </button>
-              ))}
-              <span className="mx-1 h-4 w-px bg-surface-border" />
-              <button
-                type="button"
-                onClick={() => pickSport('all')}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                  sport === 'all'
-                    ? 'bg-white/10 text-slate-100'
-                    : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-                }`}
-              >
-                All sports
-              </button>
-              {/*
-                * The eight, always, in alphabetical order — see MAIN_SPORTS.
-                *
-                * Shown even with nothing struck on them, which is the whole
-                * point of a fixed list: the chip for the sport you want is in
-                * the same place every time you look, instead of moving as the
-                * feed re-sorts itself by count. One with no bets is dimmed and
-                * still clickable; the empty table it gives you is the honest
-                * answer to "has anything gone through on the NFL".
-                */}
-              {MAIN_SPORTS.map((s) => {
-                const n = bySport.get(s) ?? 0;
-                return (
+                {/*
+                  * The eight, always, in alphabetical order — see MAIN_SPORTS.
+                  *
+                  * Shown even with nothing struck on them, which is the whole
+                  * point of a fixed list: the chip for the sport you want is in
+                  * the same place every time you look, instead of moving as the
+                  * feed re-sorts itself by count. One with no bets is dimmed and
+                  * still clickable; the empty table it gives you is the honest
+                  * answer to "has anything gone through on the NFL".
+                  */}
+                {MAIN_SPORTS.map((s) => {
+                  const n = bySport.get(s) ?? 0;
+                  return (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => pickSport(s)}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                        sport === s
+                          ? 'bg-white/10 text-slate-100'
+                          : n === 0
+                            ? 'text-slate-700 hover:bg-white/5 hover:text-slate-400'
+                            : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                      }`}
+                    >
+                      {s}
+                      <span className="ml-1.5 tabular-nums opacity-60">{n}</span>
+                    </button>
+                  );
+                })}
+                {/* Whatever else the feed is carrying, as the whole row used to be. */}
+                {other.length > 0 && <span className="mx-1 h-4 w-px bg-surface-border" />}
+                {other.map(([s, n]) => (
                   <button
                     key={s}
                     type="button"
@@ -725,153 +745,134 @@ export default function TickerPage() {
                     className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
                       sport === s
                         ? 'bg-white/10 text-slate-100'
-                        : n === 0
-                          ? 'text-slate-700 hover:bg-white/5 hover:text-slate-400'
-                          : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                        : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
                     }`}
                   >
                     {s}
                     <span className="ml-1.5 tabular-nums opacity-60">{n}</span>
                   </button>
-                );
-              })}
-              {/* Whatever else the feed is carrying, as the whole row used to be. */}
-              {other.length > 0 && <span className="mx-1 h-4 w-px bg-surface-border" />}
-              {other.map(([s, n]) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => pickSport(s)}
-                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                    sport === s
-                      ? 'bg-white/10 text-slate-100'
-                      : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-                  }`}
-                >
-                  {s}
-                  <span className="ml-1.5 tabular-nums opacity-60">{n}</span>
-                </button>
-              ))}
-              <span className="mx-1 h-4 w-px bg-surface-border" />
-              {/* Over the odds, or everything. The one on the left is the default
-                  for a trading account. */}
-              {([true, false] as const).map((v) => (
-                <button
-                  key={String(v)}
-                  type="button"
-                  onClick={() => setOnlyOut(v)}
-                  title={
-                    v
-                      ? 'Only bets struck ABOVE the fair price — the market with the margin divided out, Pinnacle where it priced the market and the blend otherwise. A bet can be under every book on the row and still be over the fair.'
-                      : 'Every bet on the feed.'
-                  }
-                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                    onlyOut === v
-                      ? 'bg-rose-500/15 text-rose-300'
-                      : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-                  }`}
-                >
-                  {v ? 'Overs' : 'All'}
-                  <span className="ml-1.5 tabular-nums opacity-60">
-                    {v ? outCounts.byMargin[0] : bets.length}
-                  </span>
-                </button>
-              ))}
-              {onlyOut && (
-                <>
-                  {OUT_MARGINS.map((m, i) => (
-                    <button
-                      key={m}
-                      type="button"
-                      onClick={() => setOutMargin(m)}
-                      className={`rounded-md px-2 py-1 text-xs font-medium tabular-nums transition ${
-                        outMargin === m
-                          ? 'bg-white/10 text-slate-100'
-                          : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-                      }`}
-                    >
-                      {m === 0 ? 'any' : `≥${m}%`}
-                      <span className="ml-1 tabular-nums opacity-60">{outCounts.byMargin[i]}</span>
-                    </button>
-                  ))}
-                  <span
-                    className="text-xs text-slate-600"
-                    title="Bets with a fair price to answer to. The rest are unjudged — the market was not complete enough to divide to 100%, usually a book having pulled one side."
-                  >
-                    of {outCounts.comparable} judgeable
-                  </span>
-                </>
-              )}
-              <span className="mx-1 h-4 w-px bg-surface-border" />
-              <label
-                className="flex items-center gap-1.5 text-xs text-slate-600"
-                title="Stake on the bet, before any bonus. Blank shows everything."
-              >
-                stake ≥
-                <span className="relative">
-                  <span className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-600">
-                    $
-                  </span>
-                  <input
-                    value={stakeText}
-                    onChange={(e) => setStakeText(e.target.value.replace(/[^\d.]/g, ''))}
-                    inputMode="decimal"
-                    placeholder="0"
-                    aria-label="Minimum stake"
-                    className={`w-20 rounded-md border bg-surface-raised/40 py-1 pl-4 pr-1.5 text-xs tabular-nums text-slate-100 outline-none placeholder:text-slate-600 ${
-                      minStake > 0 ? 'border-emerald-500/40' : 'border-surface-border'
-                    }`}
-                  />
-                </span>
-                {minStake > 0 && (
-                  <span className="tabular-nums text-slate-500">{shown.length}</span>
-                )}
-              </label>
-            </div>
-
-            {/*
-              * The leagues of the sport above, on their own line.
-              *
-              * A second row rather than more chips on the first: the leagues
-              * only mean anything under a chosen sport, and run in beside the
-              * brands they would read as another twenty sports. The row is
-              * absent until a sport is picked, so the strip is the height it
-              * always was until you ask for it.
-              *
-              * Only the leagues with bets on them — see leagueChips — and the
-              * one already selected, which stays so the chip cannot disappear
-              * from under the pointer when the feed turns over.
-              */}
-            {leagueChips.length > 0 && (
-              <div role="group" aria-label="League" className="flex flex-wrap items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setLeague('all')}
-                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                    league === 'all'
-                      ? 'bg-white/10 text-slate-100'
-                      : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-                  }`}
-                >
-                  All leagues
-                </button>
-                {leagueChips.map(({ league: l, n }) => (
+                ))}
+                <span className="mx-1 h-4 w-px bg-surface-border" />
+                {/* Over the odds, or everything. The one on the left is the default
+                    for a trading account. */}
+                {([true, false] as const).map((v) => (
                   <button
-                    key={l.label}
+                    key={String(v)}
                     type="button"
-                    onClick={() => setLeague(l.label)}
+                    onClick={() => setOnlyOut(v)}
+                    title={
+                      v
+                        ? 'Only bets struck ABOVE the fair price — the market with the margin divided out, Pinnacle where it priced the market and the blend otherwise. A bet can be under every book on the row and still be over the fair.'
+                        : 'Every bet on the feed.'
+                    }
                     className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                      league === l.label
-                        ? 'bg-emerald-500/15 text-emerald-300'
+                      onlyOut === v
+                        ? 'bg-rose-500/15 text-rose-300'
                         : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
                     }`}
                   >
-                    {l.label}
-                    <span className="ml-1.5 tabular-nums opacity-60">{n}</span>
+                    {v ? 'Overs' : 'All'}
+                    <span className="ml-1.5 tabular-nums opacity-60">
+                      {v ? outCounts.byMargin[0] : bets.length}
+                    </span>
                   </button>
                 ))}
+                {onlyOut && (
+                  <>
+                    {OUT_MARGINS.map((m, i) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setOutMargin(m)}
+                        className={`rounded-md px-2 py-1 text-xs font-medium tabular-nums transition ${
+                          outMargin === m
+                            ? 'bg-white/10 text-slate-100'
+                            : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                        }`}
+                      >
+                        {m === 0 ? 'any' : `≥${m}%`}
+                        <span className="ml-1 tabular-nums opacity-60">{outCounts.byMargin[i]}</span>
+                      </button>
+                    ))}
+                    <span
+                      className="text-xs text-slate-600"
+                      title="Bets with a fair price to answer to. The rest are unjudged — the market was not complete enough to divide to 100%, usually a book having pulled one side."
+                    >
+                      of {outCounts.comparable} judgeable
+                    </span>
+                  </>
+                )}
+                <span className="mx-1 h-4 w-px bg-surface-border" />
+                <label
+                  className="flex items-center gap-1.5 text-xs text-slate-600"
+                  title="Stake on the bet, before any bonus. Blank shows everything."
+                >
+                  stake ≥
+                  <span className="relative">
+                    <span className="pointer-events-none absolute left-1.5 top-1/2 -translate-y-1/2 text-slate-600">
+                      $
+                    </span>
+                    <input
+                      value={stakeText}
+                      onChange={(e) => setStakeText(e.target.value.replace(/[^\d.]/g, ''))}
+                      inputMode="decimal"
+                      placeholder="0"
+                      aria-label="Minimum stake"
+                      className={`w-20 rounded-md border bg-surface-raised/40 py-1 pl-4 pr-1.5 text-xs tabular-nums text-slate-100 outline-none placeholder:text-slate-600 ${
+                        minStake > 0 ? 'border-emerald-500/40' : 'border-surface-border'
+                      }`}
+                    />
+                  </span>
+                  {minStake > 0 && (
+                    <span className="tabular-nums text-slate-500">{shown.length}</span>
+                  )}
+                </label>
               </div>
-            )}
+
+              {/*
+                * The leagues of the sport above, on their own line.
+                *
+                * A second row rather than more chips on the first: the leagues
+                * only mean anything under a chosen sport, and run in beside the
+                * brands they would read as another twenty sports. The row is
+                * absent until a sport is picked, so the strip is the height it
+                * always was until you ask for it.
+                *
+                * Only the leagues with bets on them — see leagueChips — and the
+                * one already selected, which stays so the chip cannot disappear
+                * from under the pointer when the feed turns over.
+                */}
+              {leagueChips.length > 0 && (
+                <div role="group" aria-label="League" className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setLeague('all')}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                      league === 'all'
+                        ? 'bg-white/10 text-slate-100'
+                        : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                    }`}
+                  >
+                    All leagues
+                  </button>
+                  {leagueChips.map(({ league: l, n }) => (
+                    <button
+                      key={l.label}
+                      type="button"
+                      onClick={() => setLeague(l.label)}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                        league === l.label
+                          ? 'bg-emerald-500/15 text-emerald-300'
+                          : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                      }`}
+                    >
+                      {l.label}
+                      <span className="ml-1.5 tabular-nums opacity-60">{n}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </header>
