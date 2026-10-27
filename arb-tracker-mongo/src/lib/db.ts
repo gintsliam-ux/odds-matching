@@ -213,6 +213,36 @@ export interface Pending {
 export const fetchPending = (view: 'open' | 'settled' = 'open'): Promise<Pending> =>
   apiGet<Pending>(`/api/pending${view === 'settled' ? '?view=settled' : ''}`);
 
+/**
+ * One player's line in a fixture's box score.
+ *
+ * The stat keys vary by sport — `fields` on the response says which ones this
+ * fixture carries, so the table renders what the sport is actually bet on
+ * rather than a fixed set with blanks in it.
+ */
+export interface PlayerStatLine {
+  player: string | null;
+  playerId: string | null;
+  position: string | null;
+  number: number | null;
+  starter: boolean;
+  [stat: string]: string | number | boolean | null;
+}
+
+export interface PlayerStats {
+  configured: boolean;
+  /** 'basketball' | 'football', or null when the fixture has no stats yet. */
+  sport: string | null;
+  league?: string | null;
+  fields?: string[];
+  teams: { side: string | null; team: string | null; players: PlayerStatLine[] }[];
+  updatedAt: string | null;
+}
+
+/** Box score for one fixture. Only NBA and NFL games carry one, once played. */
+export const fetchPlayerStats = (fixtureId: string): Promise<PlayerStats> =>
+  apiGet<PlayerStats>(`/api/player-stats?fixture=${encodeURIComponent(fixtureId)}`);
+
 /** Best (highest) H2H decimal price for each side of a fixture. */
 export interface H2HPrices {
   home: number | null;

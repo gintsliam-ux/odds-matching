@@ -70,6 +70,13 @@ if (!DST_URI) fail('MIRROR_URI (or BETS_URI) is not set — nowhere to mirror to
 const PLAN = [
   { name: 'event_mapping', mode: 'watermark', field: 'resolved_at' },
   { name: 'entities', mode: 'watermark', field: 'resolved_at' },
+  /*
+   * Per-player box scores, NBA and NFL. Watermarked rather than windowed: a
+   * played game's stats never change, the rows are small, and the Stats tab is
+   * opened on a specific fixture rather than a date range — so a window would
+   * take the stats away from exactly the game someone went looking for.
+   */
+  { name: 'player_stats', mode: 'watermark', field: 'updated_at' },
   { name: 'competition_mapping', mode: 'replace' },
   { name: 'leagues', mode: 'replace' },
   { name: 'league_health', mode: 'replace' },

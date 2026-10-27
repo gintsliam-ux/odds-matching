@@ -21,6 +21,7 @@ import { PriceCard, type HoverTarget } from './PriceCard';
 import { MarketsSkeleton } from './Skeleton';
 import { DrawIcon } from './DrawIcon';
 import { EventTabs, SubTabs, type EventTab, type SubTab } from './EventTabs';
+import { EventStatsPanel } from './EventStatsPanel';
 import { EventDetailsPanel } from './EventDetailsPanel';
 import { BetsPanel } from './BetsPanel';
 import { useCapabilities } from '../lib/capabilitiesContext';
@@ -360,10 +361,21 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
             ? [{ key: 'bets' as const, label: 'Bets' }]
             : []),
           ...(caps.mapping ? [{ key: 'details' as const, label: 'Details' }] : []),
+          /*
+           * NBA and NFL only — `player_stats` carries those two and nothing
+           * else, so offering the tab anywhere else would promise a box score
+           * that cannot exist. Gated on the league NAME rather than the sport,
+           * because the sport would take NCAAB and NCAAF with it.
+           */
+          ...(event.league?.name === 'NBA' || event.league?.name === 'NFL'
+            ? [{ key: 'stats' as const, label: 'Stats' }]
+            : []),
         ]}
         active={tab}
         onChange={setTab}
       />
+
+      {tab === 'stats' && <EventStatsPanel fixtureId={event.id} />}
 
       {tab === 'bets' && (
         <div

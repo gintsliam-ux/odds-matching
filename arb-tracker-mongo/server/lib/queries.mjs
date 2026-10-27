@@ -897,3 +897,86 @@ export async function h2hPrices(fixtureIds) {
   }
   return out;
 }
+
+/**
+ * The per-player box score for one fixture — NBA and NFL only.
+ *
+ * `player_stats` is keyed by `fixture_id`, the same id the board uses, so this
+ * is one indexed read. Only games that have been PLAYED are in it: there are no
+ * rows for an upcoming fixture, which is why the tab says so rather than
+ * showing an empty table.
+ *
+ * The collection carries 28 top-level stats and a 28-to-72 key `stats`
+ * sub-object; what comes back here is the handful each sport is actually bet
+ * on, promoted to the top of the row. For basketball that is the props ladder
+ * — points, rebounds, assists, threes, and the PRA combination — and for
+ * gridiron the yardage and touchdown markets.
+ */
+const NBA_FIELDS = ['minutes', 'points', 'rebounds', 'assists', 'threes', 'pra'];
+const NFL_FIELDS = [
+  'passing_yards', 'passing_touchdowns', 'passing_interceptions',
+  'rushing_yards', 'rushing_attempts', 'rushing_touchdowns',
+  'receiving_yards', 'receptions', 'receiving_targets', 'receiving_touchdowns',
+  'touchdowns',
+];
+
+export async function playerStats(fixtureId) {
+  if (!fixtureId) return null;
+  const rows = await (await coll('playerStats'))
+    .find({ fixture_id: fixtureId })
+    .project({
+      _id: 0, sport: 1, league: 1, team: 1, side: 1, opponent: 1,
+      player: 1, player_id: 1, position: 1, number: 1, is_starter: 1,
+      home_team: 1, away_team: 1, fixture_status: 1, updated_at: 1,
+      ...Object.fromEntries([...NBA_FIELDS, ...NFL_FIELDS].map((f) => [f, 1])),
+    })
+    .toArray()
+    .catch(() => []);
+  if (!rows.length) return { configured: true, sport: null, teams: [], updatedAt: null };
+
+  const sport = rows[0].sport ?? null;
+  const fields = sport === 'basketball' ? NBA_FIELDS : NFL_FIELDS;
+  /*
+   * Ordered the way a box score is read: starters first, then by the stat that
+   * decides who mattered — minutes in basketball, where everyone who played has
+   * one, and total yards in gridiron, where most of a 96-man roster did not
+   * touch the ball.
+   */
+  const weight = (r) =>
+    sport === 'basketball'
+      ? Number(r.minutes) || 0
+      : (Number(r.passing_yards) || 0) + (Number(r.rushing_yards) || 0) + (Number(r.receiving_yards) || 0);
+
+  const byTeam = new Map();
+  for (const r of rows) {
+    const key = r.side ?? r.team ?? 'unknown';
+    const t = byTeam.get(key) ?? { side: r.side ?? null, team: r.team ?? null, players: [] };
+    t.players.push({
+      player: r.player ?? null,
+      playerId: r.player_id ?? null,
+      position: r.position ?? null,
+      number: r.number ?? null,
+      starter: !!r.is_starter,
+      ...Object.fromEntries(fields.map((f) => [f, r[f] ?? null])),
+    });
+    byTeam.set(key, t);
+  }
+  for (const t of byTeam.values()) {
+    t.players.sort((a, b) => (b.starter ? 1 : 0) - (a.starter ? 1 : 0) || weight(b) - weight(a));
+  }
+  // Home first, which is how the rest of the page reads.
+  const teams = [...byTeam.values()].sort((a) => (a.side === 'home' ? -1 : 1));
+  const updatedAt = rows.reduce((m, r) => {
+    const v = r.updated_at ? new Date(r.updated_at).getTime() : 0;
+    return v > m ? v : m;
+  }, 0);
+
+  return {
+    configured: true,
+    sport,
+    league: rows[0].league ?? null,
+    fields,
+    teams,
+    updatedAt: updatedAt ? new Date(updatedAt).toISOString() : null,
+  };
+}

@@ -1,6 +1,6 @@
 import type { LucideIcon } from 'lucide-react';
 
-export type EventTab = 'markets' | 'bets' | 'details';
+export type EventTab = 'markets' | 'bets' | 'details' | 'stats';
 
 interface TabDef {
   key: EventTab;

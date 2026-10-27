@@ -26,7 +26,14 @@ import { cached, invalidate } from './cache.mjs';
 import { fetchPulse } from './pulse.mjs';
 import { attachEm, pendingBets, settledBets } from './pending.mjs';
 import {
-  cachedBoard, eventById, eventDetails, eventsForDay, h2hPrices, oddsForFixture, searchEvents,
+  cachedBoard,
+  eventById,
+  eventDetails,
+  eventsForDay,
+  h2hPrices,
+  oddsForFixture,
+  playerStats,
+  searchEvents,
 } from './queries.mjs';
 import {
   authenticate, cookieHeader, createUser, deleteUser, listUsers, sessionFromCookies, verifyHandoff,
@@ -164,6 +171,17 @@ const ROUTES = {
   // Expensive (it reads squads from three feeds), so it is cached and only
   // built when the page asks.
   // Head-to-head prices that have moved, and who has not moved with them.
+  /*
+   * The box score for one fixture, NBA and NFL only. A played game's stats do
+   * not change, so this is cached for the same five minutes as the rest of the
+   * fixture reads rather than anything cleverer.
+   */
+  'GET /api/player-stats': (url) => {
+    const id = url.searchParams.get('fixture') ?? '';
+    if (!id) return { configured: true, sport: null, teams: [], updatedAt: null };
+    return cached(`playerStats:${id}`, 5 * 60_000, () => playerStats(id));
+  },
+
   'GET /api/movers': (url) => {
     const win = url.searchParams.get('window') ?? '6h';
     const minMove = Number(url.searchParams.get('minMove') ?? 5);

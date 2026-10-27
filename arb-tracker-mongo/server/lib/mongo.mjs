@@ -45,6 +45,11 @@ const MIRRORED = new Set([
   // The book roster: the pulse bar's slots, and the alias folding the price
   // grid needs. Twelve rows.
   'books',
+  // Box scores for the Stats tab. Mirrored in full rather than windowed: a
+  // played game's stats never change, and the tab is opened on one fixture
+  // rather than a date range, so a window would withhold exactly the game
+  // somebody went looking for.
+  'playerStats',
 ]);
 
 const client = URI
@@ -87,6 +92,9 @@ export async function mirrorDb() {
  */
 export const COLLECTIONS = {
   fixtures: 'fixtures',
+  // Per-player, per-fixture box scores. NBA and NFL only, and only for games
+  // that have been played — see playerStats in queries.mjs.
+  playerStats: 'player_stats',
   odds: 'odds',
   entities: 'entities',
   books: 'books',
