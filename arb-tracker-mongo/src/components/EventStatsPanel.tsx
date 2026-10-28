@@ -4,6 +4,7 @@ import { fetchBets, fetchPlayerStats, type Bet, type FixtureBets, type PlayerSta
 import { PanelNotice, SubTabs } from './EventTabs';
 import type { SportEvent } from '../lib/types';
 import { BRAND_LABEL, brandBadge } from '../lib/brands';
+import { TeamLogo } from './TeamLogo';
 
 /**
  * The box score for one fixture, NBA and NFL only.
@@ -302,9 +303,12 @@ const LANDED_TITLE: Record<Landed, string> = {
 function Leaders({
   teams,
   fields,
+  event,
 }: {
   teams: PlayerStats['teams'];
   fields: string[];
+  /** For the crests; the box score names its teams in text only. */
+  event?: SportEvent;
 }) {
   const blocks = useMemo(() => scorersByStat(teams, fields), [teams, fields]);
   /*
@@ -354,7 +358,14 @@ function Leaders({
           >
             {perTeam.map((list, i) => (
               <div key={i} className="bg-surface-raised/40 p-2">
-                <div className="px-1 pb-1 text-[11px] text-slate-500">{teams[i]?.team}</div>
+                <div className="flex items-center gap-1.5 px-1 pb-1 text-[11px] text-slate-500">
+                  <TeamLogo
+                    name={teams[i]?.team ?? ''}
+                    size={14}
+                    logo={teams[i]?.side === 'home' ? event?.homeLogo : event?.awayLogo}
+                  />
+                  {teams[i]?.team}
+                </div>
                 {list.length === 0 ? (
                   <div className="px-1 text-slate-700">–</div>
                 ) : (
@@ -780,24 +791,17 @@ export function EventStatsPanel({
   return (
     <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
       {/*
-        * The score, and whether the box score under it is finished.
+        * What this box score IS, and when it was last written.
         *
-        * On this tab the match header is scrolled away, so without this you are
-        * reading a column of numbers with no way of telling whether they are
-        * final or a third of the way through — which changes what every one of
-        * them means. "Live" is the stats feed's own word for it, not the board's:
-        * it is the thing that says whether THESE rows are still being written.
+        * It used to repeat the score, which the match header three inches
+        * above already carries — and a second scoreboard is not just noise,
+        * it is a thing that can disagree with the first. What the header
+        * cannot tell you is whether the numbers BELOW are final or still being
+        * filled in, which changes what every one of them means. That is this
+        * line's whole job, and "live" here is the stats feed's own word, not
+        * the board's: it is about these rows, not about the game.
         */}
-      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-surface-border px-4 py-2 text-xs">
-        {event && (
-          <span className="flex items-center gap-2 font-medium text-slate-200">
-            <span className="truncate">{event.home}</span>
-            <span className="tabular-nums text-slate-100">
-              {event.homeScore ?? '–'} <span className="text-slate-600">–</span> {event.awayScore ?? '–'}
-            </span>
-            <span className="truncate">{event.away}</span>
-          </span>
-        )}
+      <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-surface-border px-4 py-2 text-xs">
         {live ? (
           <span className="flex items-center gap-1.5 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
             <span className="relative flex h-1.5 w-1.5">
@@ -806,14 +810,14 @@ export function EventStatsPanel({
             </span>
             Live
           </span>
-        ) : done ? (
-          <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-300">
-            Final
-          </span>
         ) : null}
-        <span className="text-slate-500" title={data.updatedAt ?? ''}>
-          {live ? 'updating every 30s' : 'box score'}
-          {data.updatedAt && <span className="ml-1 text-slate-600">· {ago(data.updatedAt)}</span>}
+        <span className="font-medium text-slate-300">
+          {live ? 'Box score, still being written' : done ? 'Final box score' : 'Box score'}
+        </span>
+        <span className="text-slate-600">·</span>
+        <span className="text-slate-500" title={data.updatedAt ?? 'never'}>
+          updated {ago(data.updatedAt)}
+          {live && <span className="ml-1 text-slate-600">· re-read every 30s</span>}
         </span>
       </div>
 
@@ -828,13 +832,26 @@ export function EventStatsPanel({
         onChange={setView}
       />
 
-      {view === 'leaders' && <Leaders teams={data.teams} fields={fields} />}
+      {view === 'leaders' && <Leaders teams={data.teams} fields={fields} event={event} />}
 
       {view === 'bets' && <StatBets fixtureId={fixtureId} teams={data.teams} done={done} />}
 
       {view === 'all' && data.teams.map((t) => (
         <div key={`${t.side}:${t.team}`} className="overflow-hidden rounded-xl bg-surface-raised/40">
-          <div className="flex items-baseline gap-2 border-b border-surface-border px-3 py-2">
+          <div className="flex items-center gap-2 border-b border-surface-border px-3 py-2">
+            {/* The crest the rest of the page uses for this side — the box
+                score names the team in text and nowhere else. */}
+            {/*
+              * No `country`. TeamLogo flies a flag AHEAD of the crest, which
+              * is right for a tennis player and wrong here — this panel only
+              * exists for NBA and NFL, so every side is a club and a flag
+              * would replace the badge that identifies it.
+              */}
+            <TeamLogo
+              name={t.team ?? ''}
+              size={18}
+              logo={t.side === 'home' ? event?.homeLogo : event?.awayLogo}
+            />
             <h3 className="text-[13px] font-semibold text-slate-200">{t.team}</h3>
             <span className="text-[10px] uppercase tracking-wide text-slate-600">{t.side}</span>
             <span className="ml-auto text-[11px] text-slate-600">{t.players.length} players</span>
