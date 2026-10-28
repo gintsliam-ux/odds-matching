@@ -6,6 +6,7 @@ import { teamAbbr } from '../lib/teamLogos';
 import { LeagueBadge } from './LeagueBadge';
 import { TeamLogo } from './TeamLogo';
 import { IS_MAIN_SPORT, MAIN_LEAGUES, MAIN_SPORTS, inLeague, type MainSport } from '../lib/leagues';
+import { MultiPill } from './FilterBar';
 
 interface Props {
   events: SportEvent[];
@@ -144,59 +145,76 @@ const asLeagueKey = (e: SportEvent) => ({
  */
 export function ScoreboardBar({ events, now, prices, activeId, onSelect }: Props) {
   const [open, setOpen] = useState(false);
-  const [sport, setSport] = useState<string | null>(null);
-  const [league, setLeague] = useState<string | null>(null);
+  const [sports, setSports] = useState<string[]>([]);
+  const [leagueSel, setLeagueSel] = useState<string[]>([]);
 
-  const leagues = sport && IS_MAIN_SPORT.has(sport) ? MAIN_LEAGUES[sport as MainSport] : [];
-  const activeLeague = leagues.find((l) => l.label === league) ?? null;
+  /*
+   * Which sports to offer: the eight, always, in alphabetical order, and then
+   * anything else actually on the slate. The eight hold their places whether
+   * or not there is anything on them — the point of a fixed list is that the
+   * one you reach for does not move — while volleyball or MMA appear only when
+   * they are there to be chosen.
+   */
+  const sportOptions = useMemo(() => {
+    const present = new Set(events.map((e) => e.sport));
+    return [...MAIN_SPORTS, ...[...present].filter((s) => !IS_MAIN_SPORT.has(s)).sort()];
+  }, [events]);
+
+  /*
+   * The leagues of the chosen sports, and ONLY of those: picking Soccer and
+   * Tennis offers the soccer leagues and the tours, not all seventy. With no
+   * sport chosen there is nothing sensible to put here — every league of every
+   * sport is a worse list than none — so the league pill stays empty until a
+   * sport is picked, which is also what the rail's pair does.
+   *
+   * A label can repeat across sports (both codes have a Super League), so the
+   * options are de-duplicated and a chosen label matches in any selected sport.
+   */
+  const leagueOptions = useMemo(() => {
+    const names: string[] = [];
+    for (const s of sports) {
+      if (!IS_MAIN_SPORT.has(s)) continue;
+      for (const l of MAIN_LEAGUES[s as MainSport]) {
+        // Only leagues with something on the slate: a pill full of competitions
+        // that are not playing today is a list you have to read to dismiss.
+        const any = events.some(
+          (e) => e.sport === s && inLeague(asLeagueKey(e), l),
+        );
+        if (any && !names.includes(l.label)) names.push(l.label);
+      }
+    }
+    return names;
+  }, [events, sports]);
+
+  // A league chosen under a sport that is later unchecked would filter
+  // everything away invisibly, so the selection is trimmed to what is offered.
+  const leagues = leagueSel.filter((l) => leagueOptions.includes(l));
+
+  const matchesLeagues = (e: SportEvent) => {
+    if (leagues.length === 0) return true;
+    if (!IS_MAIN_SPORT.has(e.sport)) return false;
+    return MAIN_LEAGUES[e.sport as MainSport].some(
+      (l) => leagues.includes(l.label) && inLeague(asLeagueKey(e), l),
+    );
+  };
 
   const shown = useMemo(
     () =>
       events.filter(
-        (e) =>
-          (!sport || e.sport === sport) && (!activeLeague || inLeague(asLeagueKey(e), activeLeague)),
+        (e) => (sports.length === 0 || sports.includes(e.sport)) && matchesLeagues(e),
       ),
-    [events, sport, activeLeague],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [events, sports, leagues.join('\u0000')],
   );
 
-  const bySport = useMemo(() => {
-    const c = new Map<string, number>();
-    for (const e of events) c.set(e.sport, (c.get(e.sport) ?? 0) + 1);
-    return c;
-  }, [events]);
-
-  /*
-   * Only the leagues with something on the slate, plus the one selected so the
-   * chip cannot vanish under the pointer. Soccer has twenty-one here and a
-   * fixed row would be mostly zeroes.
-   */
-  const leagueChips = useMemo(() => {
-    const inSport = events.filter((e) => e.sport === sport);
-    return leagues
-      .map((l) => ({ league: l, n: inSport.filter((e) => inLeague(asLeagueKey(e), l)).length }))
-      .filter(({ league: l, n }) => n > 0 || l.label === league);
-  }, [events, sport, leagues, league]);
-
-  const filtered = sport != null;
+  const filtered = sports.length > 0 || leagues.length > 0;
 
   // Nothing to show at all is the bar's old empty case and still hides it. A
   // filter that matches nothing is NOT that: the bar has to stay so the filter
   // that emptied it can be cleared.
   if (events.length === 0) return null;
 
-  const pickSport = (s: string | null) => {
-    setSport(s);
-    setLeague(null);
-  };
 
-  const chip = (on: boolean, tone: 'sport' | 'league') =>
-    `rounded-md px-2 py-0.5 text-[11px] font-medium transition ${
-      on
-        ? tone === 'league'
-          ? 'bg-emerald-500/15 text-emerald-300'
-          : 'bg-white/10 text-slate-100'
-        : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-    }`;
 
   return (
     <div className="shrink-0 border-b border-surface-border bg-surface">
@@ -214,6 +232,14 @@ export function ScoreboardBar({ events, now, prices, activeId, onSelect }: Props
           * `self-stretch` keeps it exactly the height of the cards beside it.
           * It turns emerald while a filter is on, because a trimmed ticker that
           * looks untrimmed is a quiet way to miss half the board.
+          *
+          * Sized to very nearly fill that height rather than to be small. A
+          * card is about 78px — 8px of padding each end around a badge row and
+          * two team lines — and six characters at 12px with 0.3em between them
+          * come to about 65, so the word runs the depth of the bar with a
+          * little air top and bottom. Going further would start clipping on
+          * the shorter cards, which is why it is pinned here and not nudged up
+          * again later.
           */}
         <button
           type="button"
@@ -221,15 +247,17 @@ export function ScoreboardBar({ events, now, prices, activeId, onSelect }: Props
           aria-expanded={open}
           title={
             filtered
-              ? `Ticker filtered to ${league ? `${sport} · ${league}` : sport} — ${shown.length} of ${events.length}`
+              ? `Ticker filtered to ${[sports.join(', '), leagues.join(', ')]
+                  .filter(Boolean)
+                  .join(' · ')} — showing ${shown.length} of ${events.length}`
               : 'Filter the ticker by sport and league'
           }
-          className={`flex shrink-0 items-center self-stretch border-r border-surface-border px-1.5 text-[10px] uppercase leading-none tracking-widest transition [writing-mode:vertical-rl] ${
+          className={`flex shrink-0 select-none items-center justify-center self-stretch border-r border-surface-border px-2 text-[12px] font-semibold uppercase leading-none tracking-[0.3em] transition [writing-mode:vertical-rl] ${
             filtered
               ? 'bg-emerald-500/10 text-emerald-300'
               : open
-                ? 'bg-white/5 text-slate-300'
-                : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
+                ? 'bg-white/5 text-slate-200'
+                : 'bg-white/[0.03] text-slate-300 hover:bg-white/10 hover:text-slate-100'
           }`}
         >
           Filter
@@ -254,52 +282,22 @@ export function ScoreboardBar({ events, now, prices, activeId, onSelect }: Props
         </div>
       </div>
 
+      {/*
+        * Side by side, and the second depends on the first: choose any number
+        * of sports, and the league pill then offers the leagues of those
+        * sports only. The same control the rail uses for the same job — see
+        * MultiPill — rather than a second dropdown that looks like it and
+        * behaves slightly differently.
+        */}
       {open && (
-        <div className="flex flex-col gap-1 border-t border-surface-border px-2 py-1.5">
-          {/* The eight, alphabetically, always — see MAIN_SPORTS. */}
-          <div role="group" aria-label="Sport" className="flex flex-wrap items-center gap-1">
-            <button type="button" onClick={() => pickSport(null)} className={chip(sport === null, 'sport')}>
-              All sports
-            </button>
-            {MAIN_SPORTS.map((s) => {
-              const n = bySport.get(s) ?? 0;
-              return (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => pickSport(s)}
-                  className={
-                    sport !== s && n === 0
-                      ? 'rounded-md px-2 py-0.5 text-[11px] font-medium text-slate-700 transition hover:bg-white/5 hover:text-slate-400'
-                      : chip(sport === s, 'sport')
-                  }
-                >
-                  {s}
-                  <span className="ml-1 tabular-nums opacity-60">{n}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* The leagues of the sport above it, once there is a sport. */}
-          {leagueChips.length > 0 && (
-            <div role="group" aria-label="League" className="flex flex-wrap items-center gap-1">
-              <button type="button" onClick={() => setLeague(null)} className={chip(league === null, 'sport')}>
-                All leagues
-              </button>
-              {leagueChips.map(({ league: l, n }) => (
-                <button
-                  key={l.label}
-                  type="button"
-                  onClick={() => setLeague(l.label)}
-                  className={chip(league === l.label, 'league')}
-                >
-                  {l.label}
-                  <span className="ml-1 tabular-nums opacity-60">{n}</span>
-                </button>
-              ))}
-            </div>
-          )}
+        <div className="grid grid-cols-2 gap-2 border-t border-surface-border px-2 py-2 sm:max-w-md">
+          <MultiPill label="Sport" selected={sports} options={sportOptions} onChange={setSports} />
+          <MultiPill
+            label="League"
+            selected={leagues}
+            options={leagueOptions}
+            onChange={setLeagueSel}
+          />
         </div>
       )}
     </div>

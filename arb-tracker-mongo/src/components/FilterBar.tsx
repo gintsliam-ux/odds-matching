@@ -112,8 +112,14 @@ function DatePill({ value, onChange }: { value: string; onChange: (v: string) =>
   );
 }
 
-/** Multi-select pill with a checkbox dropdown. Empty selection means "all". */
-function MultiPill({
+/**
+ * Multi-select pill with a checkbox dropdown. Empty selection means "all".
+ *
+ * Exported because the scoreboard bar's own filter is the same control doing
+ * the same job on a different set of events, and two dropdowns that look alike
+ * but behave slightly differently is worse than one shared.
+ */
+export function MultiPill({
   label,
   selected,
   options,
