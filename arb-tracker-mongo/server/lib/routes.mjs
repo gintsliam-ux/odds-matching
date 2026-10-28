@@ -179,7 +179,17 @@ const ROUTES = {
   'GET /api/player-stats': (url) => {
     const id = url.searchParams.get('fixture') ?? '';
     if (!id) return { configured: true, sport: null, teams: [], updatedAt: null };
-    return cached(`playerStats:${id}`, 5 * 60_000, () => playerStats(id));
+    /*
+     * Twenty seconds, not five minutes.
+     *
+     * The stats panel re-reads a live box score every thirty, and against a
+     * five-minute cache nine of every ten of those polls were served the same
+     * numbers — the panel said "updating every 30s" and the figures sat still
+     * through most of a quarter. The read is one indexed find on about thirty
+     * rows, so the cache here is only to absorb a burst, not to spare the
+     * database.
+     */
+    return cached(`playerStats:${id}`, 20_000, () => playerStats(id));
   },
 
   'GET /api/movers': (url) => {

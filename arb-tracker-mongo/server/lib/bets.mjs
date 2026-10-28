@@ -430,138 +430,72 @@ async function siblingEventIds(db, baseId, fixtureId) {
  */
 
 /**
- * Legged multis, indexed by the fixture their legs name.
+ * Legged multis for ONE fixture, found by the text of their legs.
  *
- * These tickets have no join key at all. A multi carries `event_identifier` 0
- * — 0 of 670,314 of them have a real one — and the legs carry no event id
- * either, only the ticket's own multi id repeated. The single link to a
- * fixture is the text of `multileg_evetdescription`, whose last " - " segment
- * is the match.
+ * These tickets have no join key. A multi carries `event_identifier` 0 — 0 of
+ * 670,314 of them have a real one — and the legs carry no event id either,
+ * only the ticket's own multi id repeated. The single link to a fixture is the
+ * last " - " segment of `multileg_evetdescription`, which is the match.
  *
- * Matching that text per fixture is hopeless: a window wide enough to catch
- * the bets takes 6.2 seconds to scan and finds one leg. But the SAME scan
- * answers every fixture at once — nine seconds over twelve days covered all 33
- * fixtures that had a box score — so it is done once for the whole board and
- * kept, rather than once per page view.
+ * The window is generous FORWARD, and that is the whole lesson of this
+ * function. Bets are struck late — of 13,295 legged tickets, 94.1% go on
+ * within six hours of their first leg — so the obvious window is a short one
+ * ending at the jump. It found nine tickets here where there are forty-one,
+ * because `startsAt` on this fixture is 00:00Z: a date with no time on it. The
+ * legs know better (they carry their own event date, 665 minutes later), so
+ * the six hours of real betting before the real tip fell outside a window that
+ * closed six hours after a placeholder. 44 of the board's 1,921 fixtures start
+ * at exactly midnight UTC, so this is not one bad row.
  *
- * What it costs to leave out is the point: on those 33 fixtures this is 951
- * legs naming a player in the box score, against the 34 single bets found
- * through the ordinary event-id join, and it takes the stats bets tab from 15
- * of 33 fixtures to all of them.
+ * Hence -48h/+30h: it covers a start time that is out by half a day and still
+ * pulls only ~1,600 tickets in 0.8s. Stretching it to -60/+36 pulls half as
+ * many again and finds not one more ticket.
  *
- * Rebuilt every ten minutes, and never waited on — see legIndexNow.
+ * This replaced a board-wide index held in module state, which was the right
+ * shape for a long-lived server and the wrong one for this: each request can
+ * land on a different instance, so the index was perpetually cold for whoever
+ * asked and the page kept promising multis it was never going to have. It was
+ * also keyed on the match NAME alone, which would have put a later rematch of
+ * the same two teams on this fixture's page. Matching the date is what rules
+ * that out, and this does it by construction.
  */
-const LEG_INDEX_TTL = 10 * 60_000;
+const LEG_WINDOW_BACK_MS = 48 * 36e5;
+const LEG_WINDOW_FWD_MS = 30 * 36e5;
 
 /** Only what `normalise` and `multiLegs` read — the rest of the doc is not kept. */
-const LEG_INDEX_PROJECTION = {
+const LEG_PROJECTION = {
   _id: 0, transaction_id: 1, transaction_date: 1, transaction_licenseid: 1,
   transaction_multid: 1, user_accountID: 1, amount_bet: 1, price: 1, selections: 1,
   event_string: 1, event_identifier: 1, sport_name: 1, bet_status: 1, bet_type: 1,
   bet_result: 1, bonus_bet: 1, sgm_flag: 1, legs: 1,
 };
 
-/** Tickets held per fixture, so one busy game cannot dominate the index. */
-const LEG_INDEX_PER_FIXTURE = 60;
+async function leggedFor(db, fixtureId) {
+  if (!fixtureId) return [];
+  const ev = await eventById(fixtureId).catch(() => null);
+  const start = Date.parse(ev?.startsAt);
+  if (!ev?.home || !ev?.away || !Number.isFinite(start)) return [];
 
-async function buildLegIndex() {
-  const byFixture = new Map();
-  if (!betsConfigured) return byFixture;
-  const db = await betsDb();
-  if (!db) return byFixture;
+  const home = matchName(ev.home);
+  const away = matchName(ev.away);
+  if (!home || !away) return [];
+  // Both ways round: the slip does not agree with us about who is at home.
+  const want = new Set([`${home} v ${away}`, `${away} v ${home}`]);
 
-  const board = await cachedBoard().catch(() => []);
-  const events = Array.isArray(board) ? board : (board?.events ?? []);
-  const byMatch = new Map();
-  let min = Infinity;
-  let max = -Infinity;
-  for (const e of events) {
-    const t = Date.parse(e?.startsAt);
-    if (!Number.isFinite(t) || !e?.home || !e?.away) continue;
-    min = Math.min(min, t);
-    max = Math.max(max, t);
-    const home = matchName(e.home);
-    const away = matchName(e.away);
-    if (!home || !away) continue;
-    // Both ways round: the slip does not agree with us about who is at home.
-    byMatch.set(`${home} v ${away}`, e.id);
-    byMatch.set(`${away} v ${home}`, e.id);
-  }
-  if (!byMatch.size) return byFixture;
-
-  /*
-   * Three days back from the earliest fixture on the board, which is almost
-   * all of it: of 13,295 legged tickets, 94.1% were struck within SIX HOURS of
-   * their first leg, 98.9% within a day and 99.6% within two. Ten days back
-   * was the first guess and cost three times the scan for the last 0.1%.
-   */
-  const cursor = db.collection('multi_bets').find({
-    transaction_date: { $gte: new Date(Math.max(min - 3 * 864e5, BET_CUTOFF.getTime())), $lte: new Date(max + 2 * 864e5) },
+  const rows = await db.collection('multi_bets').find({
+    transaction_date: {
+      $gte: new Date(Math.max(start - LEG_WINDOW_BACK_MS, BET_CUTOFF.getTime())),
+      $lte: new Date(start + LEG_WINDOW_FWD_MS),
+    },
     'legs.0': { $exists: true },
     bet_status: { $not: COUNTER_ENTRY },
     bet_type: { $not: VOID_BET },
-  }).project(LEG_INDEX_PROJECTION);
+  }).project(LEG_PROJECTION).toArray();
 
-  for await (const row of cursor) {
-    // One ticket can have legs on several of the board's fixtures, and belongs
-    // on each of their pages.
-    const on = new Set();
-    for (const leg of row.legs ?? []) {
-      const id = byMatch.get(matchName(leg?.multileg_evetdescription));
-      if (id) on.add(id);
-    }
-    for (const id of on) {
-      const list = byFixture.get(id) ?? [];
-      if (list.length < LEG_INDEX_PER_FIXTURE) list.push(row);
-      byFixture.set(id, list);
-    }
-  }
-  return byFixture;
+  return rows.filter((r) =>
+    (r.legs ?? []).some((leg) => want.has(matchName(leg?.multileg_evetdescription))),
+  );
 }
-
-/**
- * The index as it stands RIGHT NOW, plus a refresh if it is stale. Never waits.
- *
- * Blocking on the build cost the first page view on a cold instance 5.6
- * seconds, which is most of a page load to add a second brand's bets. So the
- * first caller gets whatever is in hand — on a cold instance, nothing — and
- * triggers the scan behind them.
- *
- * The cost of that is a page that is briefly missing its multis, which is
- * exactly the kind of "sometimes it shows, sometimes it does not" that is
- * worse than being slow. So it is not left silent: `warming` rides out with
- * the result and the panel says it is still loading and comes back for it,
- * rather than quietly reporting fewer bets than exist.
- */
-const EMPTY_INDEX = new Map();
-let legIndexValue = null;
-let legIndexAt = 0;
-let legIndexInflight = null;
-
-function legIndexNow() {
-  const fresh = legIndexValue !== null && Date.now() - legIndexAt < LEG_INDEX_TTL;
-  if (!fresh && !legIndexInflight) {
-    legIndexInflight = buildLegIndex()
-      .then((m) => {
-        legIndexValue = m;
-        legIndexAt = Date.now();
-      })
-      .catch(() => {
-        // Keep the old copy on a failure; an empty index would read as "this
-        // fixture has no multis", which is a different and wrong statement.
-        legIndexAt = Date.now();
-      })
-      .finally(() => {
-        legIndexInflight = null;
-      });
-  }
-  return { index: legIndexValue ?? EMPTY_INDEX, ready: legIndexValue !== null };
-}
-
-/** Warm it without anyone waiting — see betsForFixture. */
-export const warmLegIndex = () => {
-  legIndexNow();
-};
 
 async function multiBetsFor(db, eventId, fixtureId) {
   const numericId = Number(eventId);
@@ -595,8 +529,7 @@ async function multiBetsFor(db, eventId, fixtureId) {
       .toArray();
   }
 
-  const { index, ready } = legIndexNow();
-  const legged = index.get(fixtureId) ?? [];
+  const legged = await leggedFor(db, fixtureId);
   if (legged.length) {
     // A ticket can in principle arrive down both paths; the id decides.
     const seen = new Set(rows.map((r) => r.transaction_id));
@@ -607,7 +540,7 @@ async function multiBetsFor(db, eventId, fixtureId) {
     }
     rows.sort((a, b) => new Date(b.transaction_date) - new Date(a.transaction_date));
   }
-  if (!rows.length) return { mybet: [], multis: [], warming: !ready };
+  if (!rows.length) return { mybet: [], multis: [] };
 
   // Enrichment lives in a sidecar keyed by transaction_id (the scraper
   // re-syncs the bets wholesale, so it can't be written in place).
@@ -622,7 +555,7 @@ async function multiBetsFor(db, eventId, fixtureId) {
     for (const e of enr) em.set(e.transaction_id, e.enrichment);
   }
 
-  const out = { mybet: [], multis: [], warming: !ready };
+  const out = { mybet: [], multis: [] };
   for (const r of rows) {
     const e = em.get(r.transaction_id);
     const bet = normalise({
@@ -701,17 +634,10 @@ export async function betsForFixture(fixtureId) {
    */
   {
     jobs.push(
-      multiBetsFor(db, mapping.mybet?.gutsy_event_id ?? 0, fixtureId).then(({ mybet, multis, warming }) => {
+      multiBetsFor(db, mapping.mybet?.gutsy_event_id ?? 0, fixtureId).then(({ mybet, multis }) => {
         const unmapped = !mapping.mybet?.gutsy_event_id;
-        result.warming = !!warming;
-        result.mybet = {
-          bets: mybet,
-          reason: mybet.length ? null : warming ? 'warming' : unmapped ? 'unmapped' : 'none',
-        };
-        result.multis = {
-          bets: multis,
-          reason: multis.length ? null : warming ? 'warming' : unmapped ? 'unmapped' : 'none',
-        };
+        result.mybet = { bets: mybet, reason: mybet.length ? null : unmapped ? 'unmapped' : 'none' };
+        result.multis = { bets: multis, reason: multis.length ? null : unmapped ? 'unmapped' : 'none' };
       }),
     );
   }

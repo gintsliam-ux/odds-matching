@@ -565,16 +565,6 @@ export interface FixtureBets {
   swiftbet: BrandBets;
   mybet: BrandBets;
   multis: BrandBets;
-  /**
-   * True while the multi-leg index is still being built on the server.
-   *
-   * Multis have no event id and are found through an index of their leg text
-   * that is built in the background, so a request landing on a cold instance
-   * gets the singles and none of the multis. The flag says so out loud — the
-   * alternative is a page that quietly reports three bets where there are
-   * thirty, and then thirty on the next refresh for no visible reason.
-   */
-  warming?: boolean;
 }
 
 /**

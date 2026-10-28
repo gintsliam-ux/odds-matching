@@ -312,15 +312,6 @@ function Leaders({
   );
 }
 
-/*
- * How long to wait before asking again while the multi index builds, and how
- * many times. The build is a few seconds from cold, so four tries five seconds
- * apart covers it comfortably and then gives up rather than polling forever at
- * a server that is evidently not going to answer differently.
- */
-const WARMING_RETRY_MS = 5_000;
-const WARMING_RETRIES = 4;
-
 /**
  * Player-stat bets on this fixture, grouped by the brand's own market name.
  *
@@ -342,38 +333,20 @@ function StatBets({
 }) {
   const [bets, setBets] = useState<FixtureBets | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
-  /** Bumped to ask again while the server says its multi index is still building. */
-  const [attempt, setAttempt] = useState(0);
-
   useEffect(() => {
     let cancelled = false;
-    if (attempt === 0) setState('loading');
+    setState('loading');
     fetchBets(fixtureId)
       .then((d) => {
         if (cancelled) return;
         setBets(d);
         setState('ready');
       })
-      .catch(() => !cancelled && setState((cur) => (cur === 'loading' ? 'error' : cur)));
+      .catch(() => !cancelled && setState('error'));
     return () => {
       cancelled = true;
     };
-  }, [fixtureId, attempt]);
-
-  // Reset the retry counter when the fixture changes, so a new event starts over.
-  useEffect(() => setAttempt(0), [fixtureId]);
-
-  /*
-   * Multis are found through an index the server builds in the background, so
-   * a request that lands on a cold instance comes back with the singles and
-   * none of them — three bets where there are thirty. Rather than show that
-   * and leave it, ask again until the index is up, a few times and then stop.
-   */
-  useEffect(() => {
-    if (!bets?.warming || attempt >= WARMING_RETRIES) return;
-    const id = setTimeout(() => setAttempt((n) => n + 1), WARMING_RETRY_MS);
-    return () => clearTimeout(id);
-  }, [bets?.warming, attempt]);
+  }, [fixtureId]);
 
   const groups = useMemo(() => {
     if (!bets) return [];
@@ -486,9 +459,7 @@ function StatBets({
     return <p className="text-xs text-slate-500">Couldn't load bets for this fixture.</p>;
   }
   if (!groups.length) {
-    return bets?.warming ? (
-      <p className="text-xs text-slate-500">Loading multis…</p>
-    ) : (
+    return (
       // Named, because this tab reads two of the three brands: a fixture with
       // a hundred swiftbet player bets on it still lands here, and "no bets"
       // would be a lie about what was looked at.
@@ -500,10 +471,6 @@ function StatBets({
 
   return (
     <div className="space-y-3">
-      {/* Say so rather than quietly showing the singles alone. */}
-      {bets?.warming && (
-        <p className="text-xs text-slate-500">Loading multis — more to come.</p>
-      )}
       {groups.map(({ market, rows, stake }) => (
         <div key={market} className="overflow-hidden rounded-xl bg-surface-raised/40">
           <div className="flex items-baseline gap-2 border-b border-surface-border px-3 py-1.5">
