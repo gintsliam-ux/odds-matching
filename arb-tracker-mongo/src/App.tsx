@@ -239,17 +239,20 @@ export default function App() {
   // The mapping page reads tables the public odds surface does not publish.
   const caps = useCapabilities();
   /*
-   * The rail links a trading account is refused by the server, so none of them
-   * is offered to it — a link that 403s is worse than no link.
-   *
-   * It holds the board itself now, so the rail it draws is the admin's rail and
-   * every entry on it has to be checked rather than just the two that used to
-   * be. Movers, the mapping tables, settlement and late bets are all outside
-   * TRADING_ALLOWED; the ticker, the board and the event page beneath it are
-   * not. Pending has always been admin-only on its own line below.
+   * The rail links a restricted account is refused by the server, so none of
+   * them is offered to it — a link that 403s is worse than no link. The lists
+   * that decide are TRADING_ALLOWED and SUPPORT_ALLOWED in routes.mjs; this is
+   * only what gets drawn.
    */
   const { user } = useAuth();
-  const deskOnly = user?.role !== 'trading';
+  /*
+   * Two roles are restricted to the board, and they differ by one link.
+   * `deskOnly` is the desk's own tools — movers, settlement, late bets, the
+   * mapping tables — which neither of them may open; the ticker is trading's
+   * and not support's.
+   */
+  const deskOnly = user?.role !== 'trading' && user?.role !== 'support';
+  const hasTicker = user?.role !== 'support';
   const match = useMatch('/event/:slug/:fixtureId');
   const activeId = match?.params.fixtureId ?? null;
 
@@ -855,7 +858,7 @@ export default function App() {
             open={openGroup === 'tools'}
             onToggle={() => toggleGroup('tools')}
           >
-            {caps.bets && <RailLink to="/ticker" icon={Radio}>Ticker</RailLink>}
+            {caps.bets && hasTicker && <RailLink to="/ticker" icon={Radio}>Ticker</RailLink>}
             {/* Movers reads the same price ladder the board already holds, so
                 it works on either source — no mapping tables involved. */}
             {deskOnly && <RailLink to="/movers" icon={TrendingDown}>Movers</RailLink>}

@@ -399,38 +399,35 @@ const MONGO_ONLY = {
  * shell reads before it knows who you are. Everything else is the desk's own data.
  */
 /**
- * What a `trading` account may read.
+ * What a RESTRICTED account may read — see ALLOWED_BY_ROLE below.
  *
- * The board, exactly as an admin sees it, minus the price history — plus the
- * bet ticker and the prices page it already had. The board moved in and out of
- * this list twice before settling here; what changed on the last pass is that
- * the exclusion is now a specific one (the ladder) rather than the whole page,
- * and the ladder is stripped from the payload a few lines below rather than
- * hidden in the client.
+ * Two roles are restricted and they differ by one route. Both get the board
+ * exactly as an admin sees it, minus the price history; trading also gets the
+ * bet ticker. Admin and anything else is unrestricted.
  *
- * What a trading account still does not get, and why none of it is the board:
+ * What neither of them gets, and why none of it is the board:
  *
  *   /api/movers        ranks fixtures BY price movement. It is the history in
  *                      page form, so serving it from a stripped payload would
  *                      either fail or lie.
- *   /api/settlement    their own pages, reached from Tools, not from the board.
+ *   /api/settlement    their own pages, reached from Tools, not the board.
  *   /api/late-bets
  *   /api/mapping/*     the tables behind the desk's matching.
  *   /api/pending       admin only for everyone — see ADMIN_ONLY.
  *
- * Enforced HERE rather than only in the client's routing, because a hidden link
- * is not a restriction — the endpoints are a cookie and a curl away. The
- * client-side redirects exist so a trading user is never shown a page that
+ * Enforced HERE rather than only in the client's routing, because a hidden
+ * link is not a restriction — the endpoints are a cookie and a curl away. The
+ * client-side redirects exist so a restricted user is never shown a page that
  * would then fail to load; this is the part that decides.
  *
- * An allow-list, so a route added later is denied to trading until someone
+ * An allow-list, so a route added later is denied to both until someone
  * decides otherwise. The opposite default would hand every new endpoint over
  * silently.
  */
 /**
  * Routes only an admin may call, whatever else their role can do.
  *
- * The mirror image of TRADING_ALLOWED and enforced in the same place, for the
+ * The mirror image of the allow-lists and enforced in the same place, for the
  * same reason: a link the client does not draw is not a restriction. A
  * DENY-list rather than an allow-list, because the default for a new route
  * should be "available to the roles that can already see the page", and an
@@ -443,30 +440,54 @@ const ADMIN_ONLY = new Set([
   'GET /api/pending',
 ]);
 
-const TRADING_ALLOWED = new Set([
-  // The ticker, and what the page needs to render a row.
-  'GET /api/ticker',
-  'GET /api/meta',
-  // Team/player search, the prices for one fixture, and the fixture itself.
-  'GET /api/search',
-  'GET /api/odds',
-  'GET /api/event',
-  'GET /api/event/details',
-  'GET /api/health',
-  // The board: its fixture list, the day picker, the feed lights above it, and
-  // the h2h prices the rows carry. None of these payloads holds any history —
-  // checked field by field against HISTORY_FIELDS, not assumed.
+/**
+ * The board, and everything the event page under it needs.
+ *
+ * This is what a restricted account has. None of these payloads carries any
+ * price history — checked field by field against HISTORY_FIELDS rather than
+ * assumed — except `/api/odds`, which is stripped on the way out.
+ *
+ * `/api/search` is here for the rail's own search box, not for a page of its
+ * own: the board has a "search teams or players" field and it would be dead
+ * without this.
+ */
+const BOARD_ONLY = [
   'GET /api/events',
   'GET /api/events/day',
   'GET /api/pulse',
   'GET /api/h2h',
   'POST /api/h2h',
-  // The event page's own tabs, which are part of the board rather than
-  // somewhere else it can now reach. Bets is the same data as the ticker the
-  // role already lives on, one fixture at a time.
+  'GET /api/event',
+  'GET /api/event/details',
+  'GET /api/odds',
+  // The event page's own tabs.
   'GET /api/player-stats',
   'GET /api/bets',
-]);
+  // The rail's search box, the reference tables the page renders from, and
+  // the health probe.
+  'GET /api/search',
+  'GET /api/meta',
+  'GET /api/health',
+];
+
+/** Trading: the board, plus the bet ticker it lives on. */
+const TRADING_ALLOWED = new Set([...BOARD_ONLY, 'GET /api/ticker']);
+
+/**
+ * Support: the same board and nothing else — no ticker.
+ *
+ * Support used to be the unrestricted baseline, with every desk tool and the
+ * full price history, and admin differed from it by two routes. It mirrors
+ * trading now, minus the ticker: the role is for looking at a game, not at
+ * what the book has taken on it.
+ */
+const SUPPORT_ALLOWED = new Set(BOARD_ONLY);
+
+/** What each restricted role may read. A role absent here is unrestricted. */
+const ALLOWED_BY_ROLE = { trading: TRADING_ALLOWED, support: SUPPORT_ALLOWED };
+
+/** The roles served the current price and no history at all. */
+const NO_HISTORY_ROLES = new Set(['trading', 'support']);
 
 /**
  * Price history a trading account does not get: the current price only.
@@ -630,7 +651,7 @@ export async function handleApi({ method, pathname, searchParams, body, cookies 
      * fall through to the instance's own answer when there is not.
      */
     const who = AUTH_CONFIGURED ? whoami(cookies) : null;
-    const noHistory = who?.role === 'trading'
+    const noHistory = NO_HISTORY_ROLES.has(who?.role)
       ? { priceHistory: false, priceSeries: false }
       : null;
     return { status: 200, body: { ...CAPABILITIES, ...noHistory, auth: AUTH_CONFIGURED } };
@@ -656,7 +677,8 @@ export async function handleApi({ method, pathname, searchParams, body, cookies 
   const handler = ROUTES[key];
   if (!handler) return { status: 404, body: { error: 'not found' } };
 
-  if (me?.role === 'trading' && !TRADING_ALLOWED.has(key)) {
+  const allowed = ALLOWED_BY_ROLE[me?.role];
+  if (allowed && !allowed.has(key)) {
     return { status: 403, body: { error: 'not available to this account' } };
   }
 
@@ -673,7 +695,7 @@ export async function handleApi({ method, pathname, searchParams, body, cookies 
   const url = { searchParams };
   const out = await handler(url, body);
   // The current price only — see HISTORY_FIELDS.
-  if (me?.role === 'trading' && HISTORY_ROUTES.has(key)) {
+  if (NO_HISTORY_ROLES.has(me?.role) && HISTORY_ROUTES.has(key)) {
     return { status: 200, body: stripHistory(out) };
   }
   return { status: 200, body: out };

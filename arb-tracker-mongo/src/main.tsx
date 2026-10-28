@@ -1,6 +1,6 @@
 import { lazy, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import App from './App';
 import EventView from './EventView';
 /*
@@ -22,7 +22,6 @@ const MoversPage = lazy(() => import('./pages/MoversPage'));
 const MappingPage = lazy(() => import('./pages/MappingPage'));
 import { CapabilitiesProvider } from './lib/capabilities';
 const UsersPage = lazy(() => import('./pages/UsersPage'));
-const SearchPage = lazy(() => import('./pages/SearchPage'));
 const SettlementPage = lazy(() => import('./pages/SettlementPage'));
 const LateBetsPage = lazy(() => import('./pages/LateBetsPage'));
 const PendingBetsPage = lazy(() => import('./pages/PendingBetsPage'));
@@ -53,8 +52,8 @@ function AdminOnly({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * The pages a `trading` account does not have. Everything else lands it on the
- * board, which it now shares with an admin.
+ * The pages a restricted account does not have. Everything else lands it on
+ * the board, which trading and support both share with an admin.
  *
  * The board and the event page beneath it used to be guarded here too. They
  * are not any more: the one thing withheld from the role on those pages is the
@@ -68,15 +67,21 @@ function AdminOnly({ children }: { children: React.ReactNode }) {
  * routes outright and would do so whatever this component said. A guard that
  * only hid links would be decoration.
  */
-/** `/search` -> `/prices`, query and all. */
-function LegacySearch() {
-  const { search } = useLocation();
-  return <Navigate to={`/prices${search}`} replace />;
-}
+/** Trading and support both; admin and anything else passes. */
+const RESTRICTED = new Set(['trading', 'support']);
 
 function DeskOnly({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
-  if (user?.role === 'trading') return <Navigate to="/ticker" replace />;
+  // To the board, not to the ticker: the board is the page both restricted
+  // roles have, and support cannot open the ticker at all.
+  if (RESTRICTED.has(user?.role ?? '')) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
+/** The ticker is trading's page, not support's. */
+function NotSupport({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  if (user?.role === 'support') return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
@@ -101,15 +106,15 @@ createRoot(document.getElementById('root')!).render(
         </Route>
         {/* Full-width: the mapping table has no use for the event rail. */}
         <Route path="/movers" element={<DeskOnly><MoversPage /></DeskOnly>} />
-        <Route path="/ticker" element={<TickerPage />} />
+        <Route path="/ticker" element={<NotSupport><TickerPage /></NotSupport>} />
         {/*
-          * `/prices` is what the page is called, in its own heading and in the
-          * link that reaches it. `/search` was the name of the box on it, not
-          * of the page, and is kept as a redirect so older links and anything
-          * bookmarked still land — carrying the query string with them.
+          * /prices and /search are gone. That page existed because `trading`
+          * had no board — it was the role's entire surface, a search box over
+          * the same markets-by-bookmaker grid the event page draws. Trading
+          * has the board now, nothing linked to the page any more, and a
+          * second way to look at one fixture's prices is a second thing to
+          * keep working.
           */}
-        <Route path="/prices" element={<SearchPage />} />
-        <Route path="/search" element={<LegacySearch />} />
         <Route path="/settlement" element={<DeskOnly><SettlementPage /></DeskOnly>} />
         <Route path="/late-bets" element={<DeskOnly><LateBetsPage /></DeskOnly>} />
         {/* Our own position, bet by bet — admin only, and gated on the server too. */}
