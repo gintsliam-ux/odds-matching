@@ -43,7 +43,35 @@ const iso = (v) => (v instanceof Date ? v.toISOString() : typeof v === 'string' 
 
 const norm = (s) =>
   String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-const words = (s) => new Set(norm(s).split(/[^a-z0-9]+/).filter(Boolean));
+/**
+ * Words that identify no club, dropped before the names are compared.
+ *
+ * Two kinds, and every one of these cost a whole side of a market:
+ *
+ *   the club noun   "Al Ahli FC" against mybet's "Al Ahli SC (Sau)" — the
+ *                   same team, disagreeing only on which generic noun the
+ *                   league files it under. Neither name is a subset of the
+ *                   other while fc and sc are in them.
+ *   the country tag mybet suffixes a parenthesised country where two leagues
+ *                   share a name: "(Sau)", "(Qat)", "(Uae)", "(Irn)". The feed
+ *                   never does.
+ *
+ * Only the generic half goes. "Al Ahli" and "Al Ain" still do not match each
+ * other after this, which is the point: it makes the test less brittle without
+ * making it less specific, and sideOfName still refuses anything ambiguous.
+ */
+const NOISE = new Set([
+  'fc', 'sc', 'cf', 'afc', 'sk', 'fk', 'ac', 'cd', 'cs', 'sv', 'club', 'kulubu', 'kulup',
+  'sau', 'qat', 'uae', 'irn', 'ksa', 'eng', 'esp', 'ita', 'ger', 'fra', 'bra', 'arg',
+]);
+
+const words = (s) => {
+  const all = norm(s).split(/[^a-z0-9]+/).filter(Boolean);
+  const kept = all.filter((w) => !NOISE.has(w));
+  // Never strip a name down to nothing: a club genuinely called "FC" would
+  // then match everything.
+  return new Set(kept.length ? kept : all);
+};
 
 /**
  * Is this selection the home side, the away side, or neither?
@@ -169,6 +197,29 @@ const sportKey = (s) => String(s ?? '').toLowerCase().replace(/[^a-z]/g, '');
 /** The id for a head-to-head, given whether it carries a draw. */
 const threeWayApplies = (sport, hasDraw) => hasDraw && !DRAW_IS_A_RESULT.has(sportKey(sport));
 
+/**
+ * Where a TWO-way price set belongs on a sport that can be drawn.
+ *
+ * It is not the moneyline. On a Sheffield Shield match — a first-class game
+ * that can and often does end drawn — mybet quoted South Australia 1.80 and
+ * Western Australia 1.94 and no draw at all: no `Draw` in `flucs`, none in
+ * `opening`, just the always-present field sitting at zero. Two prices
+ * covering a three-way result is a Draw No Bet, and the stake comes back if
+ * it is drawn.
+ *
+ * Filed as `moneyline` it landed on the same row as TAB's actual Match Winner
+ * (2.10, with the draw at 7.00) and the grid compared the two. A draw-no-bet
+ * price is always the shorter of the pair — it is the same bet with one
+ * outcome refunded — so ours read as far under the market when it was not the
+ * same market.
+ *
+ * Only soccer and cricket, because they are the only two whose grids define a
+ * `dnb` market to put it in. Rugby and Aussie Rules can be drawn too, but a
+ * draw there is rare enough that books quote two ways and mean it, and there
+ * is no draw-no-bet column on those pages to move the row into.
+ */
+const DNB_SPORTS = new Set(['soccer', 'cricket']);
+
 function swiftRows(ev, { home, away, sport }) {
   const out = [];
   const at = ev?.scraped_at ?? null;
@@ -277,11 +328,50 @@ function mybetRows(ev, { home, away, sport }) {
    * A and B are NOT home and away. Boston Celtics v New York Knicks arrives
    * with teamA "New York Knicks", so every side here is decided by NAME.
    */
-  const sideA = sideOfName(m.teamA, home, away);
-  const sideB = sideOfName(m.teamB, home, away);
+  /*
+   * Which of mybet's two teams is home, decided as a PAIRING.
+   *
+   * Each side was resolved on its own, and that fails two ways on real names.
+   * It dropped a side whenever the strings disagreed — "LA Galaxy" for "Los
+   * Angeles Galaxy", "Lok. Plovdiv" for "Lokomotiv Plovdiv", "Rizespor" for
+   * "Çaykur Rize Spor Kulübü" — leaving a three-way market showing a draw and
+   * one team, or on the worst of them the draw alone: twenty-three of sixty
+   * mapped soccer and cricket fixtures. And once the generic club words were
+   * stripped it started doing something worse, putting BOTH teams on the same
+   * row: "Los Angeles FC" reduces to {los, angeles}, which is a subset of
+   * "Los Angeles Galaxy", so both of them matched home and the home price was
+   * written twice.
+   *
+   * Scoring the pairing fixes both. There are only two ways round, and an
+   * exact name beats a merely-compatible one, so Los Angeles FC takes the home
+   * row it matches exactly and the Galaxy takes the other by arithmetic. It is
+   * sound because `event_mapping` has already decided these are the same game:
+   * one home, one away, teamA and teamB, so naming either names the other.
+   *
+   * A tie means neither ordering has evidence — "PSG"/"Lyon" against "Paris
+   * Saint-Germain FC"/"Olympique Lyonnais" matches nothing either way — and
+   * both sides are dropped. No price is better than a price on the wrong team.
+   */
+  const fit = (name, team) => {
+    const n = words(name);
+    const t = words(team);
+    if (!n.size || !t.size) return 0;
+    const [small, big] = n.size <= t.size ? [n, t] : [t, n];
+    for (const w of small) if (!big.has(w)) return 0;
+    return n.size === t.size ? 2 : 1;   // exact beats compatible
+  };
+  const straight = fit(m.teamA, home) + fit(m.teamB, away);
+  const crossed = fit(m.teamA, away) + fit(m.teamB, home);
+  const sideA = straight > crossed ? 1 : crossed > straight ? 2 : null;
+  const sideB = sideA === null ? null : sideA === 1 ? 2 : 1;
+
   const draw = num(m.Draw);
   const threeWay = draw != null;
-  const h2hId = threeWayApplies(sport, threeWay) ? 'moneyline_3way' : 'moneyline';
+  const h2hId = threeWayApplies(sport, threeWay)
+    ? 'moneyline_3way'
+    : !threeWay && DNB_SPORTS.has(sportKey(sport))
+      ? 'dnb'
+      : 'moneyline';
 
   /*
    * No price, no row. `num` already rejects the 0 both stores write for "not
