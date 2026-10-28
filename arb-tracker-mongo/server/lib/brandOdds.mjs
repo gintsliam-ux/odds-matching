@@ -134,21 +134,51 @@ const COMBO_MARKET = /same game|multi/i;
  */
 const COMBO_SELECTION = /,|&|\//;
 
+/**
+ * Where a drawn result belongs, which is not the same answer for every sport.
+ *
+ * A Draw in the selections used to send the whole market to `moneyline_3way`.
+ * That is right for hockey and wrong for soccer, and the two failures look
+ * nothing alike:
+ *
+ *   Hockey    swiftbet prices "head to head" (two-way, including overtime)
+ *             AND a regulation three-way on the same game. They are different
+ *             markets with different prices — Senators 1.68 against 2.08 — and
+ *             filing both under `moneyline` put the regulation price on the
+ *             field's overtime row.
+ *   Soccer    there is only ONE match winner and it has a draw in it. The
+ *             field files it under `moneyline`; we filed it under
+ *             `moneyline_3way`, which for soccer is not even a market the grid
+ *             defines — so our prices were dropped from the page entirely.
+ *             Cricket's Test match winner is the same shape: TAB quotes South
+ *             Africa / Draw / Australia under plain `moneyline`, and our
+ *             three prices sat in a group of their own that the grid then hid
+ *             for having only one book in it.
+ *
+ * So the question is not "is there a draw" but "can this sport end drawn in
+ * normal time". Where it can, the drawable market IS the moneyline. Where it
+ * cannot, a draw means someone is pricing regulation time separately.
+ */
+const DRAW_IS_A_RESULT = new Set([
+  'soccer', 'cricket', 'rugbyleague', 'rugbyunion', 'aussierules', 'australianrules', 'handball',
+]);
+
+/** Sport arrives as either the surface slug or the display label. */
+const sportKey = (s) => String(s ?? '').toLowerCase().replace(/[^a-z]/g, '');
+
+/** The id for a head-to-head, given whether it carries a draw. */
+const threeWayApplies = (sport, hasDraw) => hasDraw && !DRAW_IS_A_RESULT.has(sportKey(sport));
+
 function swiftRows(ev, { home, away, sport }) {
   const out = [];
   const at = ev?.scraped_at ?? null;
   for (const m of ev?.markets ?? []) {
     const mName = String(m?.name ?? '');
     if (!mName || COMBO_MARKET.test(mName)) continue;
-    /*
-     * A market with a Draw in it is the THREE-way, and parseBetMarket offers
-     * both ids for a moneyline because a bet slip never says which it was.
-     * Here the selections do say: swiftbet lists "head to head" (Senators 1.68,
-     * two-way, including overtime) AND a regulation three-way (Senators 2.08,
-     * Draw 4.00) on the same game, and taking marketIds[0] for both put two
-     * different markets' prices on one row — the grid would have shown 2.08
-     * against the field's two-way line.
-     */
+    // Whether a draw makes this the three-way depends on the sport — see
+    // DRAW_IS_A_RESULT. parseBetMarket offers both ids because a bet slip
+    // never says which of the two it was; here the sport and the draw do.
+
     const hasDraw = (m?.selections ?? []).some((x) => /\bdraw\b/i.test(String(x?.name ?? '')));
     for (const s of m?.selections ?? []) {
       const price = num(s?.odds);
@@ -168,7 +198,7 @@ function swiftRows(ev, { home, away, sport }) {
         : p.kind === 'btts' ? (/^yes$/i.test(p.name ?? '') ? 1 : /^no$/i.test(p.name ?? '') ? 2 : null)
         : sideOfName(p.name || sName, home, away);
       if (outcomeNo == null) continue;
-      const marketId = hasDraw
+      const marketId = threeWayApplies(sport, hasDraw)
         ? (p.marketIds.find((id) => id.endsWith('_3way')) ?? p.marketIds[0])
         : p.marketIds[0];
       out.push(row({
@@ -227,7 +257,7 @@ function beforeZero(ev) {
   return Object.keys(vals).length ? { vals, wentLiveAt } : null;
 }
 
-function mybetRows(ev, { home, away }) {
+function mybetRows(ev, { home, away, sport }) {
   const live = ev?.match && Number(ev.match.AWin) === 0 && Number(ev.match.BWin) === 0;
   const prior = live ? beforeZero(ev) : null;
   /*
@@ -251,7 +281,7 @@ function mybetRows(ev, { home, away }) {
   const sideB = sideOfName(m.teamB, home, away);
   const draw = num(m.Draw);
   const threeWay = draw != null;
-  const h2hId = threeWay ? 'moneyline_3way' : 'moneyline';
+  const h2hId = threeWayApplies(sport, threeWay) ? 'moneyline_3way' : 'moneyline';
 
   /*
    * No price, no row. `num` already rejects the 0 both stores write for "not
@@ -326,7 +356,7 @@ export async function brandOddsFor(fixtureId, { home, away, sport } = {}) {
 
     return [
       ...(swiftEv ? swiftRows(swiftEv, { home, away, sport }) : []),
-      ...(mybetEv ? mybetRows(mybetEv, { home, away }) : []),
+      ...(mybetEv ? mybetRows(mybetEv, { home, away, sport }) : []),
     ];
   } catch {
     return [];
