@@ -128,7 +128,7 @@ const words = (s: string) =>
  * What became of a bet: the brand's own word for it, or void when the man it
  * names never took the field.
  */
-type Landed = 'won' | 'lost' | 'void' | 'pending';
+type Landed = 'won' | 'lost' | 'void' | 'pending' | 'unknown';
 
 const SUFFIX = new Set(['jr', 'sr', 'ii', 'iii', 'iv', 'v']);
 
@@ -182,11 +182,43 @@ function landed(bet: Bet, match: Match, done: boolean): Landed {
   return 'pending';
 }
 
+/**
+ * What became of one LEG of a multi, which is a weaker question than the bet.
+ *
+ * The brand settles the ticket, not the leg. That makes one direction certain
+ * and the other not: if the ticket returned, every leg on it came in, so a won
+ * ticket means a won leg. A lost ticket only means at least one leg lost, and
+ * nothing says it was this one — so rather than paint it red or green, the leg
+ * is marked "multi lost" and left unclaimed.
+ *
+ * Void still applies, because it is about the man and not the ticket: if he
+ * never took the field, his leg was voided whatever the rest of the slip did.
+ */
+function legLanded(bet: Bet, match: Match, done: boolean): Landed {
+  if (done && match?.exact && match.player.played === false) return 'void';
+  const whole = landed(bet, null, done);
+  if (whole === 'won') return 'won';
+  if (whole === 'lost') return 'unknown';
+  return whole;
+}
+
 const LANDED_TONE: Record<Landed, string> = {
   won: 'bg-emerald-500/15 text-emerald-300',
   lost: 'bg-rose-500/15 text-rose-300',
   void: 'bg-slate-500/15 text-slate-400',
   pending: 'bg-amber-500/15 text-amber-300',
+  unknown: 'bg-slate-500/10 text-slate-500',
+};
+
+const LANDED_LABEL: Record<Landed, string> = {
+  won: 'won', lost: 'lost', void: 'void', pending: 'pending', unknown: 'multi lost',
+};
+
+const LANDED_TITLE: Record<Landed, string> = {
+  won: '', lost: '', void: 'The player recorded nothing in the box score.',
+  pending: 'Not settled yet.',
+  unknown:
+    'The ticket lost, so at least one leg did — but the brand does not say which, so this leg is not claimed either way.',
 };
 
 /** One block per stat: every player who recorded it, in order, by team. */
@@ -325,7 +357,17 @@ function StatBets({
      */
     const players = teams.flatMap((t) => t.players).filter((p) => p.player);
 
-    const all: { brand: string; bet: Bet; landed: Landed }[] = [];
+    type Row = {
+      brand: string;
+      bet: Bet;
+      market: string;
+      selection: string;
+      price: number | null;
+      /** This row is one leg of a multi, not the whole ticket. */
+      ofMulti: boolean;
+      landed: Landed;
+    };
+    const all: Row[] = [];
     /*
      * mybet and multis only, and that is not an omission.
      *
@@ -342,22 +384,63 @@ function StatBets({
      */
     for (const brand of ['mybet', 'multis'] as const) {
       for (const bet of bets[brand]?.bets ?? []) {
+        /*
+         * A multi is read leg by leg, because as one row it belongs under no
+         * market at all. Bet 6772218 is a Lakers moneyline AND Jrue Holiday
+         * 15+ points AND Scoot Henderson 15+ points on one ticket; its
+         * `selections` is all three run together with slashes and its market
+         * is the same mess. Split, two of those three legs group cleanly under
+         * "Player to Score 15+ Points" and the moneyline leg drops out for
+         * naming nobody in the box score.
+         */
+        if (bet.legs?.length) {
+          for (const leg of bet.legs) {
+            if (!leg.selection) continue;
+            const match = namesPlayer({ ...bet, market: leg.market, selection: leg.selection }, players);
+            if (!match) continue;
+            all.push({
+              brand,
+              bet,
+              market: leg.market ?? bet.market ?? 'Unknown market',
+              selection: leg.selection,
+              price: leg.price,
+              ofMulti: true,
+              landed: legLanded(bet, match, done),
+            });
+          }
+          continue;
+        }
         const match = namesPlayer(bet, players);
         if (!match) continue;
-        all.push({ brand, bet, landed: landed(bet, match, done) });
+        all.push({
+          brand,
+          bet,
+          market: bet.market ?? bet.selection ?? 'Unknown market',
+          selection: bet.selection ?? '',
+          price: bet.price,
+          ofMulti: false,
+          landed: landed(bet, match, done),
+        });
       }
     }
 
-    const byMarket = new Map<string, typeof all>();
+    const byMarket = new Map<string, Row[]>();
     for (const row of all) {
-      const key = row.bet.market ?? row.bet.selection ?? 'Unknown market';
-      byMarket.set(key, [...(byMarket.get(key) ?? []), row]);
+      byMarket.set(row.market, [...(byMarket.get(row.market) ?? []), row]);
     }
     return [...byMarket.entries()]
       .map(([market, rows]) => ({
         market,
         rows,
-        stake: rows.reduce((t, r) => t + (Number(r.bet.stake) || 0), 0),
+        /*
+         * Each TICKET once, not each row. Two legs of one $10 multi land in
+         * the same group, and adding both would report $20 staked on a market
+         * that took ten.
+         */
+        stake: [...new Map(rows.map((r) => [r.bet.id, r.bet])).values()].reduce(
+          (t, b) => t + (Number(b.stake) || 0),
+          0,
+        ),
       }))
       .sort((a, b) => b.stake - a.stake);
   }, [bets, teams]);
@@ -393,18 +476,40 @@ function StatBets({
           </div>
           <table className="w-full border-collapse text-sm">
             <tbody>
-              {rows.map(({ brand, bet, landed: l }) => (
-                <tr key={bet.id} className="border-t border-surface-border/60 hover:bg-white/[0.02]">
-                  <td className="w-16 px-3 py-1">
-                    <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${LANDED_TONE[l]}`}>
-                      {l}
+              {rows.map(({ brand, bet, market, selection, price, ofMulti, landed: l }, i) => (
+                <tr
+                  key={`${bet.id}:${market}:${selection}:${i}`}
+                  className="border-t border-surface-border/60 hover:bg-white/[0.02]"
+                >
+                  <td className="w-20 px-3 py-1">
+                    <span
+                      title={LANDED_TITLE[l]}
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${LANDED_TONE[l]}`}
+                    >
+                      {LANDED_LABEL[l]}
                     </span>
                   </td>
-                  <td className="px-2 py-1 text-slate-200">{bet.selection}</td>
-                  <td className="w-20 px-2 py-1 text-right tabular-nums text-slate-400">
+                  <td className="px-2 py-1 text-slate-200">
+                    {selection}
+                    {/* One leg of a slip, so the stake beside it is the whole
+                        ticket's and the price is this leg's alone. */}
+                    {ofMulti && (
+                      <span
+                        title={`One leg of a ${bet.legCount ?? ''}-leg ${bet.betType ?? 'multi'} — the stake shown is the whole ticket's`}
+                        className="ml-1.5 rounded bg-white/5 px-1 py-0.5 text-[9px] uppercase tracking-wide text-slate-500"
+                      >
+                        {bet.betType === 'SGM' ? 'SGM' : 'Multi'}
+                      </span>
+                    )}
+                  </td>
+                  <td
+                    className={`w-20 px-2 py-1 text-right tabular-nums ${ofMulti ? 'text-slate-600' : 'text-slate-400'}`}
+                  >
                     ${Math.round(Number(bet.stake) || 0).toLocaleString()}
                   </td>
-                  <td className="w-14 px-2 py-1 text-right tabular-nums text-slate-300">{bet.price}</td>
+                  <td className="w-14 px-2 py-1 text-right tabular-nums text-slate-300">
+                    {price != null ? Number(price).toFixed(2) : '–'}
+                  </td>
                   <td className="w-16 px-2 py-1 text-right text-[10px] uppercase text-slate-600">{brand}</td>
                 </tr>
               ))}

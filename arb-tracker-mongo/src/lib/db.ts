@@ -512,6 +512,14 @@ export function subscribeTicker(
 /* -------------------------------------------------------------------- bets */
 
 /** One bet on this fixture, normalised across the three brands. */
+export interface BetLeg {
+  /** Null when the leg's leading segment is the competition, not a market. */
+  market: string | null;
+  selection: string | null;
+  price: number | null;
+  sport: string | null;
+}
+
 export interface Bet {
   id: string;
   placedAt: string | null;
@@ -523,6 +531,15 @@ export interface Bet {
   market: string | null;
   betType: string | null;
   legCount: number | null;
+  /**
+   * The legs of a multi, each with its own market, selection and price.
+   *
+   * Present only on mybet/multis tickets that carry them — a Same Game Multi
+   * runs every leg together in `selection` and `market`, which belongs under no
+   * single market, so anything grouping by market has to read these instead.
+   * Null on singles and on swiftbet, whose legs are a different shape.
+   */
+  legs: BetLeg[] | null;
   bonus: boolean;
   result: string | null;
   /** Settled. `pl` is null until this is true — see server/lib/bets.mjs. */

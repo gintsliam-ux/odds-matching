@@ -189,6 +189,8 @@ function normalise(o) {
     market: text(o.market),
     betType: text(o.betType),
     legCount: o.legCount ?? null,
+    // Present only on a multi that carries them; null everywhere else.
+    legs: o.legs ?? null,
     bonus: !!o.bonus,
     result: text(o.result),
     resolved: isResolved(text(o.result)),
@@ -278,6 +280,40 @@ const MARKETY =
  * markets, "Nottingham Forest" and "Manchester United" do not. A known
  * satellite is still trusted on its own, since being one is proof.
  */
+/**
+ * A multi's legs, each as its own market and selection.
+ *
+ * A Same Game Multi arrives as one row whose `selections` is every leg run
+ * together with slashes — "Los Angeles Lakers / Jrue Holiday (Portland Trail
+ * Blazers) / Scoot Henderson (Portland Trail Blazers)" — and whose
+ * `event_string` is the markets run together the same way. As one row it is
+ * unreadable and ungroupable: bet 6772218 is a Lakers moneyline and two
+ * different players to score 15+, and there is no single market it belongs
+ * under.
+ *
+ * Each leg carries its own description and its own price, so each can be its
+ * own row. The leg's market is the leading segment of `multileg_evetdescription`
+ * with the match taken off the end — the same rule `marketFromSlip` uses, and
+ * with the same guard: on a plain head-to-head leg that segment is the
+ * COMPETITION ("NBA - Portland Trail Blazers vs Los Angeles Lakers"), so it is
+ * only called a market when it reads like one.
+ */
+function multiLegs(row) {
+  if (!Array.isArray(row?.legs) || !row.legs.length) return null;
+  const out = [];
+  for (const leg of row.legs) {
+    const parts = String(leg?.multileg_evetdescription ?? '').split(' - ');
+    const lead = parts.length > 1 ? parts.slice(0, -1).join(' - ').trim() : '';
+    out.push({
+      market: lead && MARKETY.test(lead) ? lead : null,
+      selection: leg?.multileg_outcome ?? null,
+      price: Number.isFinite(Number(leg?.multileg_dividend)) ? Number(leg.multileg_dividend) : null,
+      sport: leg?.multileg_sport ?? null,
+    });
+  }
+  return out.length ? out : null;
+}
+
 function marketFromSlip(row, satellites) {
   const parts = String(row.event_string ?? '').split(' - ');
   if (parts.length < 2) return null;
@@ -451,6 +487,8 @@ async function multiBetsFor(db, eventId, fixtureId) {
       sport: r.sport_name ?? null,
       betType: r.transaction_multid > 0 ? 'Multi' : r.sgm_flag ? 'SGM' : 'Single',
       legCount: Array.isArray(r.legs) && r.legs.length ? r.legs.length : null,
+      // The legs themselves, so a multi can be read leg by leg — see multiLegs.
+      legs: multiLegs(r),
       // A non-zero bonus_bet is what marks a bonus stake here, not a flag.
       bonus: !!r.bonus_bet,
       result: e?.result ?? r.bet_status ?? null,
