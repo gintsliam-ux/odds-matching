@@ -234,6 +234,22 @@ function initialFilters(): StoredFilters {
   return fallback;
 }
 
+/**
+ * An error a person can read, where what we have is an error a server wrote.
+ *
+ * This rail prints whatever was thrown, and what reached it was
+ * `{"error":"rate limited","retry_after_sec":1,"limit_per_sec":10,...}` — the
+ * upstream's own JSON, shown to someone who had just logged in. Our own
+ * messages are sentences and pass through unchanged; anything carrying a brace
+ * or the upstream's name is a leak and gets a sentence instead of being
+ * rendered raw.
+ */
+function readable(message: string): string {
+  return /[{}]|odds-api|\bhttps?:\/\//.test(message)
+    ? 'The odds feed is not answering right now. This usually clears on its own.'
+    : message;
+}
+
 export default function App() {
   const navigate = useNavigate();
   // The mapping page reads tables the public odds surface does not publish.
@@ -815,7 +831,7 @@ export default function App() {
           <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-4">
             {eventsError ? (
               <div className="px-2 py-8 text-center text-sm text-red-400">
-                {eventsError}
+                {readable(eventsError)}
               </div>
             ) : (eventsLoading && events.length === 0) ||
               (pastLoading && visible.length === 0) ||

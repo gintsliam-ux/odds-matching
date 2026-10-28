@@ -102,6 +102,7 @@ export async function allEvents() {
   if (isApi) {
     const sports = (await apiSports()).filter((s) => !SKIP_SPORTS.has(s));
     const failures = [];
+    const failed = [];
     const perSport = await Promise.all(
       sports.map((s) =>
         apiFixtures(s).catch((err) => {
@@ -109,6 +110,7 @@ export async function allEvents() {
           // turned a transient upstream blip into an empty board that then sat
           // in the CDN for five minutes reading "No events match these filters".
           failures.push(`${s}: ${err instanceof Error ? err.message : err}`);
+          failed.push(s);
           return [];
         }),
       ),
@@ -117,27 +119,37 @@ export async function allEvents() {
       console.warn(`[api] ${failures.length}/${sports.length} sports failed:`, failures.join(' | '));
     }
     /*
-     * A materially incomplete board is an outage, not an empty schedule.
+     * A materially incomplete board is an outage, not an empty schedule — but
+     * "materially" has to be measured in FIXTURES, not in sports.
      *
-     * This used to throw only when EVERY sport failed, so fifteen of sixteen
-     * failing produced a one-sport board -- which `cached` then held for 45s
-     * and served. The client replaces its list with whatever arrives, so the
-     * rail lost soccer, or basketball, or everything but volleyball, and got
-     * it back on the next poll from a different instance.
+     * This counted sports and treated them as equal, and they are nothing
+     * like equal. Of the sixteen, soccer is 47% of the board and basketball
+     * 20%, while ten of them are under 3% EACH: volleyball 1.4%, cricket 1.1%,
+     * baseball 0.8%, darts 0.6%, golf one fixture. So volleyball, cricket,
+     * baseball and darts rate-limiting at once — 273 of 5,154 fixtures, 5.3%
+     * of the board — tripped "4 of 15 failed" and threw the whole thing away,
+     * and a support account logging in was shown a raw 429 JSON blob instead
+     * of a board that was 94.7% intact.
      *
-     * Throwing is strictly better than answering partially: the board poll
-     * swallows errors, so the rail keeps the events it already has, and a warm
-     * `cached('board')` entry keeps serving the last complete board rather
-     * than being overwritten by a broken one.
+     * Weighted by the share of the board each sport actually carries, the same
+     * four cost 5% and the board is served; soccer alone failing costs 47% and
+     * is still an outage. The sizes come from the mirrored schedule, which is
+     * exactly the fixtures `scheduleOnly` reads a few lines below, so this
+     * asks nothing new of anything.
      *
-     * A quarter is the line because a failure now means the sport had no
-     * cached fixtures to fall back on either -- cachedDrain serves stale on
-     * failure -- so this only fires on a cold instance meeting a real outage.
+     * Throwing, where it is right, is still strictly better than answering
+     * partially: the board poll swallows errors, so the rail keeps the events
+     * it already has and a warm `cached('board')` keeps serving the last
+     * complete board rather than being overwritten by a broken one.
      */
-    if (failures.length > Math.max(1, Math.floor(sports.length / 4))) {
-      throw new Error(
-        `odds surface degraded — ${failures.length}/${sports.length} sports failed (${failures[0] ?? 'no detail'})`,
-      );
+    if (failed.length) {
+      const share = await lostShare(failed).catch(() => failed.length / sports.length);
+      if (share > 0.25) {
+        throw new Error(
+          `The odds surface is not answering for ${failed.slice(0, 3).join(', ')}` +
+            `${failed.length > 3 ? ` and ${failed.length - 3} more` : ''}.`,
+        );
+      }
     }
     // Window it the same way the Mongo path does. The surface publishes about
     // a week, which is 1,040 events and half a megabyte of JSON for a board
@@ -153,6 +165,26 @@ export async function allEvents() {
     return toEvents([...recent, ...await scheduleOnly(recent)]);
   }
   return toEvents(await fixturesInWindow(new Date(Date.now() - WINDOW_MS)));
+}
+
+/**
+ * How much of the board the sports that failed were carrying.
+ *
+ * Counted off the mirrored schedule over the same window the board shows, so
+ * the answer is "what share of the fixtures are missing", not "how many names
+ * are on the failure list". Returns 0 when the mirror cannot answer, which
+ * leaves the caller's own fallback to decide.
+ */
+async function lostShare(failedSports) {
+  const since = new Date(Date.now() - WINDOW_MS);
+  const rows = await (await coll('fixtures')).aggregate([
+    { $match: { scheduled_start: { $gte: since } } },
+    { $group: { _id: '$sport', n: { $sum: 1 } } },
+  ]).toArray();
+  const total = rows.reduce((a, r) => a + r.n, 0);
+  if (!total) return 0;
+  const lost = new Set(failedSports);
+  return rows.filter((r) => lost.has(r._id)).reduce((a, r) => a + r.n, 0) / total;
 }
 
 /**
