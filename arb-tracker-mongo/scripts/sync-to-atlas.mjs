@@ -43,6 +43,8 @@
 //   node --env-file=.env scripts/sync-to-atlas.mjs             incremental
 //   node --env-file=.env scripts/sync-to-atlas.mjs --full      re-copy everything
 //   node --env-file=.env scripts/sync-to-atlas.mjs --dry-run   report, write nothing
+//   node --env-file=.env scripts/sync-to-atlas.mjs --only=player_stats
+//                                                  one collection, no rebuilds
 
 import { MongoClient, ObjectId } from 'mongodb';
 
@@ -53,6 +55,26 @@ const DST_DB = process.env.MIRROR_DB || 'gutsys_sport';
 
 const FULL = process.argv.includes('--full');
 const DRY = process.argv.includes('--dry-run');
+/*
+ * `--only=player_stats` — one collection, and skip the rebuilds.
+ *
+ * The full pass takes two to three minutes, nearly all of it event_mapping
+ * (66s) and the league-health and candidate rebuilds that follow it, and it is
+ * driven by a watcher whose cycle measured 7 to 21 minutes apart. That is the
+ * right cadence for a mapping table and far too slow for a box score: a live
+ * NBA game rewrites its rows about once a minute, and the FINAL stats sat on
+ * the NAS for up to twenty minutes after the whistle before the deployed site
+ * could see them.
+ *
+ * player_stats on its own is a 0.3-0.6 second copy — it is watermarked, so a
+ * pass with nothing new costs one indexed query — which is cheap enough to run
+ * every minute beside the slow job rather than instead of it.
+ */
+const ONLY = (process.argv.find((a) => a.startsWith('--only=')) ?? '')
+  .slice('--only='.length)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 if (!SRC_URI) fail('MONGO_URI is not set — nothing to mirror from.');
 if (!DST_URI) fail('MIRROR_URI (or BETS_URI) is not set — nowhere to mirror to.');
@@ -138,11 +160,19 @@ try {
   // mode, which prunes mirror rows the NAS does not have — so a mapping saved
   // on the deployed site would be deleted on the way past unless it has already
   // been replayed upstream by the time the rebuild runs.
-  await drainPendingWrites(S, D);
-  await buildLeagueHealth(S);
-  await buildCompetitionCandidates(D);
+  // The rebuilds belong to the full pass: they are derived tables for the
+  // mapping page, they are the slow half, and `--only` exists to get a box
+  // score across in under a second.
+  if (!ONLY.length) {
+    await drainPendingWrites(S, D);
+    await buildLeagueHealth(S);
+    await buildCompetitionCandidates(D);
+  }
 
-  for (const spec of PLAN) {
+  const plan = ONLY.length ? PLAN.filter((p) => ONLY.includes(p.name)) : PLAN;
+  if (ONLY.length && !plan.length) fail(`--only named nothing in the plan: ${ONLY.join(', ')}`);
+
+  for (const spec of plan) {
     const t0 = Date.now();
     const from = S.collection(spec.name);
     const to = D.collection(spec.name);
@@ -235,8 +265,12 @@ try {
     );
   }
 
-  await syncTabOdds(S, D);
-  await syncLeagueSquads(S, D);
+  // Both belong to the full pass, for the same reason as the rebuilds above:
+  // they are the slow half and have nothing to do with a box score.
+  if (!ONLY.length) {
+    await syncTabOdds(S, D);
+    await syncLeagueSquads(S, D);
+  }
 
   if (!DRY) await ensureIndexes(dst.db(DST_DB));
   console.log('done.');
