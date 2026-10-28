@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { SignOut } from '../components/SignOut';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, KeyRound, Plus, Trash2, Users as UsersIcon, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, KeyRound, Plus, Trash2, Users as UsersIcon, X } from 'lucide-react';
 import {
   createUser,
   deleteUser,
@@ -251,23 +251,44 @@ export default function Users() {
                       {isMe && <span className="ml-2 text-[10px] uppercase tracking-wider text-slate-500">you</span>}
                     </td>
                     <td className="px-3 py-2.5">
-                      <select
-                        value={u.role}
-                        disabled={busy}
-                        onChange={(e) =>
-                          run(
-                            () => updateUser(u.id, { role: e.target.value as Role }).then(() => undefined),
-                            `${u.username} is now ${e.target.value}.`,
-                          )
-                        }
-                        className={`px-2 py-1 rounded text-xs font-semibold uppercase tracking-wider border-0 focus:outline-none ${ROLE_PILL[u.role]}`}
-                      >
-                        {ROLES.map((r) => (
-                          <option key={r} value={r} className="bg-surface-raised text-slate-100">
-                            {r}
-                          </option>
-                        ))}
-                      </select>
+                      {/*
+                        * The pill is the only select in the app with a colour
+                        * behind it, and it was the only one without
+                        * `appearance-none` — so the browser drew its own arrow
+                        * INSIDE the tinted box, hard up against uppercase text
+                        * that `tracking-wider` had already pushed toward the
+                        * right edge. Hence the cramped look.
+                        *
+                        * The arrow is ours now, with `pr-6` reserved for it, so
+                        * the padding is even on both sides and the same on
+                        * every browser. It stays visible because without it a
+                        * coloured pill reads as a label rather than something
+                        * you can change.
+                        */}
+                      <span className="relative inline-flex items-center">
+                        <select
+                          value={u.role}
+                          disabled={busy}
+                          title={`Change ${u.username}'s role`}
+                          onChange={(e) =>
+                            run(
+                              () => updateUser(u.id, { role: e.target.value as Role }).then(() => undefined),
+                              `${u.username} is now ${e.target.value}.`,
+                            )
+                          }
+                          className={`cursor-pointer appearance-none rounded border-0 py-1 pl-2 pr-6 text-xs font-semibold uppercase tracking-wider outline-none transition hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-50 ${ROLE_PILL[u.role]}`}
+                        >
+                          {ROLES.map((r) => (
+                            <option key={r} value={r} className="bg-surface-raised text-slate-100">
+                              {r}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown
+                          size={12}
+                          className="pointer-events-none absolute right-1.5 opacity-70"
+                        />
+                      </span>
                     </td>
                     <td className="px-3 py-2.5 text-slate-400 hidden sm:table-cell">{when(u.createdAt)}</td>
                     <td className="px-4 py-2.5">
