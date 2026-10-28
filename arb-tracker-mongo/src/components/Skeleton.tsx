@@ -222,3 +222,120 @@ export function BetsTableSkeleton({ rows = 14, cols = 6 }: { rows?: number; cols
     </div>
   );
 }
+
+/**
+ * The box score: the status line, then a table per team at the real widths.
+ *
+ * Both of the Stats tab's states used to be a bare `h-40` block with the
+ * default pulse on it — the one animation this file exists to replace, and a
+ * shape that tells you nothing about what is landing. A box score is two
+ * tables of a dozen rows with a crest and a name on the left and six numeric
+ * columns after, so that is what stands in for it.
+ */
+export function StatsSkeleton({ teams = 2, rows = 10, cols = 6 }: { teams?: number; rows?: number; cols?: number }) {
+  return (
+    <div role="status" aria-label="Loading player stats" className="min-h-0 flex-1 overflow-hidden">
+      {/* The "Final box score · updated 3m ago" line. */}
+      <div className="flex items-center gap-2 border-b border-surface-border px-4 py-2">
+        <Bone className="h-3 w-28" />
+        <Bone className="h-3 w-20" />
+      </div>
+      <div className="space-y-4 p-4">
+        {Array.from({ length: teams }, (_, t) => (
+          <div key={t} className="overflow-hidden rounded-xl bg-surface-raised/40">
+            {/* Crest, team name, side, and the player count on the right. */}
+            <div className="flex items-center gap-2 border-b border-surface-border px-3 py-2">
+              <Bone className="h-[18px] w-[18px] shrink-0 rounded-full" />
+              <Bone className="h-3.5 w-36" />
+              <Bone className="h-2.5 w-10" />
+              <Bone className="ml-auto h-2.5 w-16" />
+            </div>
+            {Array.from({ length: rows }, (_, i) => (
+              <div key={i} className="flex items-center gap-3 border-t border-surface-border/40 px-3 py-1.5">
+                <Bone className={`h-3.5 ${widths[(t + i) % widths.length]} max-w-[11rem]`} />
+                {Array.from({ length: cols }, (_, j) => (
+                  <Bone key={j} className="h-3 w-8 shrink-0" />
+                ))}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The stat-bets tab: a stat heading, then a card per line under it.
+ *
+ * Shaped like what arrives — "Points", then 15+, 20+, 25+ — rather than one
+ * block, because the heights differ a lot between a market with eight bets on
+ * it and one with a single bet, and a stand-in that ignores that makes the
+ * page jump twice: once when it lands and once when it settles.
+ */
+export function StatBetsSkeleton({ families = 2, lines = 2, rows = 3 }: { families?: number; lines?: number; rows?: number }) {
+  return (
+    <div role="status" aria-label="Loading bets" className="space-y-5">
+      {Array.from({ length: families }, (_, f) => (
+        <div key={f} className="space-y-2">
+          <div className="flex items-baseline gap-2">
+            <Bone className="h-3.5 w-24" />
+            <Bone className="h-2.5 w-20" />
+          </div>
+          {Array.from({ length: lines }, (_, l) => (
+            <div key={l} className="overflow-hidden rounded-xl bg-surface-raised/40">
+              <div className="flex items-center gap-2 border-b border-surface-border px-3 py-1.5">
+                <Bone className="h-2.5 w-10" />
+                <Bone className="ml-auto h-2.5 w-24" />
+              </div>
+              {Array.from({ length: rows }, (_, i) => (
+                <div key={i} className="flex items-center gap-2 border-t border-surface-border/60 px-3 py-1.5">
+                  {/* brand badge, selection, the stat chip, stake, price, result */}
+                  <Bone className="h-4 w-12 shrink-0 rounded" />
+                  <Bone className={`h-3.5 ${widths[(f + i) % widths.length]} max-w-[13rem]`} />
+                  <Bone className="h-4 w-12 shrink-0 rounded" />
+                  <Bone className="ml-auto h-3 w-10 shrink-0" />
+                  <Bone className="h-3 w-8 shrink-0" />
+                  <Bone className="h-4 w-12 shrink-0 rounded" />
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The Details tab: the Optic block, then a card per brand.
+ *
+ * Each card carries a heading, an id you can copy and a start time under it,
+ * so the stand-in is a heading and two short lines rather than one tall
+ * rectangle. The three brands are different heights in reality — a brand with
+ * no mapping is a single line — and the skeleton shows the fullest case,
+ * which is the one that would otherwise push the page down when it lands.
+ */
+export function DetailsSkeleton({ cards = 3 }: { cards?: number }) {
+  return (
+    <div role="status" aria-label="Loading details" className="flex-1 space-y-4 p-4">
+      <div className="space-y-2 rounded-xl bg-surface-raised/40 p-3">
+        <Bone className="h-3 w-16" />
+        <div className="flex flex-wrap gap-2">
+          {[0, 1, 2].map((i) => (
+            <Bone key={i} className="h-6 w-40 rounded" />
+          ))}
+        </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {Array.from({ length: cards }, (_, i) => (
+          <div key={i} className="space-y-2 rounded-xl bg-surface-raised/40 p-3">
+            <Bone className="h-3.5 w-24" />
+            <Bone className="h-6 w-full rounded" />
+            <Bone className={`h-3 ${widths[i % widths.length]}`} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}

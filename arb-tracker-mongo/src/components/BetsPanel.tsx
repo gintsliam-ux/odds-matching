@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ExternalLink, Receipt } from 'lucide-react';
 import { fetchBets, type Bet, type BrandBets, type FixtureBets } from '../lib/db';
 import { PanelNotice, SubTabs } from './EventTabs';
+import { BetsTableSkeleton, Bone } from './Skeleton';
 import { BRAND_TONE } from '../lib/brands';
 import { marketLabel } from '../lib/marketLabel';
 import { bookmakerUrl } from '../lib/bookmakerUrl';
@@ -212,12 +213,21 @@ export function BetsPanel({ fixtureId }: { fixtureId: string }) {
     };
   }, [fixtureId]);
 
+  /*
+   * The brand tabs and the table, at the real widths — the last bare pulse on
+   * the event page. Five identical bars said "something is coming" and nothing
+   * about what, and the layout jumped when a table of fourteen rows arrived in
+   * their place.
+   */
   if (state === 'loading') {
     return (
-      <div className="flex-1 space-y-2 p-4">
-        {[0, 1, 2, 3, 4].map((i) => (
-          <div key={i} className="h-9 animate-pulse rounded bg-surface-raised/40" />
-        ))}
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex items-center gap-1.5 border-b border-surface-border px-3 py-2">
+          {[0, 1, 2].map((i) => (
+            <Bone key={i} className="h-5 w-20 rounded-md" />
+          ))}
+        </div>
+        <BetsTableSkeleton rows={8} cols={4} />
       </div>
     );
   }

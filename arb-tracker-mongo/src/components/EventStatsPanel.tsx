@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { BarChart3, ChevronDown, Info } from 'lucide-react';
 import { fetchBets, fetchPlayerStats, type Bet, type FixtureBets, type PlayerStats, type PlayerStatLine } from '../lib/db';
 import { PanelNotice, SubTabs } from './EventTabs';
+import { StatBetsSkeleton, StatsSkeleton } from './Skeleton';
 import type { SportEvent } from '../lib/types';
+import { useParam } from '../lib/urlState';
 import { BRAND_LABEL, brandBadge } from '../lib/brands';
 import { TeamLogo } from './TeamLogo';
 
@@ -660,9 +662,7 @@ function StatBets({
     return families;
   }, [bets, teams]);
 
-  if (state === 'loading') {
-    return <div className="h-40 animate-pulse rounded-xl bg-surface-raised/40" />;
-  }
+  if (state === 'loading') return <StatBetsSkeleton />;
   if (state === 'error') {
     return <p className="text-xs text-slate-500">Couldn't load bets for this fixture.</p>;
   }
@@ -828,7 +828,15 @@ export function EventStatsPanel({
 }) {
   const [data, setData] = useState<PlayerStats | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [view, setView] = useState<'all' | 'leaders' | 'bets'>('all');
+  /*
+   * In the URL, like the tab above it: "the Leaders board on this game" is a
+   * thing people send each other, and it was unaddressable — every sub-tab was
+   * the same link and a refresh went back to All.
+   */
+  const [viewParam, setView] = useParam('stats', 'all');
+  const view = (['all', 'leaders', 'bets'] as const).includes(viewParam as never)
+    ? (viewParam as 'all' | 'leaders' | 'bets')
+    : 'all';
 
   const live = data?.status === 'live';
   const done = data?.status === 'completed';
@@ -873,15 +881,7 @@ export function EventStatsPanel({
     return () => clearInterval(id);
   }, [fixtureId, live]);
 
-  if (state === 'loading') {
-    return (
-      <div className="flex-1 space-y-4 p-4">
-        {[0, 1].map((i) => (
-          <div key={i} className="h-40 animate-pulse rounded-xl bg-surface-raised/40" />
-        ))}
-      </div>
-    );
-  }
+  if (state === 'loading') return <StatsSkeleton />;
   if (state === 'error') {
     return (
       <PanelNotice icon={Info} title="Couldn't load player stats">

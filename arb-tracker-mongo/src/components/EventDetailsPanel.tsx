@@ -3,6 +3,7 @@ import { Check, Copy, Database, Info, Link2, Link2Off } from 'lucide-react';
 import { fetchEventDetails, type EventDetails, type ProviderEventMapping } from '../lib/db';
 import { useCapabilities } from '../lib/capabilitiesContext';
 import { PanelNotice } from './EventTabs';
+import { DetailsSkeleton } from './Skeleton';
 
 function stamp(iso: string | null): string {
   if (!iso) return '–';
@@ -329,15 +330,7 @@ export function EventDetailsPanel({ fixtureId, sport }: { fixtureId: string; spo
     };
   }, [fixtureId, sport]);
 
-  if (state === 'loading') {
-    return (
-      <div className="flex-1 space-y-4 p-4">
-        {[0, 1, 2].map((i) => (
-          <div key={i} className="h-32 animate-pulse rounded-xl bg-surface-raised/40" />
-        ))}
-      </div>
-    );
-  }
+  if (state === 'loading') return <DetailsSkeleton />;
   if (state === 'error' || !details) {
     return (
       <PanelNotice icon={Info} title="Couldn't load details">

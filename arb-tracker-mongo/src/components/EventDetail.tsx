@@ -25,6 +25,7 @@ import { EventStatsPanel } from './EventStatsPanel';
 import { EventDetailsPanel } from './EventDetailsPanel';
 import { BetsPanel } from './BetsPanel';
 import { useCapabilities } from '../lib/capabilitiesContext';
+import { useParam } from '../lib/urlState';
 
 // Selection + Best (+ Betfair back/lay for two-sided events), then one column
 // per fixed-odds book. Golf outrights have no exchange, so those two drop out.
@@ -191,8 +192,19 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
   const showExchange = !outright;
   const totalCols = (outright ? FIXED_COLS_OUTRIGHT : FIXED_COLS_MATCH) + books.length;
   const [hover, setHover] = useState<HoverTarget | null>(null);
-  const [tab, setTab] = useState<EventTab>('markets');
-  const [marketGroup, setMarketGroup] = useState('all');
+  /*
+   * Which tab, and which bucket of markets, live in the URL.
+   *
+   * They were component state, so every one of these pages was the same
+   * address: you could get to Stats → Leaders on a fixture and had no way to
+   * send anyone there, and a refresh put you back on Markets. `useParam`
+   * writes with `replace`, so flipping between tabs does not fill the history
+   * and make Back a walk out of the page, and a value equal to the default is
+   * left out — the ordinary view keeps a clean URL and what is in the query is
+   * what somebody actually chose.
+   */
+  const [tabParam, setTab] = useParam('tab', 'markets');
+  const [marketGroup, setMarketGroup] = useParam('market', 'all');
   const [shownId, setShownId] = useState(event.id);
   // A deployed instance reads the public odds surface, which publishes no bets
   // and no mapping tables. Those tabs are dropped rather than shown empty.
@@ -206,16 +218,40 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
   const canHover = caps.priceHistory;
 
 
-  // Every event opens on Markets. Adjusting state during render (rather than in
-  // an effect) is React's own idiom for resetting on a prop change: it re-runs
-  // the component before anything is committed, so the new event never paints
-  // for a frame under the previous event's tab.
+  // Adjusting state during render (rather than in an effect) is React's own
+  // idiom for resetting on a prop change: it re-runs the component before
+  // anything is committed, so the new event never paints for a frame under the
+  // previous event's state.
   if (shownId !== event.id) {
     setShownId(event.id);
-    setTab('markets');
     // A stale hover card describes a price that is no longer on screen.
     setHover(null);
   }
+
+  const tabs = [
+    { key: 'markets' as const, label: 'Markets', badge: markets.length || null },
+    ...(caps.bets ? [{ key: 'bets' as const, label: 'Bets' }] : []),
+    ...(caps.mapping ? [{ key: 'details' as const, label: 'Details' }] : []),
+    /*
+     * NBA and NFL only — `player_stats` carries those two and nothing else, so
+     * offering the tab anywhere else would promise a box score that cannot
+     * exist. Gated on the league NAME rather than the sport, because the sport
+     * would take NCAAB and NCAAF with it.
+     */
+    ...(event.league?.name === 'NBA' || event.league?.name === 'NFL'
+      ? [{ key: 'stats' as const, label: 'Stats' }]
+      : []),
+  ];
+  /*
+   * The URL is a request, not an instruction. `?tab=stats` on a soccer fixture
+   * names a tab that does not exist there — and now that the tab survives a
+   * move between events, that is the ordinary case rather than a hand-typed
+   * one: open Stats on an NBA game, click a soccer game in the rail, and the
+   * query comes with you. Fall back to Markets rather than render nothing.
+   */
+  const tab: EventTab = tabs.some((t) => t.key === tabParam)
+    ? (tabParam as EventTab)
+    : 'markets';
 
   // Only offer a bucket this event actually prices, so no pill is ever a dead
   // end. "All" survives on its own; the rest appear as the markets do.
@@ -349,20 +385,7 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
       </div>
 
       <EventTabs
-        tabs={[
-          { key: 'markets' as const, label: 'Markets', badge: markets.length || null },
-          ...(caps.bets ? [{ key: 'bets' as const, label: 'Bets' }] : []),
-          ...(caps.mapping ? [{ key: 'details' as const, label: 'Details' }] : []),
-          /*
-           * NBA and NFL only — `player_stats` carries those two and nothing
-           * else, so offering the tab anywhere else would promise a box score
-           * that cannot exist. Gated on the league NAME rather than the sport,
-           * because the sport would take NCAAB and NCAAF with it.
-           */
-          ...(event.league?.name === 'NBA' || event.league?.name === 'NFL'
-            ? [{ key: 'stats' as const, label: 'Stats' }]
-            : []),
-        ]}
+        tabs={tabs}
         active={tab}
         onChange={setTab}
       />

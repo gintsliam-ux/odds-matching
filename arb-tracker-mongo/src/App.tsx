@@ -1,6 +1,6 @@
 import { Children, useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, AlertTriangle, ChevronDown, Clock, Hourglass, Link2, LogOut, Radio, Settings, TrendingDown, Users as UsersIcon, Wrench } from 'lucide-react';
-import { Link, Outlet, useMatch, useNavigate } from 'react-router-dom';
+import { Link, Outlet, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import { Header } from './components/Header';
 import { FilterBar } from './components/FilterBar';
 import { EventRow } from './components/EventRow';
@@ -252,6 +252,22 @@ function readable(message: string): string {
 
 export default function App() {
   const navigate = useNavigate();
+  const { search } = useLocation();
+  /*
+   * Moving between events keeps the query, and so keeps the tab.
+   *
+   * The event page's tab and sub-tab live in the URL now, and `navigate` to a
+   * new path drops the search string — so opening Stats on one game and
+   * clicking the next in the rail landed you back on Markets. Carrying it over
+   * is the useful behaviour anyway: reading the same tab down a list of games
+   * is exactly what the rail is for. A tab the next event does not have falls
+   * back to Markets on its own — see EventDetail.
+   */
+  const goToEvent = useCallback(
+    (event: SportEvent, opts?: { replace?: boolean }) =>
+      navigate(`${eventPath(event)}${search}`, opts),
+    [navigate, search],
+  );
   // The mapping page reads tables the public odds surface does not publish.
   const caps = useCapabilities();
   /*
@@ -686,8 +702,8 @@ export default function App() {
   // Land on the first event when none is selected in the URL.
   useEffect(() => {
     if (activeId) return;
-    if (visible.length > 0) navigate(eventPath(visible[0]), { replace: true });
-  }, [activeId, visible, navigate]);
+    if (visible.length > 0) goToEvent(visible[0], { replace: true });
+  }, [activeId, visible, goToEvent]);
 
   // Heading tracks whatever the list is showing — the search term while a
   // search is running, otherwise the filtered day.
@@ -723,10 +739,10 @@ export default function App() {
     (id: string) => {
       const event = knownEvents.find((e) => e.id === id);
       if (!event) return;
-      navigate(eventPath(event));
+      goToEvent(event);
       setRailOpen(false);
     },
-    [knownEvents, navigate],
+    [knownEvents, goToEvent],
   );
 
   /*
@@ -785,7 +801,7 @@ export default function App() {
         now={now}
         prices={prices}
         activeId={activeId}
-        onSelect={(event) => navigate(eventPath(event))}
+        onSelect={(event) => goToEvent(event)}
       />
       )}
 
