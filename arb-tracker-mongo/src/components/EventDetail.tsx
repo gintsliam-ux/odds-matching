@@ -367,7 +367,7 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
         onChange={setTab}
       />
 
-      {tab === 'stats' && <EventStatsPanel fixtureId={event.id} />}
+      {tab === 'stats' && <EventStatsPanel fixtureId={event.id} event={event} />}
 
       {tab === 'bets' && (
         <div

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { BarChart3, ChevronDown, Info } from 'lucide-react';
 import { fetchBets, fetchPlayerStats, type Bet, type FixtureBets, type PlayerStats, type PlayerStatLine } from '../lib/db';
 import { PanelNotice, SubTabs } from './EventTabs';
+import type { SportEvent } from '../lib/types';
 
 /**
  * The box score for one fixture, NBA and NFL only.
@@ -157,7 +158,7 @@ function namesPlayer(bet: Bet, players: PlayerStatLine[]): Match {
   return { player: hit[0], exact: false };
 }
 
-function landed(bet: Bet, match: Match): Landed {
+function landed(bet: Bet, match: Match, done: boolean): Landed {
   /*
    * Void is claimed only when we know WHICH player, and the box score has him
    * recording nothing anywhere (the server's `played`, judged over his whole
@@ -166,7 +167,13 @@ function landed(bet: Bet, match: Match): Landed {
    * which Johnson a bet is on is not evidence that he sat out, and "void" is
    * too confident a thing to say on a guess.
    */
-  if (match?.exact && match.player.played === false) return 'void';
+  /*
+   * Only once the game is OVER. A box score mid-game has whole rosters sitting
+   * at nothing recorded yet, and they are not absent — they are second-quarter
+   * substitutes who have not touched the ball. `player_status` reads "live" on
+   * those rows, which is the giveaway: the stat line is still being written.
+   */
+  if (done && match?.exact && match.player.played === false) return 'void';
   const r = (bet.result ?? '').toLowerCase();
   if (/cancel|void|refund/.test(r)) return 'void';
   if (/^won\b/.test(r) || /^return @/.test(r)) return 'won';
@@ -284,9 +291,13 @@ function Leaders({
 function StatBets({
   fixtureId,
   teams,
+  done,
 }: {
   fixtureId: string;
   teams: PlayerStats['teams'];
+  /** Whether the game has finished — see `landed`, which will not call a bet
+   *  void until it has. */
+  done: boolean;
 }) {
   const [bets, setBets] = useState<FixtureBets | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -319,7 +330,7 @@ function StatBets({
       for (const bet of bets[brand]?.bets ?? []) {
         const match = namesPlayer(bet, players);
         if (!match) continue;
-        all.push({ brand, bet, landed: landed(bet, match) });
+        all.push({ brand, bet, landed: landed(bet, match, done) });
       }
     }
 
@@ -388,26 +399,87 @@ function StatBets({
   );
 }
 
-export function EventStatsPanel({ fixtureId }: { fixtureId: string }) {
+/**
+ * How often to re-read a box score that is still being written.
+ *
+ * The rows themselves move about once a minute — a live NBA fixture rewrote
+ * every player on it within the same second, and the next pass came a minute
+ * later — so thirty seconds is comfortably inside that without asking for
+ * numbers that cannot have changed. A finished game is not polled at all.
+ */
+/**
+ * How long ago, to the second under a minute.
+ *
+ * There are already three `ago`s in this codebase and none of them is usable
+ * here: they all round to the nearest minute, so a box score re-read thirty
+ * seconds ago reads "0m", and on the one panel that refreshes itself the
+ * freshness is the whole point of printing it.
+ */
+function ago(iso: string | null): string {
+  if (!iso) return '—';
+  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+const LIVE_POLL_MS = 30_000;
+
+export function EventStatsPanel({
+  fixtureId,
+  event,
+}: {
+  fixtureId: string;
+  /** The fixture as the board has it, for the score beside the box score. */
+  event?: SportEvent;
+}) {
   const [data, setData] = useState<PlayerStats | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [view, setView] = useState<'all' | 'leaders' | 'bets'>('all');
 
+  const live = data?.status === 'live';
+  const done = data?.status === 'completed';
+
+  /*
+   * Loaded on mount, then re-read on a timer for as long as the box score says
+   * it is live — the stats tab is the one place on the page where the numbers
+   * change under you and nothing else would bring them in.
+   *
+   * The refetch does NOT clear `data` or go back to 'loading'. Blanking a
+   * table you are reading every thirty seconds, to redraw almost exactly the
+   * same numbers, is worse than a stale half-second; only a change of fixture
+   * shows the skeleton again.
+   */
   useEffect(() => {
     let cancelled = false;
     setData(null);
     setState('loading');
-    fetchPlayerStats(fixtureId)
-      .then((d) => {
-        if (cancelled) return;
-        setData(d);
-        setState('ready');
-      })
-      .catch(() => !cancelled && setState('error'));
+
+    const read = () =>
+      fetchPlayerStats(fixtureId)
+        .then((d) => {
+          if (cancelled) return;
+          setData(d);
+          setState('ready');
+        })
+        .catch(() => !cancelled && setState((cur) => (cur === 'loading' ? 'error' : cur)));
+
+    read();
     return () => {
       cancelled = true;
     };
   }, [fixtureId]);
+
+  useEffect(() => {
+    if (!live) return;
+    const id = setInterval(() => {
+      fetchPlayerStats(fixtureId)
+        .then((d) => setData(d))
+        .catch(() => {});
+    }, LIVE_POLL_MS);
+    return () => clearInterval(id);
+  }, [fixtureId, live]);
 
   if (state === 'loading') {
     return (
@@ -437,6 +509,44 @@ export function EventStatsPanel({ fixtureId }: { fixtureId: string }) {
   const fields = data.fields ?? [];
   return (
     <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
+      {/*
+        * The score, and whether the box score under it is finished.
+        *
+        * On this tab the match header is scrolled away, so without this you are
+        * reading a column of numbers with no way of telling whether they are
+        * final or a third of the way through — which changes what every one of
+        * them means. "Live" is the stats feed's own word for it, not the board's:
+        * it is the thing that says whether THESE rows are still being written.
+        */}
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-surface-border px-4 py-2 text-xs">
+        {event && (
+          <span className="flex items-center gap-2 font-medium text-slate-200">
+            <span className="truncate">{event.home}</span>
+            <span className="tabular-nums text-slate-100">
+              {event.homeScore ?? '–'} <span className="text-slate-600">–</span> {event.awayScore ?? '–'}
+            </span>
+            <span className="truncate">{event.away}</span>
+          </span>
+        )}
+        {live ? (
+          <span className="flex items-center gap-1.5 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-300 opacity-75" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-300" />
+            </span>
+            Live
+          </span>
+        ) : done ? (
+          <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-300">
+            Final
+          </span>
+        ) : null}
+        <span className="text-slate-500" title={data.updatedAt ?? ''}>
+          {live ? 'updating every 30s' : 'box score'}
+          {data.updatedAt && <span className="ml-1 text-slate-600">· {ago(data.updatedAt)}</span>}
+        </span>
+      </div>
+
       <SubTabs
         label="Stats view"
         tabs={[
@@ -450,7 +560,7 @@ export function EventStatsPanel({ fixtureId }: { fixtureId: string }) {
 
       {view === 'leaders' && <Leaders teams={data.teams} fields={fields} />}
 
-      {view === 'bets' && <StatBets fixtureId={fixtureId} teams={data.teams} />}
+      {view === 'bets' && <StatBets fixtureId={fixtureId} teams={data.teams} done={done} />}
 
       {view === 'all' && data.teams.map((t) => (
         <div key={`${t.side}:${t.team}`} className="overflow-hidden rounded-xl bg-surface-raised/40">

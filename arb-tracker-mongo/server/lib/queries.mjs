@@ -997,6 +997,13 @@ export async function playerStats(fixtureId) {
     league: rows[0].league ?? null,
     fields,
     teams,
+    /*
+     * "live" or "completed", and it moves — a game in progress rewrites these
+     * rows every minute or so. The panel needs it for two things: to know
+     * whether to keep polling, and to say out loud whether the box score in
+     * front of you is final or still being written.
+     */
+    status: rows[0].fixture_status ?? null,
     updatedAt: updatedAt ? new Date(updatedAt).toISOString() : null,
   };
 }

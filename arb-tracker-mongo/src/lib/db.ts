@@ -237,6 +237,8 @@ export interface PlayerStatLine {
 
 export interface PlayerStats {
   configured: boolean;
+  /** 'live' while the game is being played, 'completed' once it is done. */
+  status?: string | null;
   /** 'basketball' | 'football', or null when the fixture has no stats yet. */
   sport: string | null;
   league?: string | null;
