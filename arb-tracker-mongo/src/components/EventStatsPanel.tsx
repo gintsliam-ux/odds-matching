@@ -358,13 +358,16 @@ function Leaders({
           >
             {perTeam.map((list, i) => (
               <div key={i} className="bg-surface-raised/40 p-2">
-                <div className="flex items-center gap-1.5 px-1 pb-1 text-[11px] text-slate-500">
+                {/* The same crest and the same type as the All view's team
+                    heading — one team name should not be two sizes on two
+                    tabs of the same panel. */}
+                <div className="flex items-center gap-2 px-1 pb-1.5">
                   <TeamLogo
                     name={teams[i]?.team ?? ''}
-                    size={14}
+                    size={18}
                     logo={teams[i]?.side === 'home' ? event?.homeLogo : event?.awayLogo}
                   />
-                  {teams[i]?.team}
+                  <span className="text-[13px] font-semibold text-slate-200">{teams[i]?.team}</span>
                 </div>
                 {list.length === 0 ? (
                   <div className="px-1 text-slate-700">–</div>
