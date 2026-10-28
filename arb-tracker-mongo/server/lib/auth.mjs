@@ -141,10 +141,19 @@ export async function listUsers() {
 /**
  * The roles an account can hold.
  *
- * Only `admin` carries any privilege — it gates user management and nothing
- * else — so `trading` and `support` are equal in what they can do and differ
- * in what they say. That is the point: the header and the user list show the
- * role, and "support" on a trader's account was simply wrong.
+ * `support` is the baseline: everything the desk has. `admin` adds two things
+ * and only two — user management (this file) and the pending-bets view, which
+ * shows the book's own position bet by bet. `trading` SUBTRACTS instead: it
+ * keeps the board, the event page, the ticker and the prices page, and loses
+ * movers, settlement, late bets and the mapping tables, along with all price
+ * history. The two lists live where they are enforced — ADMIN_ONLY and
+ * TRADING_ALLOWED in routes.mjs — because a hidden link is not a restriction.
+ *
+ * This said for a long time that trading and support were equal and differed
+ * only in what they said. That was true when the role was a label; it stopped
+ * being true the day TRADING_ALLOWED was written, and a comment claiming two
+ * roles are interchangeable is worse than none when one of them is the
+ * narrower account.
  *
  * A whitelist rather than a coercion. The old `role === 'admin' ? 'admin' :
  * 'support'` quietly turned anything unrecognised into support, which is a safe
