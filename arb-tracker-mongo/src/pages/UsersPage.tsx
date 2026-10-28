@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react';
 import { SignOut } from '../components/SignOut';
-import { KeyRound, Plus, Trash2, X } from 'lucide-react'
+import { Link } from 'react-router-dom';
+import { ArrowLeft, KeyRound, Plus, Trash2, Users as UsersIcon, X } from 'lucide-react';
 import {
   createUser,
   deleteUser,
@@ -8,9 +9,9 @@ import {
   updateUser,
   type ManagedUser,
   type Role,
-} from '../lib/authApi'
-import { useAuth } from '../lib/useAuth'
-import { Bone } from '../components/Skeleton'
+} from '../lib/authApi';
+import { useAuth } from '../lib/useAuth';
+import { Bone } from '../components/Skeleton';
 
 /** This app's skeleton takes no stagger; the shape is all the page wants. */
 const Skeleton = ({ className }: { className?: string; delay?: number }) => (
@@ -31,6 +32,48 @@ function when(iso: string | null): string {
   if (!iso) return '—'
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString()
+}
+
+/**
+ * The page shell the other full-width routes use.
+ *
+ * This page is routed OUTSIDE `App`, so nothing above it supplies a surface,
+ * a height or a single pixel of padding — it was rendering flush against the
+ * viewport on all four edges with no way back to the board. Movers,
+ * Settlement, Late Bets and Pending Bets all frame themselves the same way,
+ * and a page that is reached from the same rail should not be the one that
+ * looks different.
+ */
+function Shell({ children, action }: { children: React.ReactNode; action?: React.ReactNode }) {
+  return (
+    <div className="flex h-dvh flex-col bg-surface text-slate-200">
+      <header className="shrink-0 border-b border-surface-border bg-surface">
+        <div className="flex flex-wrap items-center gap-3 px-4 py-2.5">
+          <Link
+            to="/"
+            className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500 transition hover:text-slate-300"
+          >
+            <ArrowLeft size={14} /> Board
+          </Link>
+          <div className="min-w-0">
+            <h1 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-slate-100">
+              <UsersIcon size={16} className="text-emerald-400" />
+              Users
+            </h1>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Shared with the other tools on this database — changes here apply everywhere.
+            </p>
+          </div>
+          {action}
+          <span className="shrink-0">
+            <SignOut />
+          </span>
+        </div>
+      </header>
+
+      <div className="min-h-0 flex-1 space-y-3 overflow-auto px-4 py-3">{children}</div>
+    </div>
+  );
 }
 
 export default function Users() {
@@ -89,42 +132,32 @@ export default function Users() {
 
   if (me?.role !== 'admin') {
     return (
-      <div>
-        <h1 className="text-[15px] font-semibold text-slate-100 mb-1">Users</h1>
+      <Shell>
         <p className="text-sm text-slate-400">
           Only admins can manage users. You're signed in as{' '}
-          <span className="text-slate-200 font-medium">{me?.username}</span> ({me?.role}).
+          <span className="font-medium text-slate-200">{me?.username}</span> ({me?.role}).
         </p>
-      </div>
-    )
+      </Shell>
+    );
   }
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-[15px] font-semibold text-slate-100 mb-1">Users</h1>
-          <p className="text-sm text-slate-400">
-            Shared with the other tools on this database — changes here apply everywhere.
-          </p>
-        </div>
-        <span className="ml-auto mr-2 shrink-0">
-          <SignOut />
-        </span>
+    <Shell
+      action={
         <button
           onClick={() => {
-            setAdding((v) => !v)
-            setNewName('')
-            setNewPass('')
-            setNewRole('support')
+            setAdding((v) => !v);
+            setNewName('');
+            setNewPass('');
+            setNewRole('support');
           }}
-          className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition-colors"
+          className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500"
         >
-          {adding ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+          {adding ? <X size={15} /> : <Plus size={15} />}
           {adding ? 'Cancel' : 'Add user'}
         </button>
-      </div>
-
+      }
+    >
       {error && <p className="text-sm text-red-400">{error}</p>}
       {notice && <p className="text-sm text-emerald-400">{notice}</p>}
 
@@ -185,7 +218,7 @@ export default function Users() {
             <div className="flex items-center gap-3 px-4 py-2.5 border-b border-surface-border">
               <Skeleton className="h-2.5 w-10" />
             </div>
-            <div className="divide-y divide-gray-800">
+            <div className="divide-y divide-surface-border">
               {Array.from({ length: 4 }).map((_, i) => (
                 <div key={i} className="flex items-center gap-3 px-4 py-2.5">
                   <Skeleton delay={i} className="h-4 w-28 shrink-0" />
@@ -208,11 +241,11 @@ export default function Users() {
                 <th className="text-right font-medium px-4 py-2.5">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-800">
+            <tbody className="divide-y divide-surface-border">
               {users.map((u) => {
                 const isMe = u.id === me?.id
                 return (
-                  <tr key={u.id} className="hover:bg-white/5/40 transition-colors">
+                  <tr key={u.id} className="transition-colors hover:bg-white/5">
                     <td className="px-4 py-2.5">
                       <span className="text-slate-100 font-medium">{u.username}</span>
                       {isMe && <span className="ml-2 text-[10px] uppercase tracking-wider text-slate-500">you</span>}
@@ -247,7 +280,7 @@ export default function Users() {
                           className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-slate-400 hover:text-slate-100 hover:bg-white/5 transition-colors"
                           title="Set a new password"
                         >
-                          <KeyRound className="w-3.5 h-3.5" /> Password
+                          <KeyRound size={14} /> Password
                         </button>
                         <button
                           disabled={busy || isMe}
@@ -258,7 +291,7 @@ export default function Users() {
                           className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                           title={isMe ? "You can't delete your own account" : 'Delete user'}
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 size={14} />
                         </button>
                       </div>
                     </td>
@@ -277,7 +310,7 @@ export default function Users() {
             <div className="flex items-center justify-between">
               <h2 className="text-slate-100 font-semibold">New password for {resetting.username}</h2>
               <button onClick={() => setResetting(null)} className="text-slate-400 hover:text-slate-200">
-                <X className="w-4 h-4" />
+                <X size={15} />
               </button>
             </div>
             <input
@@ -304,8 +337,8 @@ export default function Users() {
           </div>
         </div>
       )}
-    </div>
-  )
+    </Shell>
+  );
 }
 
 // Kept out of the JSX so the confirm text stays readable and testable.
