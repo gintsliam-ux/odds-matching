@@ -326,7 +326,21 @@ function StatBets({
     const players = teams.flatMap((t) => t.players).filter((p) => p.player);
 
     const all: { brand: string; bet: Bet; landed: Landed }[] = [];
-    for (const brand of ['swiftbet', 'mybet', 'multis'] as const) {
+    /*
+     * mybet and multis only, and that is not an omission.
+     *
+     * The grouping is by the brand's own market text, and theirs is a market:
+     * "Anytime Touchdown Scorer", "Player to Score 15+ Points", "Passing Yards
+     * 200+" — the player is in the selection where he belongs. swiftbet writes
+     * the market as "touchdowns - George Kittle", so grouping by it gives one
+     * group per player per market and the grouping says nothing.
+     *
+     * It costs volume: across the fixtures with a box score, swiftbet has
+     * 1,216 bets naming one of these players against mybet's 28 and multis'
+     * six, and about half of those fixtures have nothing on this tab at all.
+     * That is what the empty state below is for.
+     */
+    for (const brand of ['mybet', 'multis'] as const) {
       for (const bet of bets[brand]?.bets ?? []) {
         const match = namesPlayer(bet, players);
         if (!match) continue;
@@ -356,8 +370,11 @@ function StatBets({
   }
   if (!groups.length) {
     return (
+      // Named, because this tab reads two of the three brands: a fixture with
+      // a hundred swiftbet player bets on it still lands here, and "no bets"
+      // would be a lie about what was looked at.
       <p className="text-xs text-slate-500">
-        No bets on this fixture name a player in the box score.
+        No mybet or multis bets on this fixture name a player in the box score.
       </p>
     );
   }
