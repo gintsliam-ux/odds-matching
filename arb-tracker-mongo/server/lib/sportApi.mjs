@@ -144,6 +144,17 @@ const CALL_TIMEOUT_MS = 20_000;
  * is to let the window move.
  */
 const CALL_RETRIES = 2;
+/**
+ * A rate limit gets more goes than a failure does.
+ *
+ * Two retries is the right budget for something broken — a third attempt at a
+ * 500 is usually a third 500. A 429 is the opposite: it is the surface saying
+ * "not yet", and since a 429 now pauses the whole bucket (see pauseAll) the
+ * next attempt starts on the far side of that pause, when the window has
+ * actually moved. Giving up after three attempts was costing a whole sport
+ * off the board to save two requests.
+ */
+const RATE_LIMIT_RETRIES = 5;
 /** However long Retry-After asks for, never past this. */
 const RETRY_AFTER_CAP_MS = 10_000;
 
@@ -233,8 +244,37 @@ const BURST = 10;
 let tokens = BURST;
 let lastRefill = Date.now();
 
+/**
+ * When a 429 arrives, EVERY request waits, not just the one that got it.
+ *
+ * This is the piece the bucket was missing. A cold board opens about fifty
+ * requests across sixteen sports; the bucket paces them at eight a second,
+ * and the first 429 came back while the other forty-nine were still queued
+ * behind it. Each of those then spent its token into a surface that had
+ * already said stop, collected its own 429, and retried — so one rate-limit
+ * answer became dozens, and the drain burned its retry budget on requests
+ * that could not have succeeded. Five of fifteen sports failing on a run that
+ * should comfortably fit inside ten a second is what that looks like.
+ *
+ * The limit is published per KEY, so the thing being rate-limited is all of
+ * us at once; pausing one caller while the rest carry on is not a response to
+ * it. The shared pause is, and it is cheap: `retry_after_sec` is typically 1.
+ */
+let pausedUntil = 0;
+
+/** Hold every request back for as long as the surface asked. */
+function pauseAll(ms) {
+  const until = Date.now() + Math.min(ms, RETRY_AFTER_CAP_MS);
+  if (until > pausedUntil) pausedUntil = until;
+}
+
 async function takeToken() {
   for (;;) {
+    const wait = pausedUntil - Date.now();
+    if (wait > 0) {
+      await new Promise((r) => setTimeout(r, wait));
+      continue;
+    }
     const now = Date.now();
     tokens = Math.min(BURST, tokens + ((now - lastRefill) / 1000) * RATE_PER_SEC);
     lastRefill = now;
@@ -256,7 +296,9 @@ async function callRaw(route, params) {
   let lastErr;
   /** Set from a 429's Retry-After, and used in place of our own backoff once. */
   let retryAfterMs = null;
-  for (let attempt = 0; attempt <= CALL_RETRIES; attempt++) {
+  /** Raised to RATE_LIMIT_RETRIES the moment we are told we are too fast. */
+  let budget = CALL_RETRIES;
+  for (let attempt = 0; attempt <= budget; attempt++) {
     /*
      * A token per ATTEMPT, retries included.
      *
@@ -300,6 +342,17 @@ async function callRaw(route, params) {
         if (Number.isFinite(after) && after > 0) {
           retryAfterMs = Math.min(after * 1000, RETRY_AFTER_CAP_MS);
         }
+        /*
+         * Hold the whole bucket, not just this call. The body carries
+         * `retry_after_sec` even where the header does not, and a second is
+         * the usual answer — cheap against losing a sport off the board.
+         */
+        if (res.status === 429) {
+          const body429 = Number(/"retry_after_sec"\s*:\s*(\d+(?:\.\d+)?)/.exec(body)?.[1]);
+          const ms = retryAfterMs ?? (Number.isFinite(body429) ? body429 * 1000 : 1000);
+          pauseAll(ms);
+          budget = Math.max(budget, RATE_LIMIT_RETRIES);
+        }
       } else {
         return await res.json();
       }
@@ -310,7 +363,7 @@ async function callRaw(route, params) {
         && !/ 5\d\d:/.test(err.message) && !/ (429|408):/.test(err.message)
       ) throw err;
     }
-    if (attempt < CALL_RETRIES) {
+    if (attempt < budget) {
       const wait = retryAfterMs ?? 400 * (attempt + 1) ** 2;
       retryAfterMs = null;
       await new Promise((r) => setTimeout(r, wait));
