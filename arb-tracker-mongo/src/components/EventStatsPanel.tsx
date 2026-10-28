@@ -395,7 +395,15 @@ function StatBets({
          */
         if (bet.legs?.length) {
           for (const leg of bet.legs) {
-            if (!leg.selection) continue;
+            /*
+             * A leg with no market is a plain head-to-head — its market slot
+             * held the competition, not a market — and its selection is a
+             * TEAM. Those have no business on a player-stats tab, and left in
+             * they do real damage: a team name can carry a player's surname,
+             * so "Washington Commanders" matched Malik Washington and 169 of
+             * these turned up as player bets that nobody had placed.
+             */
+            if (!leg.selection || !leg.market) continue;
             const match = namesPlayer({ ...bet, market: leg.market, selection: leg.selection }, players);
             if (!match) continue;
             all.push({

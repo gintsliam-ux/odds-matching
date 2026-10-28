@@ -1,7 +1,8 @@
 import { coll } from './mongo.mjs';
 import { COUNTER_ENTRY, SATELLITE_SKEW_MS, VOID_BET } from './betVocab.mjs';
 import { betsConfigured, betsDb } from './betsMongo.mjs';
-import { eventById } from './queries.mjs';
+import { cachedBoard, eventById } from './queries.mjs';
+import { cached } from './cache.mjs';
 
 /**
  * Bets placed on one fixture, by brand.
@@ -428,24 +429,146 @@ async function siblingEventIds(db, baseId, fixtureId) {
  * and had to be bounded to a date window around the jump; it no longer is, so
  * a bet placed months early is found like any other.
  */
+
+/**
+ * Legged multis, indexed by the fixture their legs name.
+ *
+ * These tickets have no join key at all. A multi carries `event_identifier` 0
+ * — 0 of 670,314 of them have a real one — and the legs carry no event id
+ * either, only the ticket's own multi id repeated. The single link to a
+ * fixture is the text of `multileg_evetdescription`, whose last " - " segment
+ * is the match.
+ *
+ * Matching that text per fixture is hopeless: a window wide enough to catch
+ * the bets takes 6.2 seconds to scan and finds one leg. But the SAME scan
+ * answers every fixture at once — nine seconds over twelve days covered all 33
+ * fixtures that had a box score — so it is done once for the whole board and
+ * kept, rather than once per page view.
+ *
+ * What it costs to leave out is the point: on those 33 fixtures this is 951
+ * legs naming a player in the box score, against the 34 single bets found
+ * through the ordinary event-id join, and it takes the stats bets tab from 15
+ * of 33 fixtures to all of them.
+ *
+ * Ten minutes, and `cached` serves the stale copy while it rebuilds, so only
+ * the first caller on a cold instance waits for the scan.
+ */
+const LEG_INDEX_TTL = 10 * 60_000;
+
+/** Only what `normalise` and `multiLegs` read — the rest of the doc is not kept. */
+const LEG_INDEX_PROJECTION = {
+  _id: 0, transaction_id: 1, transaction_date: 1, transaction_licenseid: 1,
+  transaction_multid: 1, user_accountID: 1, amount_bet: 1, price: 1, selections: 1,
+  event_string: 1, event_identifier: 1, sport_name: 1, bet_status: 1, bet_type: 1,
+  bet_result: 1, bonus_bet: 1, sgm_flag: 1, legs: 1,
+};
+
+/** Tickets held per fixture, so one busy game cannot dominate the index. */
+const LEG_INDEX_PER_FIXTURE = 60;
+
+async function buildLegIndex() {
+  const byFixture = new Map();
+  if (!betsConfigured) return byFixture;
+  const db = await betsDb();
+  if (!db) return byFixture;
+
+  const board = await cachedBoard().catch(() => []);
+  const events = Array.isArray(board) ? board : (board?.events ?? []);
+  const byMatch = new Map();
+  let min = Infinity;
+  let max = -Infinity;
+  for (const e of events) {
+    const t = Date.parse(e?.startsAt);
+    if (!Number.isFinite(t) || !e?.home || !e?.away) continue;
+    min = Math.min(min, t);
+    max = Math.max(max, t);
+    const home = matchName(e.home);
+    const away = matchName(e.away);
+    if (!home || !away) continue;
+    // Both ways round: the slip does not agree with us about who is at home.
+    byMatch.set(`${home} v ${away}`, e.id);
+    byMatch.set(`${away} v ${home}`, e.id);
+  }
+  if (!byMatch.size) return byFixture;
+
+  /*
+   * Three days back from the earliest fixture on the board, which is almost
+   * all of it: of 13,295 legged tickets, 94.1% were struck within SIX HOURS of
+   * their first leg, 98.9% within a day and 99.6% within two. Ten days back
+   * was the first guess and cost three times the scan for the last 0.1%.
+   */
+  const cursor = db.collection('multi_bets').find({
+    transaction_date: { $gte: new Date(Math.max(min - 3 * 864e5, BET_CUTOFF.getTime())), $lte: new Date(max + 2 * 864e5) },
+    'legs.0': { $exists: true },
+    bet_status: { $not: COUNTER_ENTRY },
+    bet_type: { $not: VOID_BET },
+  }).project(LEG_INDEX_PROJECTION);
+
+  for await (const row of cursor) {
+    // One ticket can have legs on several of the board's fixtures, and belongs
+    // on each of their pages.
+    const on = new Set();
+    for (const leg of row.legs ?? []) {
+      const id = byMatch.get(matchName(leg?.multileg_evetdescription));
+      if (id) on.add(id);
+    }
+    for (const id of on) {
+      const list = byFixture.get(id) ?? [];
+      if (list.length < LEG_INDEX_PER_FIXTURE) list.push(row);
+      byFixture.set(id, list);
+    }
+  }
+  return byFixture;
+}
+
+const legIndex = () =>
+  cached('multi:legIndex', LEG_INDEX_TTL, buildLegIndex, { maxStaleMs: 60 * 60_000 })
+    .catch(() => new Map());
+
 async function multiBetsFor(db, eventId, fixtureId) {
   const numericId = Number(eventId);
-  // 0 is the sentinel multi-leg bets carry instead of an event id; they name
-  // their events only in leg description strings and cannot be joined here.
-  if (!Number.isFinite(numericId) || numericId === 0) return { mybet: [], multis: [] };
+  const joinable = Number.isFinite(numericId) && numericId !== 0;
 
-  const { ids: eventIds, satellites } = await siblingEventIds(db, numericId, fixtureId);
-  const rows = await db
-    .collection('multi_bets')
-    .find({
-      event_identifier: { $in: eventIds },
-      transaction_date: { $gte: BET_CUTOFF },
-      bet_status: { $not: COUNTER_ENTRY },
-      bet_type: { $not: VOID_BET },
-    })
-    .sort({ transaction_date: -1 })
-    .limit(MAX_PER_BRAND * 2)
-    .toArray();
+  /*
+   * Two ways in, because the slips arrive in two shapes.
+   *
+   * A single names its event, so it joins on `event_identifier` like anything
+   * else. A multi carries 0 there and names its events only in leg text, so it
+   * comes from the leg index instead — see buildLegIndex. A fixture needs both:
+   * without the first it loses every single, without the second it loses every
+   * multi, and on a fixture with a box score the multis are the larger half by
+   * a factor of about twenty-five.
+   */
+  let satellites = new Set();
+  let rows = [];
+  if (joinable) {
+    const sib = await siblingEventIds(db, numericId, fixtureId);
+    satellites = sib.satellites;
+    rows = await db
+      .collection('multi_bets')
+      .find({
+        event_identifier: { $in: sib.ids },
+        transaction_date: { $gte: BET_CUTOFF },
+        bet_status: { $not: COUNTER_ENTRY },
+        bet_type: { $not: VOID_BET },
+      })
+      .sort({ transaction_date: -1 })
+      .limit(MAX_PER_BRAND * 2)
+      .toArray();
+  }
+
+  const legged = (await legIndex()).get(fixtureId) ?? [];
+  if (legged.length) {
+    // A ticket can in principle arrive down both paths; the id decides.
+    const seen = new Set(rows.map((r) => r.transaction_id));
+    for (const r of legged) {
+      if (seen.has(r.transaction_id)) continue;
+      seen.add(r.transaction_id);
+      rows.push(r);
+    }
+    rows.sort((a, b) => new Date(b.transaction_date) - new Date(a.transaction_date));
+  }
+  if (!rows.length) return { mybet: [], multis: [] };
 
   // Enrichment lives in a sidecar keyed by transaction_id (the scraper
   // re-syncs the bets wholesale, so it can't be written in place).
