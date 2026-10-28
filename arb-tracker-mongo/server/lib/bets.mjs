@@ -2,7 +2,6 @@ import { coll } from './mongo.mjs';
 import { COUNTER_ENTRY, SATELLITE_SKEW_MS, VOID_BET } from './betVocab.mjs';
 import { betsConfigured, betsDb } from './betsMongo.mjs';
 import { cachedBoard, eventById } from './queries.mjs';
-import { cached } from './cache.mjs';
 
 /**
  * Bets placed on one fixture, by brand.
@@ -450,8 +449,7 @@ async function siblingEventIds(db, baseId, fixtureId) {
  * through the ordinary event-id join, and it takes the stats bets tab from 15
  * of 33 fixtures to all of them.
  *
- * Ten minutes, and `cached` serves the stale copy while it rebuilds, so only
- * the first caller on a cold instance waits for the scan.
+ * Rebuilt every ten minutes, and never waited on — see legIndexNow.
  */
 const LEG_INDEX_TTL = 10 * 60_000;
 
@@ -521,9 +519,49 @@ async function buildLegIndex() {
   return byFixture;
 }
 
-const legIndex = () =>
-  cached('multi:legIndex', LEG_INDEX_TTL, buildLegIndex, { maxStaleMs: 60 * 60_000 })
-    .catch(() => new Map());
+/**
+ * The index as it stands RIGHT NOW, plus a refresh if it is stale. Never waits.
+ *
+ * Blocking on the build cost the first page view on a cold instance 5.6
+ * seconds, which is most of a page load to add a second brand's bets. So the
+ * first caller gets whatever is in hand — on a cold instance, nothing — and
+ * triggers the scan behind them.
+ *
+ * The cost of that is a page that is briefly missing its multis, which is
+ * exactly the kind of "sometimes it shows, sometimes it does not" that is
+ * worse than being slow. So it is not left silent: `warming` rides out with
+ * the result and the panel says it is still loading and comes back for it,
+ * rather than quietly reporting fewer bets than exist.
+ */
+const EMPTY_INDEX = new Map();
+let legIndexValue = null;
+let legIndexAt = 0;
+let legIndexInflight = null;
+
+function legIndexNow() {
+  const fresh = legIndexValue !== null && Date.now() - legIndexAt < LEG_INDEX_TTL;
+  if (!fresh && !legIndexInflight) {
+    legIndexInflight = buildLegIndex()
+      .then((m) => {
+        legIndexValue = m;
+        legIndexAt = Date.now();
+      })
+      .catch(() => {
+        // Keep the old copy on a failure; an empty index would read as "this
+        // fixture has no multis", which is a different and wrong statement.
+        legIndexAt = Date.now();
+      })
+      .finally(() => {
+        legIndexInflight = null;
+      });
+  }
+  return { index: legIndexValue ?? EMPTY_INDEX, ready: legIndexValue !== null };
+}
+
+/** Warm it without anyone waiting — see betsForFixture. */
+export const warmLegIndex = () => {
+  legIndexNow();
+};
 
 async function multiBetsFor(db, eventId, fixtureId) {
   const numericId = Number(eventId);
@@ -557,7 +595,8 @@ async function multiBetsFor(db, eventId, fixtureId) {
       .toArray();
   }
 
-  const legged = (await legIndex()).get(fixtureId) ?? [];
+  const { index, ready } = legIndexNow();
+  const legged = index.get(fixtureId) ?? [];
   if (legged.length) {
     // A ticket can in principle arrive down both paths; the id decides.
     const seen = new Set(rows.map((r) => r.transaction_id));
@@ -568,7 +607,7 @@ async function multiBetsFor(db, eventId, fixtureId) {
     }
     rows.sort((a, b) => new Date(b.transaction_date) - new Date(a.transaction_date));
   }
-  if (!rows.length) return { mybet: [], multis: [] };
+  if (!rows.length) return { mybet: [], multis: [], warming: !ready };
 
   // Enrichment lives in a sidecar keyed by transaction_id (the scraper
   // re-syncs the bets wholesale, so it can't be written in place).
@@ -583,7 +622,7 @@ async function multiBetsFor(db, eventId, fixtureId) {
     for (const e of enr) em.set(e.transaction_id, e.enrichment);
   }
 
-  const out = { mybet: [], multis: [] };
+  const out = { mybet: [], multis: [], warming: !ready };
   for (const r of rows) {
     const e = em.get(r.transaction_id);
     const bet = normalise({
@@ -655,11 +694,24 @@ export async function betsForFixture(fixtureId) {
       }),
     );
   }
-  if (mapping.mybet?.gutsy_event_id) {
+  /*
+   * Run even with no mybet mapping. The event-id join needs one, but the leg
+   * index does not — it finds tickets by the text of their legs — so a fixture
+   * mapped to swift alone, or to nothing, can still have multis on it.
+   */
+  {
     jobs.push(
-      multiBetsFor(db, mapping.mybet.gutsy_event_id, fixtureId).then(({ mybet, multis }) => {
-        result.mybet = { bets: mybet, reason: mybet.length ? null : 'none' };
-        result.multis = { bets: multis, reason: multis.length ? null : 'none' };
+      multiBetsFor(db, mapping.mybet?.gutsy_event_id ?? 0, fixtureId).then(({ mybet, multis, warming }) => {
+        const unmapped = !mapping.mybet?.gutsy_event_id;
+        result.warming = !!warming;
+        result.mybet = {
+          bets: mybet,
+          reason: mybet.length ? null : warming ? 'warming' : unmapped ? 'unmapped' : 'none',
+        };
+        result.multis = {
+          bets: multis,
+          reason: multis.length ? null : warming ? 'warming' : unmapped ? 'unmapped' : 'none',
+        };
       }),
     );
   }
