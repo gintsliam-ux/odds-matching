@@ -3,6 +3,7 @@ import { BarChart3, ChevronDown, Info } from 'lucide-react';
 import { fetchBets, fetchPlayerStats, type Bet, type FixtureBets, type PlayerStats, type PlayerStatLine } from '../lib/db';
 import { PanelNotice, SubTabs } from './EventTabs';
 import type { SportEvent } from '../lib/types';
+import { BRAND_LABEL, brandBadge } from '../lib/brands';
 
 /**
  * The box score for one fixture, NBA and NFL only.
@@ -143,6 +144,73 @@ function confirmsGiven(given: string[], hay: Set<string>): boolean {
   return given.some((g) => (g.length > 1 && hay.has(g)) || hay.has(g[0]));
 }
 
+/**
+ * Which box-score column a market is asking about.
+ *
+ * Every market on this tab is a question about one number — "Player to Score
+ * 15+ Points" asks about points, "Anytime Touchdown Scorer" about touchdowns —
+ * and the box score beside it has that number. Showing it turns a list of bets
+ * into a list you can settle at a glance.
+ *
+ * Ordered, and matched on the market's own phrasing rather than on loose
+ * keywords. Two of the 23 markets the tab groups under are not player markets
+ * at all — "Margin 13 Point Bands" and "Line/Total Double (-3.5 / 228.5)" get
+ * here only because a team's name shares a word with somebody's surname — and
+ * the word boundary on `points` is what keeps "13 Point Bands" from claiming
+ * to be a points market. They show no number, which is the honest answer.
+ */
+const STAT_FOR_MARKET: [RegExp, string, string][] = [
+  [/touchdown/i, 'touchdowns', 'TD'],
+  [/passing yards/i, 'passing_yards', 'pass yds'],
+  [/rushing yards/i, 'rushing_yards', 'rush yds'],
+  [/receiving yards/i, 'receiving_yards', 'rec yds'],
+  [/receptions/i, 'receptions', 'rec'],
+  [/\bassists\b/i, 'assists', 'ast'],
+  [/\brebounds\b/i, 'rebounds', 'reb'],
+  [/\bpoints\b/i, 'points', 'pts'],
+  [/\bthrees\b|3\s*pointers?/i, 'threes', '3PM'],
+];
+
+function statFor(market: string, player: PlayerStatLine | null): { label: string; value: number } | null {
+  if (!player) return null;
+  for (const [re, field, label] of STAT_FOR_MARKET) {
+    if (!re.test(market)) continue;
+    const v = Number(player[field]);
+    return Number.isFinite(v) ? { label, value: v } : null;
+  }
+  return null;
+}
+
+/**
+ * Settle one leg from the box score, where the brand will not.
+ *
+ * This is deliberate re-derivation and it is confined to the case that has no
+ * other answer. The brand settles a TICKET: a lost multi says at least one leg
+ * lost and never which, so on a finished game every leg of it reads "unknown"
+ * — and on this tab that was every row, sitting next to a box score that made
+ * the answer obvious. "Player to Score 20+ Points" beside "27 pts" is not a
+ * judgement call.
+ *
+ * It only runs where the market states its own threshold ("20+ Points", "2+
+ * Touchdowns", "Passing Yards 200+", and anytime-scorer, which is 1+). "First
+ * Touchdown Scorer" states none — it asks who was first, not how many — so it
+ * is left alone rather than guessed at from a touchdown count.
+ *
+ * And it never overrides the brand. A definite result from them wins; this
+ * fills the silence.
+ */
+function settleFromBox(market: string, stat: { value: number } | null): Landed | null {
+  if (!stat) return null;
+  const threshold = /anytime/i.test(market) ? 1 : Number(market.match(/(\d+)\s*\+/)?.[1]);
+  if (!Number.isFinite(threshold)) return null;
+  return stat.value >= threshold ? 'won' : 'lost';
+}
+
+/** Winners first and losers under them; everything unsettled after both. */
+const LANDED_ORDER: Record<Landed, number> = {
+  won: 0, lost: 1, void: 2, unknown: 3, pending: 4,
+};
+
 type Match = { player: PlayerStatLine; exact: boolean } | null;
 
 function namesPlayer(bet: Bet, players: PlayerStatLine[]): Match {
@@ -194,10 +262,19 @@ function landed(bet: Bet, match: Match, done: boolean): Landed {
  * Void still applies, because it is about the man and not the ticket: if he
  * never took the field, his leg was voided whatever the rest of the slip did.
  */
-function legLanded(bet: Bet, match: Match, done: boolean): Landed {
+function legLanded(
+  bet: Bet,
+  match: Match,
+  done: boolean,
+  settled: Landed | null,
+): Landed {
   if (done && match?.exact && match.player.played === false) return 'void';
   const whole = landed(bet, null, done);
+  // A returned ticket means every leg came in, whatever the box score says.
   if (whole === 'won') return 'won';
+  // Everywhere else the brand is silent about THIS leg, so the box score
+  // answers if it can: a lost ticket, or one not settled yet.
+  if (done && settled) return settled;
   if (whole === 'lost') return 'unknown';
   return whole;
 }
@@ -362,6 +439,10 @@ function StatBets({
       market: string;
       selection: string;
       price: number | null;
+      /** What the box score says about the number this market asks for. */
+      stat: { label: string; value: number } | null;
+      /** Settled by us from that number rather than by the brand. */
+      derived: boolean;
       /** This row is one leg of a multi, not the whole ticket. */
       ofMulti: boolean;
       landed: Landed;
@@ -405,28 +486,38 @@ function StatBets({
             if (!leg.selection || !leg.market) continue;
             const match = namesPlayer({ ...bet, market: leg.market, selection: leg.selection }, players);
             if (!match) continue;
+            const market = leg.market ?? bet.market ?? 'Unknown market';
+            const stat = statFor(market, match.player);
             all.push({
               brand,
               bet,
-              market: leg.market ?? bet.market ?? 'Unknown market',
+              market,
               selection: leg.selection,
               price: leg.price,
+              stat,
+              derived: legLanded(bet, match, done, null) !== legLanded(bet, match, done, settleFromBox(market, stat)),
               ofMulti: true,
-              landed: legLanded(bet, match, done),
+              landed: legLanded(bet, match, done, settleFromBox(market, stat)),
             });
           }
           continue;
         }
         const match = namesPlayer(bet, players);
         if (!match) continue;
+        const market = bet.market ?? bet.selection ?? 'Unknown market';
+        const stat = statFor(market, match.player);
+        const own = landed(bet, match, done);
         all.push({
           brand,
           bet,
-          market: bet.market ?? bet.selection ?? 'Unknown market',
+          market,
           selection: bet.selection ?? '',
           price: bet.price,
+          stat,
+          derived: own === 'pending' && done && settleFromBox(market, stat) != null,
           ofMulti: false,
-          landed: landed(bet, match, done),
+          // The brand's own word, unless it has not given one.
+          landed: own === 'pending' && done ? settleFromBox(market, stat) ?? own : own,
         });
       }
     }
@@ -438,7 +529,17 @@ function StatBets({
     return [...byMarket.entries()]
       .map(([market, rows]) => ({
         market,
-        rows,
+        /*
+         * Winners first, losers under them, anything unsettled after both —
+         * and within a band the bigger stake first, because that is the one
+         * you care about. A market group is read to answer "did this land",
+         * so the answers come before the rest of the row.
+         */
+        rows: [...rows].sort(
+          (a, b) =>
+            LANDED_ORDER[a.landed] - LANDED_ORDER[b.landed] ||
+            (Number(b.bet.stake) || 0) - (Number(a.bet.stake) || 0),
+        ),
         /*
          * Each TICKET once, not each row. Two legs of one $10 multi land in
          * the same group, and adding both would report $20 staked on a market
@@ -483,43 +584,83 @@ function StatBets({
           </div>
           <table className="w-full border-collapse text-sm">
             <tbody>
-              {rows.map(({ brand, bet, market, selection, price, ofMulti, landed: l }, i) => (
-                <tr
-                  key={`${bet.id}:${market}:${selection}:${i}`}
-                  className="border-t border-surface-border/60 hover:bg-white/[0.02]"
-                >
-                  <td className="w-20 px-3 py-1">
-                    <span
-                      title={LANDED_TITLE[l]}
-                      className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${LANDED_TONE[l]}`}
-                    >
-                      {LANDED_LABEL[l]}
-                    </span>
-                  </td>
-                  <td className="px-2 py-1 text-slate-200">
-                    {selection}
-                    {/* One leg of a slip, so the stake beside it is the whole
-                        ticket's and the price is this leg's alone. */}
-                    {ofMulti && (
-                      <span
-                        title={`One leg of a ${bet.legCount ?? ''}-leg ${bet.betType ?? 'multi'} — the stake shown is the whole ticket's`}
-                        className="ml-1.5 rounded bg-white/5 px-1 py-0.5 text-[9px] uppercase tracking-wide text-slate-500"
-                      >
-                        {bet.betType === 'SGM' ? 'SGM' : 'Multi'}
-                      </span>
-                    )}
-                  </td>
-                  <td
-                    className={`w-20 px-2 py-1 text-right tabular-nums ${ofMulti ? 'text-slate-600' : 'text-slate-400'}`}
+              {rows.map(({ brand, bet, market, selection, price, stat, derived, ofMulti, landed: l }, i) => {
+                // A winner is the row you are looking for, so it is the one
+                // that is readable at a glance; everything else steps back.
+                const won = l === 'won';
+                return (
+                  <tr
+                    key={`${bet.id}:${market}:${selection}:${i}`}
+                    className={`border-t border-surface-border/60 ${
+                      won ? 'bg-emerald-500/[0.07] hover:bg-emerald-500/[0.12]' : 'hover:bg-white/[0.02]'
+                    }`}
                   >
-                    ${Math.round(Number(bet.stake) || 0).toLocaleString()}
-                  </td>
-                  <td className="w-14 px-2 py-1 text-right tabular-nums text-slate-300">
-                    {price != null ? Number(price).toFixed(2) : '–'}
-                  </td>
-                  <td className="w-16 px-2 py-1 text-right text-[10px] uppercase text-slate-600">{brand}</td>
-                </tr>
-              ))}
+                    {/* The brand, in the palette it wears everywhere else. */}
+                    <td className="w-16 px-3 py-1">
+                      <span className={brandBadge(brand)}>{BRAND_LABEL[brand] ?? brand}</span>
+                    </td>
+
+                    <td className="px-2 py-1">
+                      <span className={won ? 'font-semibold text-slate-50' : 'text-slate-300'}>
+                        {selection}
+                      </span>
+                      {/*
+                        * What he actually did, next to his name: the box-score
+                        * number for the stat this market asks about. It is the
+                        * point of the tab — "Player to Score 20+ Points" and
+                        * "24 pts" settle each other on one line.
+                        */}
+                      {stat && (
+                        <span
+                          title={`${stat.value} ${stat.label} in the box score`}
+                          className={`ml-2 rounded px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${
+                            won ? 'bg-emerald-500/20 text-emerald-200' : 'bg-white/10 text-slate-300'
+                          }`}
+                        >
+                          {stat.value}
+                          <span className="ml-1 font-normal opacity-60">{stat.label}</span>
+                        </span>
+                      )}
+                      {/* One leg of a slip, so the stake beside it is the whole
+                          ticket's and the price is this leg's alone. */}
+                      {ofMulti && (
+                        <span
+                          title={`One leg of a ${bet.legCount ?? ''}-leg ${bet.betType ?? 'multi'} — the stake shown is the whole ticket's`}
+                          className="ml-1.5 rounded bg-white/5 px-1 py-0.5 text-[9px] uppercase tracking-wide text-slate-500"
+                        >
+                          {bet.betType === 'SGM' ? 'SGM' : 'Multi'}
+                        </span>
+                      )}
+                    </td>
+
+                    <td
+                      className={`w-20 px-2 py-1 text-right tabular-nums ${ofMulti ? 'text-slate-600' : 'text-slate-400'}`}
+                    >
+                      ${Math.round(Number(bet.stake) || 0).toLocaleString()}
+                    </td>
+                    <td className={`w-14 px-2 py-1 text-right tabular-nums ${won ? 'text-slate-100' : 'text-slate-400'}`}>
+                      {price != null ? Number(price).toFixed(2) : '–'}
+                    </td>
+
+                    {/* The result, last, where the eye lands at the end of the row. */}
+                    <td className="w-20 px-3 py-1 text-right">
+                      <span
+                        title={
+                          derived
+                            ? 'Read off the box score. The brand settles the ticket, not the leg, so it does not say what became of this one.'
+                            : LANDED_TITLE[l]
+                        }
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${LANDED_TONE[l]}`}
+                      >
+                        {LANDED_LABEL[l]}
+                        {/* A dot, because a result we worked out is not the
+                            same claim as one the brand paid out on. */}
+                        {derived && <span className="ml-0.5 opacity-50">·</span>}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
