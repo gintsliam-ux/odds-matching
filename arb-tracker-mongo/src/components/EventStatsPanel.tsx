@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BarChart3, ChevronDown, Info } from 'lucide-react';
+import { BarChart3, Check, ChevronDown, Info } from 'lucide-react';
 import { fetchBets, fetchPlayerStats, type Bet, type FixtureBets, type PlayerStats, type PlayerStatLine } from '../lib/db';
 import { PanelNotice, SubTabs } from './EventTabs';
 import { StatBetsSkeleton, StatsSkeleton } from './Skeleton';
@@ -132,7 +132,26 @@ const words = (s: string) =>
  * What became of a bet: the brand's own word for it, or void when the man it
  * names never took the field.
  */
-type Landed = 'won' | 'lost' | 'void' | 'pending' | 'unknown';
+/**
+ * What the BRAND says about the bet. Nothing else may write this.
+ *
+ * It had started carrying a second, different claim: where the brand had not
+ * settled yet, the box score was allowed to fill the badge in. That reads as
+ * "this has been paid" when the truth is "we think this has come in" — and the
+ * two are not the same thing to anyone reconciling against the book. The
+ * target now has its own state below and this one answers only to `result`
+ * off the bet row.
+ */
+type Landed = 'won' | 'lost' | 'void' | 'pending';
+
+/**
+ * What the BOX SCORE says, which is a different question.
+ *
+ * `hit` is certain and `short` is not: these markets ask for at least so many,
+ * so a number once reached cannot be unreached, while falling short is only
+ * final at the whistle. Mid-game `short` is simply "not yet".
+ */
+type Target = 'hit' | 'short' | null;
 
 const SUFFIX = new Set(['jr', 'sr', 'ii', 'iii', 'iv', 'v']);
 
@@ -258,11 +277,11 @@ function lineLabel(market: string): string {
  * And it never overrides the brand. A definite result from them wins; this
  * fills the silence.
  */
-function settleFromBox(
+function targetOf(
   market: string,
   stat: { value: number } | null,
   done: boolean,
-): Landed | null {
+): Target {
   if (!stat) return null;
   const threshold = /anytime/i.test(market) ? 1 : Number(market.match(/(\d+)\s*\+/)?.[1]);
   if (!Number.isFinite(threshold)) return null;
@@ -278,8 +297,8 @@ function settleFromBox(
    * the third he has not lost the 20+ — he has not got there YET — so that
    * stays pending until the final whistle.
    */
-  if (stat.value >= threshold) return 'won';
-  return done ? 'lost' : null;
+  if (stat.value >= threshold) return 'hit';
+  return done ? 'short' : null;
 }
 
 /**
@@ -297,15 +316,20 @@ function settleFromBox(
  * been settled by the brand and another has not, and the settled one is the
  * answer for all of them.
  */
-function byPlayer<T extends { player: string; stat: { value: number } | null; landed: Landed; bet: Bet }>(
+function byPlayer<
+  T extends { player: string; stat: { value: number } | null; target: Target; landed: Landed; bet: Bet },
+>(
   rows: T[],
-): { player: string; stat: T['stat']; landed: Landed; stake: number; rows: T[] }[] {
+): { player: string; stat: T['stat']; target: Target; landed: Landed; stake: number; rows: T[] }[] {
   const by = new Map<string, T[]>();
   for (const r of rows) by.set(r.player, [...(by.get(r.player) ?? []), r]);
   return [...by.entries()]
     .map(([player, list]) => ({
       player,
       stat: list.find((r) => r.stat)?.stat ?? null,
+      // One player, one market, one line — the target is the same for all of
+      // them, so the first that has an answer answers for the group.
+      target: list.find((r) => r.target)?.target ?? null,
       landed: list.reduce<Landed>(
         (best, r) => (LANDED_ORDER[r.landed] < LANDED_ORDER[best] ? r.landed : best),
         'pending',
@@ -342,7 +366,7 @@ const nameFromSelection = (selection: string) =>
 
 /** Winners first and losers under them; everything unsettled after both. */
 const LANDED_ORDER: Record<Landed, number> = {
-  won: 0, lost: 1, void: 2, unknown: 3, pending: 4,
+  won: 0, lost: 1, void: 2, pending: 3,
 };
 
 type Match = { player: PlayerStatLine; exact: boolean } | null;
@@ -396,21 +420,18 @@ function landed(bet: Bet, match: Match, done: boolean): Landed {
  * Void still applies, because it is about the man and not the ticket: if he
  * never took the field, his leg was voided whatever the rest of the slip did.
  */
-function legLanded(
-  bet: Bet,
-  match: Match,
-  done: boolean,
-  settled: Landed | null,
-): Landed {
+/**
+ * A leg's status is its TICKET's status, because that is all the brand says.
+ *
+ * It settles the slip, never the leg — a returned ticket means every leg came
+ * in, and a lost one means at least one did not without saying which. This
+ * used to paper over that with the box score, which put "won" on a badge the
+ * brand had not paid. The box score now has its own state (see Target) and
+ * this reports the ticket.
+ */
+function legLanded(bet: Bet, match: Match, done: boolean): Landed {
   if (done && match?.exact && match.player.played === false) return 'void';
-  const whole = landed(bet, null, done);
-  // A returned ticket means every leg came in, whatever the box score says.
-  if (whole === 'won') return 'won';
-  // Everywhere else the brand is silent about THIS leg, so the box score
-  // answers if it can — including mid-game, where it can only say "won".
-  if (settled) return settled;
-  if (whole === 'lost') return 'unknown';
-  return whole;
+  return landed(bet, null, done);
 }
 
 const LANDED_TONE: Record<Landed, string> = {
@@ -418,19 +439,22 @@ const LANDED_TONE: Record<Landed, string> = {
   lost: 'bg-rose-500/15 text-rose-300',
   void: 'bg-slate-500/15 text-slate-400',
   pending: 'bg-amber-500/15 text-amber-300',
-  unknown: 'bg-slate-500/10 text-slate-500',
 };
 
 const LANDED_LABEL: Record<Landed, string> = {
-  won: 'won', lost: 'lost', void: 'void', pending: 'pending', unknown: 'multi lost',
+  won: 'won', lost: 'lost', void: 'void', pending: 'pending',
 };
 
 const LANDED_TITLE: Record<Landed, string> = {
-  won: '', lost: '', void: 'The player recorded nothing in the box score.',
-  pending: 'Not settled yet.',
-  unknown:
-    'The ticket lost, so at least one leg did — but the brand does not say which, so this leg is not claimed either way.',
+  won: 'Settled by the brand as a winner.',
+  lost: 'Settled by the brand as a loser.',
+  void: 'Settled by the brand as void.',
+  pending: 'Not settled by the brand yet.',
 };
+
+/** Single, Multi or SGM, as the brand recorded it. */
+const betShape = (bet: Bet): string =>
+  bet.betType === 'SGM' ? 'SGM' : (bet.legCount ?? 0) > 1 || bet.betType === 'Multi' ? 'Multi' : 'Single';
 
 /** One block per stat: every player who recorded it, in order, by team. */
 function Leaders({
@@ -608,8 +632,8 @@ function StatBets({
       player: string;
       /** What the box score says about the number this market asks for. */
       stat: { label: string; value: number } | null;
-      /** Settled by us from that number rather than by the brand. */
-      derived: boolean;
+      /** Whether that number has reached the market's line — see Target. */
+      target: Target;
       /** This row is one leg of a multi, not the whole ticket. */
       ofMulti: boolean;
       landed: Landed;
@@ -665,11 +689,9 @@ function StatBets({
               selection: leg.selection,
               price: leg.price,
               stat,
-              derived:
-                legLanded(bet, match, done, null) !==
-                legLanded(bet, match, done, settleFromBox(market, stat, done)),
+              target: targetOf(market, stat, done),
               ofMulti: true,
-              landed: legLanded(bet, match, done, settleFromBox(market, stat, done)),
+              landed: legLanded(bet, match, done),
             });
           }
           continue;
@@ -678,7 +700,6 @@ function StatBets({
         const match = namesPlayer(bet, players);
         if (!match && !(noBox && fieldFor(market))) continue;
         const stat = match ? statFor(market, match.player) : null;
-        const own = landed(bet, match, done);
         all.push({
           brand,
           bet,
@@ -687,10 +708,10 @@ function StatBets({
           selection: bet.selection ?? '',
           price: bet.price,
           stat,
-          derived: own === 'pending' && settleFromBox(market, stat, done) != null,
+          target: targetOf(market, stat, done),
           ofMulti: false,
-          // The brand's own word, unless it has not given one.
-          landed: own === 'pending' ? settleFromBox(market, stat, done) ?? own : own,
+          // The brand's own word, and only ever the brand's.
+          landed: landed(bet, match, done),
         });
       }
     }
@@ -808,9 +829,16 @@ function StatBets({
                 const open = expanded.has(key);
                 // A winner is the row you are looking for, so it is the one at
                 // full contrast; everything else steps back.
-                const won = p.landed === 'won';
+                /*
+                 * Two different claims, kept visually apart. The emerald is
+                 * the BOX SCORE saying the line is beaten; the badge on the
+                 * right is the BRAND saying what it paid. A bet can be hit and
+                 * still pending — that is the normal state of a live game —
+                 * and conflating them put "won" on money nobody had returned.
+                 */
+                const hit = p.target === 'hit';
                 return (
-                  <div key={key} className={`border-t border-surface-border/60 ${won ? 'bg-emerald-500/[0.07]' : ''}`}>
+                  <div key={key} className={`border-t border-surface-border/60 ${hit ? 'bg-emerald-500/[0.07]' : ''}`}>
                     <button
                       type="button"
                       onClick={() => toggle(key)}
@@ -828,18 +856,23 @@ function StatBets({
                           open ? '' : '-rotate-90'
                         } text-slate-500`}
                       />
-                      <span className={`truncate text-sm ${won ? 'font-semibold text-slate-50' : 'text-slate-300'}`}>
+                      <span className={`truncate text-sm ${hit ? 'font-semibold text-slate-50' : 'text-slate-300'}`}>
                         {p.player}
                       </span>
                       {p.stat && (
                         <span
-                          title={`${p.stat.value} ${p.stat.label} in the box score`}
-                          className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${
-                            won ? 'bg-emerald-500/20 text-emerald-200' : 'bg-white/10 text-slate-300'
+                          title={
+                            hit
+                              ? `${p.stat.value} ${p.stat.label} — the line is beaten. Whether it has been PAID is the badge on the right.`
+                              : `${p.stat.value} ${p.stat.label} in the box score`
+                          }
+                          className={`flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${
+                            hit ? 'bg-emerald-500/20 text-emerald-200' : 'bg-white/10 text-slate-300'
                           }`}
                         >
+                          {hit && <Check size={11} className="shrink-0" />}
                           {p.stat.value}
-                          <span className="ml-1 font-normal opacity-60">{p.stat.label}</span>
+                          <span className="font-normal opacity-60">{p.stat.label}</span>
                         </span>
                       )}
                       {p.rows.length > 1 && (
@@ -859,21 +892,28 @@ function StatBets({
                     {open && (
                       <table className="w-full border-collapse text-sm">
                         <tbody>
-                          {p.rows.map(({ brand, bet, selection, price, ofMulti, derived, landed: l }, i) => (
+                          {p.rows.map(({ brand, bet, selection, price, ofMulti, landed: l }, i) => (
                             <tr key={`${bet.id}:${i}`} className="border-t border-surface-border/40">
                               <td className="w-16 py-1 pl-8 pr-2">
                                 <span className={brandBadge(brand)}>{BRAND_LABEL[brand] ?? brand}</span>
                               </td>
                               <td className="px-2 py-1 text-slate-400">
                                 {selection}
-                                {ofMulti && (
-                                  <span
-                                    title={`One leg of a ${bet.legCount ?? ''}-leg ${bet.betType ?? 'multi'} — the stake is the whole ticket's`}
-                                    className="ml-1.5 rounded bg-white/5 px-1 py-0.5 text-[9px] uppercase tracking-wide text-slate-500"
-                                  >
-                                    {bet.betType === 'SGM' ? 'SGM' : 'Multi'}
-                                  </span>
-                                )}
+                                {/* Single, Multi or SGM — always, not only when
+                                    it is a leg. A single and one leg of a
+                                    four-leg SGM are very different bets and the
+                                    row looked the same. */}
+                                <span
+                                  title={
+                                    ofMulti
+                                      ? `One leg of a ${bet.legCount ?? '?'}-leg ${betShape(bet)} — the stake shown is the whole ticket's`
+                                      : 'A single bet'
+                                  }
+                                  className="ml-1.5 rounded bg-white/5 px-1 py-0.5 text-[9px] uppercase tracking-wide text-slate-500"
+                                >
+                                  {betShape(bet)}
+                                  {ofMulti && bet.legCount ? ` ${bet.legCount}` : ''}
+                                </span>
                               </td>
                               <td className={`w-20 px-2 py-1 text-right tabular-nums ${ofMulti ? 'text-slate-600' : 'text-slate-400'}`}>
                                 ${Math.round(Number(bet.stake) || 0).toLocaleString()}
@@ -883,11 +923,14 @@ function StatBets({
                               </td>
                               <td className="w-20 px-3 py-1 text-right">
                                 <span
-                                  title={derived ? 'Read off the box score — the brand settles the ticket, not the leg.' : LANDED_TITLE[l]}
+                                  title={
+                                    ofMulti
+                                      ? `${LANDED_TITLE[l]} This is the whole ticket's result — the brand does not settle legs.`
+                                      : LANDED_TITLE[l]
+                                  }
                                   className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${LANDED_TONE[l]}`}
                                 >
                                   {LANDED_LABEL[l]}
-                                  {derived && <span className="ml-0.5 opacity-50">·</span>}
                                 </span>
                               </td>
                             </tr>
