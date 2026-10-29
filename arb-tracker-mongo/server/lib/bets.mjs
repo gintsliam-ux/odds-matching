@@ -112,6 +112,49 @@ async function mappingFor(fixtureId) {
 }
 
 /**
+ * A result stamped before the event started is not a result.
+ *
+ * Bet adc63185 on Clippers v Lakers showed "Lost" while swiftbet's own
+ * `bet_status` said "Unresulted" and its P&L was zero. Our settlement had
+ * stamped it `resultAt` 01:09Z for a game that started at 02:40Z — ninety-one
+ * minutes before a ball was thrown — with `resultVia: "sibling"`, meaning it
+ * was inferred from another bet rather than from an outcome.
+ *
+ * It is not one row. Of 238 settled sport bets over seven days every single
+ * one came via `sibling`, and 237 of them were stamped before their first leg
+ * began. Whatever is wrong with that path upstream, a bet cannot be settled
+ * before its event starts, and this page should not repeat the claim.
+ *
+ * Only the clock is checked, not the method: a sibling settlement AFTER the
+ * game is a perfectly good inference and the reason the stamp exists at all.
+ */
+function settledTooEarly(bet) {
+  const at = Date.parse(bet?.enrichment?.resultAt);
+  if (!Number.isFinite(at)) return false;
+  /*
+   * The legs' own `event_time`, NOT `derived.minLegEventTime`.
+   *
+   * That derived field is shifted: on bet f970a559 it reads 12:28Z for a race
+   * whose leg says 01:28Z — eleven hours out, the same local-time-in-a-UTC-
+   * field confusion that `transaction_date` has. Comparing a true-UTC stamp
+   * against it would have called every settlement made within eleven hours of
+   * the event "too early", which is most of the correct ones. The legs are in
+   * real UTC and are what the brand itself resulted against.
+   */
+  let start = Infinity;
+  try {
+    const legs = typeof bet.legs === 'string' ? JSON.parse(bet.legs) : bet.legs;
+    for (const l of Array.isArray(legs) ? legs : []) {
+      const t = Date.parse(l?.event_time);
+      if (Number.isFinite(t)) start = Math.min(start, t);
+    }
+  } catch {
+    return false;
+  }
+  return Number.isFinite(start) && at < start;
+}
+
+/**
  * Swiftbet's own bet-type vocabulary, in the words the rest of the page uses.
  *
  * They arrive lowercase and from a different dictionary — `sport`, `multi`,
@@ -277,10 +320,18 @@ async function swiftbetFor(db, gutsyEventId) {
       betType: swiftType(b.bet_type ?? b.derived?.type),
       legCount,
       bonus: !!b.is_bonus,
-      // The feed's own leg result first: `enrichment.result` is this app's
-      // settlement stamp and is absent on the overwhelming majority of rows
-      // (129 of 134 on the fixture this was built against).
-      result: b.derived?.legs_breakdown?.[0]?.result ?? b.enrichment?.result ?? null,
+      /*
+       * The feed's own leg result first: `enrichment.result` is this app's
+       * settlement stamp and is absent on the overwhelming majority of rows
+       * (129 of 134 on the fixture this was built against).
+       *
+       * Both are discarded when the stamp predates the event — see
+       * settledTooEarly — and the brand's own word is used instead, which for
+       * a game that has not been played is "Unresulted".
+       */
+      result: settledTooEarly(b)
+        ? text(b.bet_status) ?? null
+        : b.derived?.legs_breakdown?.[0]?.result ?? b.enrichment?.result ?? null,
       pl: b.pl,
       em: b.enrichment?.emPercent,
     });
