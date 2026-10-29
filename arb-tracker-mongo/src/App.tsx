@@ -85,23 +85,17 @@ function RailGroup({
 /**
  * Who is signed in, pinned to the very bottom of the rail.
  *
- * Users sits here rather than in the nav above because it is administration,
- * not part of the desk — and it only appears for the admins who can use it.
+ * Users used to sit here too, on the reasoning that it is administration
+ * rather than part of the desk. Then Settings was added and Users went into
+ * it, which is the same reasoning arriving at a better place — and nobody
+ * took this one out, so the rail carried two links to the same page a few
+ * inches apart. Settings keeps it; this is the signed-in footer only.
  */
 function SignedInAs() {
   const { user, signOut } = useAuth();
   if (!user) return null;
   return (
     <div className="shrink-0 border-t border-surface-border p-2">
-      {user.role === 'admin' && (
-        <Link
-          to="/users"
-          className="flex items-center gap-2 rounded-md px-2.5 py-2 text-[13px] text-slate-400 transition hover:bg-white/5 hover:text-slate-200"
-        >
-          <UsersIcon size={14} />
-          Users
-        </Link>
-      )}
       <div className="flex items-center gap-2 px-2.5 py-2">
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-[11px] font-semibold uppercase text-emerald-300">
           {user.username.slice(0, 1)}
