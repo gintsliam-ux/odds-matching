@@ -7,6 +7,7 @@ import type { SportEvent } from '../lib/types';
 import { useParam } from '../lib/urlState';
 import { BRAND_LABEL, brandBadge } from '../lib/brands';
 import { TeamLogo } from './TeamLogo';
+import { IdChip } from './IdChip';
 
 /**
  * The box score for one fixture, NBA and NFL only.
@@ -1016,6 +1017,13 @@ function StatBets({
                             <tr key={`${bet.id}:${i}`} className="border-t border-surface-border/40">
                               <td className="w-16 py-1 pl-8 pr-2">
                                 <span className={brandBadge(brand)}>{BRAND_LABEL[brand] ?? brand}</span>
+                              </td>
+                              {/* The bet id, because the next question after
+                                  "which bets" is always "that one — show me",
+                                  and the answer is a lookup in the backoffice.
+                                  IdChip copies it on click. */}
+                              <td className="w-24 px-2 py-1">
+                                <IdChip value={bet.id} title="Bet id" />
                               </td>
                               <td className="px-2 py-1 text-slate-400">
                                 {selection}

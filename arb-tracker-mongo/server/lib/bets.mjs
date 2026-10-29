@@ -1,7 +1,7 @@
 import { coll } from './mongo.mjs';
 import { COUNTER_ENTRY, SATELLITE_SKEW_MS, VOID_BET } from './betVocab.mjs';
 import { betsConfigured, betsDb } from './betsMongo.mjs';
-import { cachedBoard, eventById } from './queries.mjs';
+import { cachedBoard, eventById, mirrorFixtureDoc } from './queries.mjs';
 
 /**
  * Bets placed on one fixture, by brand.
@@ -79,6 +79,16 @@ export function betInstant(v) {
 
 /** Nothing before this is trusted — 2022 was anomalous and is ignored everywhere. */
 const BET_CUTOFF = new Date('2023-01-01T00:00:00.000Z');
+
+/*
+ * A guard against a runaway read, not a filter.
+ *
+ * The old 400 was doing the second job without saying so and silently dropped
+ * two thirds of a tip-off window. Now that the query asks for the fixture's
+ * own name, a game's satellites number in the dozens, so this only ever fires
+ * if something has gone wrong upstream.
+ */
+const SATELLITE_SCAN_CAP = 5000;
 
 /** Cap per brand — an event page is a summary, not an export. */
 const MAX_PER_BRAND = 300;
@@ -382,6 +392,57 @@ async function siblingEventIds(db, baseId, fixtureId) {
    *
    * The name check below is what makes the window safe at all, and stays.
    */
+  /*
+   * The fixture FIRST, because its team names narrow the query.
+   *
+   * This used to read the whole time slot and sift it in memory under a
+   * `.limit(400)`, which was not a cap on anything — mybet mints a satellite
+   * per market per game, so a busy NBA tip-off window holds 1,075 events in
+   * ±90 minutes. Bet 6784813 was on "Player to Make 2+ Assists - Oklahoma City
+   * Thunder vs Dallas Mavericks", event 3916804, sitting at position 758 of
+   * 1,075. It was never read, so the bet never reached the page, and nothing
+   * anywhere said a limit had been hit.
+   *
+   * Asking for the ones that NAME this fixture turns a thousand-row scan into
+   * a handful, and the limit stops being load-bearing. The name test below
+   * still decides; this only stops the database sending rows that cannot pass
+   * it.
+   */
+  /*
+   * The board first, the mirrored schedule second.
+   *
+   * All this needs is two team names, and `eventById` on the API path needs
+   * the entire board to supply them — so when the odds surface was rate
+   * limited, every mybet bet disappeared from every event page. A fixture's
+   * name does not depend on anybody quoting it, and the mirror has it.
+   */
+  const fixture =
+    (await eventById(fixtureId).catch(() => null)) ??
+    (await mirrorFixtureDoc(fixtureId).catch(() => null));
+  if (!fixture) return { ids: [baseId], satellites: new Set() };
+  const want = new Set(
+    matchName(
+      [
+        fixture.home?.name ?? fixture.home ?? fixture.home_team ?? '',
+        fixture.away?.name ?? fixture.away ?? fixture.away_team ?? '',
+        fixture.name ?? fixture.event_name ?? '',
+      ].join(' '),
+    )
+      .split(' ')
+      .filter((t) => t.length > 2),
+  );
+  if (!want.size) return { ids: [baseId], satellites: new Set() };
+
+  /*
+   * Longest words first: "mavericks" and "thunder" identify the game, "city"
+   * and "the" do not. Two is enough to find the satellites and short enough
+   * that an unusual spelling of one side cannot hide the pair.
+   */
+  const probe = [...want]
+    .sort((a, b) => b.length - a.length)
+    .slice(0, 2)
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
   const at = new Date(base.suspendAt).getTime();
   const slot = await db.collection('mybet_events')
     .find({
@@ -390,24 +451,16 @@ async function siblingEventIds(db, baseId, fixtureId) {
         $gte: new Date(at - SATELLITE_SKEW_MS),
         $lte: new Date(at + SATELLITE_SKEW_MS),
       },
+      ...(probe.length ? { description: { $regex: probe.join('|'), $options: 'i' } } : {}),
     })
     .project({ _id: 1, description: 1, league: 1 })
-    .limit(400)
+    .limit(SATELLITE_SCAN_CAP)
     .toArray()
     .catch(() => []);
   const satellites = slot.filter(
     (e) => Number(e._id) !== baseId && (!e.league || String(e.league).trim() === '-'),
   );
   if (!satellites.length) return { ids: [baseId], satellites: new Set() };
-
-  const fixture = await eventById(fixtureId).catch(() => null);
-  if (!fixture) return { ids: [baseId], satellites: new Set() };
-  const want = new Set(
-    matchName(`${fixture.home?.name ?? fixture.home ?? ''} ${fixture.away?.name ?? fixture.away ?? ''} ${fixture.name ?? ''}`)
-      .split(' ')
-      .filter((t) => t.length > 2),
-  );
-  if (!want.size) return { ids: [baseId], satellites: new Set() };
 
   const mine = satellites.filter((e) => {
     const got = matchName(e.description);

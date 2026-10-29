@@ -523,7 +523,15 @@ export async function searchEvents(query) {
  * rolling -3/+10 day window of `fixtures`. Null when neither has it, which is
  * the honest answer for anything older than the mirrored window.
  */
-async function mirrorFixtureDoc(fixtureId) {
+/**
+ * The mirrored schedule row for one fixture: teams and start, no odds.
+ *
+ * Exported because the bet lookup needs nothing more than two team names, and
+ * making that wait on `eventById` — which on the API path needs the whole
+ * board — meant a rate-limited odds surface took every mybet bet off the page
+ * with it. A fixture's own name does not depend on anybody quoting it.
+ */
+export async function mirrorFixtureDoc(fixtureId) {
   if (!fixtureId || (isApi && !mirrorConfigured)) return null;
   try {
     return await (await coll('fixtures')).findOne({ fixture_id: fixtureId });
