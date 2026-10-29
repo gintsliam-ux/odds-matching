@@ -478,9 +478,18 @@ const LANDED_TITLE: Record<Landed, string> = {
   pending: 'Not settled by the brand yet.',
 };
 
-/** Single, Multi or SGM, as the brand recorded it. */
+/**
+ * Single, SGM or Multi.
+ *
+ * The server decides this from the legs — same game or several — so this only
+ * tidies the label. See betShape in bets.mjs for why a flag was not enough.
+ */
 const betShape = (bet: Bet): string =>
-  bet.betType === 'SGM' ? 'SGM' : (bet.legCount ?? 0) > 1 || bet.betType === 'Multi' ? 'Multi' : 'Single';
+  bet.betType === 'SGM' || bet.betType === 'Multi' || bet.betType === 'Single'
+    ? bet.betType
+    : (bet.legCount ?? 0) > 1
+      ? 'Multi'
+      : 'Single';
 
 /** One block per stat: every player who recorded it, in order, by team. */
 function Leaders({

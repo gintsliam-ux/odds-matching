@@ -308,6 +308,36 @@ const MARKETY =
  * COMPETITION ("NBA - Portland Trail Blazers vs Los Angeles Lakers"), so it is
  * only called a market when it reads like one.
  */
+/**
+ * Single, SGM or Multi, decided by the LEGS rather than by a flag.
+ *
+ * The rule is what the bet contains: legs on one game is a Same Game Multi,
+ * legs across games is a multi, one leg is a single. 6772218 is three legs all
+ * on Portland v Lakers — an SGM. 6784963 is two legs on two different games —
+ * a multi.
+ *
+ * This read `transaction_multid > 0 ? 'Multi' : sgm_flag ? 'SGM' : 'Single'`,
+ * and every SGM also belongs to a multi ticket, so the first test always won
+ * and the second was unreachable. Every one of 2,556 legged tickets over three
+ * days came out "Multi"; 1,190 of them are SGMs.
+ *
+ * `sgm_flag` agrees with the legs on 2,554 of those 2,556, so it is a fine
+ * answer and is used where there are no legs to read — but where there are,
+ * the legs are the bet and the flag is a label on it.
+ */
+function betShape(row) {
+  const legs = Array.isArray(row?.legs) ? row.legs : [];
+  if (legs.length > 1) {
+    const games = new Set(legs.map((l) => matchName(l?.multileg_evetdescription)).filter(Boolean));
+    // No readable game names at all: fall back rather than call it a single.
+    if (!games.size) return row.sgm_flag ? 'SGM' : 'Multi';
+    return games.size > 1 ? 'Multi' : 'SGM';
+  }
+  if (legs.length === 1) return 'Single';
+  // No legs: the slip's own flags are all there is.
+  return row.transaction_multid > 0 ? 'Multi' : row.sgm_flag ? 'SGM' : 'Single';
+}
+
 function multiLegs(row) {
   if (!Array.isArray(row?.legs) || !row.legs.length) return null;
   const out = [];
@@ -633,7 +663,7 @@ async function multiBetsFor(db, eventId, fixtureId) {
       // page for this match — see src/lib/bookmakerUrl.ts.
       eventId: r.event_identifier != null ? String(r.event_identifier) : null,
       sport: r.sport_name ?? null,
-      betType: r.transaction_multid > 0 ? 'Multi' : r.sgm_flag ? 'SGM' : 'Single',
+      betType: betShape(r),
       legCount: Array.isArray(r.legs) && r.legs.length ? r.legs.length : null,
       // The legs themselves, so a multi can be read leg by leg — see multiLegs.
       legs: multiLegs(r),
