@@ -112,6 +112,42 @@ async function mappingFor(fixtureId) {
 }
 
 /**
+ * Swiftbet's own bet-type vocabulary, in the words the rest of the page uses.
+ *
+ * They arrive lowercase and from a different dictionary — `sport`, `multi`,
+ * `sgm`, `srm`, plus the racing exotics — and landed in the same column as
+ * mybet's `Single` / `Multi` / `SGM`. One fixture's Bets tab read
+ * "multi 60, sgm 3, sport 4" beside "Multi 19, SGM 6, Single 4": the same
+ * three ideas, spelled two ways, in one table.
+ *
+ * Where the concepts line up they take the shared word. Where they do not —
+ * a trifecta is not a single, and swiftbet's racing book is most of this
+ * collection — they keep their own name, properly cased. Anything unmapped
+ * passes through capitalised rather than being forced into a shape it is not.
+ */
+const SWIFT_TYPE = {
+  sport: 'Single',
+  multi: 'Multi',
+  sgm: 'SGM',
+  srm: 'SRM',
+  win: 'Win',
+  place: 'Place',
+  eachway: 'Each Way',
+  exacta: 'Exacta',
+  quinella: 'Quinella',
+  trifecta: 'Trifecta',
+  firstfour: 'First Four',
+  quaddie: 'Quaddie',
+  double: 'Double',
+};
+
+const swiftType = (v) => {
+  const raw = text(v);
+  if (!raw) return null;
+  return SWIFT_TYPE[raw.toLowerCase().replace(/[^a-z]/g, '')] ?? raw[0].toUpperCase() + raw.slice(1);
+};
+
+/**
  * Swiftbet legs are stored as a JSON *string*. Pull the selection text for the
  * leg that names this event, falling back to the first leg — a single's only
  * leg is the one we want, and for a multi it is the best label we have.
@@ -238,7 +274,7 @@ async function swiftbetFor(db, gutsyEventId) {
       price: b.odd,
       selection,
       market,
-      betType: b.bet_type ?? b.derived?.type ?? null,
+      betType: swiftType(b.bet_type ?? b.derived?.type),
       legCount,
       bonus: !!b.is_bonus,
       // The feed's own leg result first: `enrichment.result` is this app's
