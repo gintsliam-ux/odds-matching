@@ -317,15 +317,40 @@ function targetOf(
  * answer for all of them.
  */
 function byPlayer<
-  T extends { player: string; stat: { value: number } | null; target: Target; landed: Landed; bet: Bet },
+  T extends {
+    player: string;
+    team: string | null;
+    side: string | null;
+    brand: string;
+    stat: { value: number } | null;
+    target: Target;
+    landed: Landed;
+    bet: Bet;
+  },
 >(
   rows: T[],
-): { player: string; stat: T['stat']; target: Target; landed: Landed; stake: number; rows: T[] }[] {
+): {
+  player: string;
+  team: string | null;
+  side: string | null;
+  /** Usually one of each; a player can be backed at both brands and in both shapes. */
+  brands: string[];
+  shapes: string[];
+  stat: T['stat'];
+  target: Target;
+  landed: Landed;
+  stake: number;
+  rows: T[];
+}[] {
   const by = new Map<string, T[]>();
   for (const r of rows) by.set(r.player, [...(by.get(r.player) ?? []), r]);
   return [...by.entries()]
     .map(([player, list]) => ({
       player,
+      team: list.find((r) => r.team)?.team ?? null,
+      side: list.find((r) => r.side)?.side ?? null,
+      brands: [...new Set(list.map((r) => r.brand))],
+      shapes: [...new Set(list.map((r) => betShape(r.bet)))],
       stat: list.find((r) => r.stat)?.stat ?? null,
       // One player, one market, one line — the target is the same for all of
       // them, so the first that has an answer answers for the group.
@@ -572,12 +597,15 @@ function StatBets({
   fixtureId,
   teams,
   done,
+  event,
 }: {
   fixtureId: string;
   teams: PlayerStats['teams'];
   /** Whether the game has finished — see `landed`, which will not call a bet
    *  void until it has. */
   done: boolean;
+  /** For the crests; the box score names its teams in text only. */
+  event?: SportEvent;
 }) {
   const [bets, setBets] = useState<FixtureBets | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -617,6 +645,21 @@ function StatBets({
      * team, and the same surname can appear on both.
      */
     const players = teams.flatMap((t) => t.players).filter((p) => p.player);
+    /*
+     * Which team each man plays for, so the line can fly his crest.
+     *
+     * From the box score where there is one — it is already grouped by team —
+     * and from the selection's bracket where there is not: mybet writes
+     * "Puka Nacua (Los Angeles Rams)", and before the game that bracket is the
+     * only statement of the team anywhere on the row.
+     */
+    const sideOf = new Map<string, { team: string | null; side: string | null }>();
+    for (const t of teams) {
+      for (const pl of t.players) {
+        if (pl.player) sideOf.set(pl.player, { team: t.team, side: t.side });
+      }
+    }
+    const teamFromSelection = (sel: string) => sel.match(/\(([^)]+)\)\s*$/)?.[1]?.trim() ?? null;
     // Before the first tip there is no box score, so a bet cannot be matched to
     // a player in it. The market text still identifies a player market and the
     // selection still names the player, which is enough to list them.
@@ -630,6 +673,9 @@ function StatBets({
       price: number | null;
       /** Who the bet is on — the box score's spelling where there is one. */
       player: string;
+      team: string | null;
+      /** 'home' or 'away', so the crest can come off the event. */
+      side: string | null;
       /** What the box score says about the number this market asks for. */
       stat: { label: string; value: number } | null;
       /** Whether that number has reached the market's line — see Target. */
@@ -686,6 +732,8 @@ function StatBets({
               bet,
               market,
               player: match?.player.player ?? nameFromSelection(leg.selection),
+              team: match ? sideOf.get(match.player.player!)?.team ?? null : teamFromSelection(leg.selection),
+              side: match ? sideOf.get(match.player.player!)?.side ?? null : null,
               selection: leg.selection,
               price: leg.price,
               stat,
@@ -705,6 +753,8 @@ function StatBets({
           bet,
           market,
           player: match?.player.player ?? nameFromSelection(bet.selection ?? ''),
+          team: match ? sideOf.get(match.player.player!)?.team ?? null : teamFromSelection(bet.selection ?? ''),
+          side: match ? sideOf.get(match.player.player!)?.side ?? null : null,
           selection: bet.selection ?? '',
           price: bet.price,
           stat,
@@ -856,7 +906,37 @@ function StatBets({
                           open ? '' : '-rotate-90'
                         } text-slate-500`}
                       />
-                      <span className={`truncate text-sm ${hit ? 'font-semibold text-slate-50' : 'text-slate-300'}`}>
+
+                      {/*
+                        * Who took it, in what shape, and for whom — read left
+                        * to right before the name, because those three are
+                        * what you are scanning the column for. A player backed
+                        * at both brands or in both shapes shows both; it is
+                        * rare and a single badge would be a quiet lie.
+                        */}
+                      {p.brands.map((b) => (
+                        <span key={b} className={`${brandBadge(b)} shrink-0`}>
+                          {BRAND_LABEL[b] ?? b}
+                        </span>
+                      ))}
+                      {p.shapes.map((sh) => (
+                        <span
+                          key={sh}
+                          title={sh === 'Single' ? 'A single bet' : `A leg of a ${sh.toLowerCase()}`}
+                          className="shrink-0 rounded bg-white/5 px-1 py-0.5 text-[9px] uppercase tracking-wide text-slate-500"
+                        >
+                          {sh}
+                        </span>
+                      ))}
+                      <TeamLogo
+                        name={p.team ?? ''}
+                        size={16}
+                        logo={p.side === 'home' ? event?.homeLogo : p.side === 'away' ? event?.awayLogo : undefined}
+                      />
+                      <span
+                        title={p.team ?? undefined}
+                        className={`truncate text-sm ${hit ? 'font-semibold text-slate-50' : 'text-slate-300'}`}
+                      >
                         {p.player}
                       </span>
                       {p.stat && (
@@ -1114,7 +1194,7 @@ export function EventStatsPanel({
 
       {view === 'leaders' && (hasBox ? <Leaders teams={data.teams} fields={fields} event={event} /> : noBoxPanel)}
 
-      {view === 'bets' && <StatBets fixtureId={fixtureId} teams={data.teams ?? []} done={done} />}
+      {view === 'bets' && <StatBets fixtureId={fixtureId} teams={data.teams ?? []} done={done} event={event} />}
 
       {view === 'all' && !hasBox && noBoxPanel}
       {view === 'all' && data.teams.map((t) => (
