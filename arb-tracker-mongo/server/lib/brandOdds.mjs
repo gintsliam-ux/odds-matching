@@ -403,19 +403,38 @@ function mybetRows(ev, { home, away, sport }) {
    * was last seen a fortnight ago with every price zeroed, and produced
    * exactly that.
    */
+  /*
+   * The ladder for one field of the slip.
+   *
+   * `flucs` on the event record is keyed by exactly the fields these rows are
+   * built from — AWin and BWin for the head to head, OverDiv and UnderDiv for
+   * the total, ALineDiv and BLineDiv for the handicap — so each row can be
+   * handed its own history without matching anything up. 24,815 events carry
+   * one, and it is already on Atlas, which `price_ticks` is not.
+   *
+   * `num` drops the zeroes, which matters here more than anywhere: mybet does
+   * not suspend a market, it zeroes it, so every ladder ends in a 0 that would
+   * otherwise drag the sparkline to the floor at kickoff.
+   */
+  const ladder = (field) =>
+    (ev?.flucs?.[field] ?? [])
+      .map((f) => ({ p: num(f?.v), t: iso(f?.at) }))
+      .filter((f) => f.p != null && f.t)
+      .sort((a, b) => new Date(a.t) - new Date(b.t));
+
   const add = (o) => { if (o.price != null) out.push(row({ book: MYBET_BOOK, at, ...o })); };
 
-  if (sideA) add({ marketId: h2hId, selection: m.teamA, outcomeNo: sideA, price: num(m.AWin), open: num(open.AWin), line: null });
-  if (sideB) add({ marketId: h2hId, selection: m.teamB, outcomeNo: sideB, price: num(m.BWin), open: num(open.BWin), line: null });
-  if (threeWay) add({ marketId: h2hId, selection: 'Draw', outcomeNo: 3, price: draw, open: num(open.Draw), line: null });
+  if (sideA) add({ marketId: h2hId, selection: m.teamA, outcomeNo: sideA, price: num(m.AWin), open: num(open.AWin), line: null, flucs: ladder('AWin') });
+  if (sideB) add({ marketId: h2hId, selection: m.teamB, outcomeNo: sideB, price: num(m.BWin), open: num(open.BWin), line: null, flucs: ladder('BWin') });
+  if (threeWay) add({ marketId: h2hId, selection: 'Draw', outcomeNo: 3, price: draw, open: num(open.Draw), line: null, flucs: ladder('Draw') });
 
   // The match total. One line, two sides, no ambiguity.
   const over = num(m.OverDiv);
   const under = num(m.UnderDiv);
   const oLine = Number(m.TotalOver);
   const uLine = Number(m.TotalUnder);
-  if (over != null && Number.isFinite(oLine)) add({ marketId: 'total', selection: `Over ${oLine}`, outcomeNo: 1, line: oLine, price: over, open: num(open.OverDiv) });
-  if (under != null && Number.isFinite(uLine)) add({ marketId: 'total', selection: `Under ${uLine}`, outcomeNo: 2, line: uLine, price: under, open: num(open.UnderDiv) });
+  if (over != null && Number.isFinite(oLine)) add({ marketId: 'total', selection: `Over ${oLine}`, outcomeNo: 1, line: oLine, price: over, open: num(open.OverDiv), flucs: ladder('OverDiv') });
+  if (under != null && Number.isFinite(uLine)) add({ marketId: 'total', selection: `Under ${uLine}`, outcomeNo: 2, line: uLine, price: under, open: num(open.UnderDiv), flucs: ladder('UnderDiv') });
 
   /*
    * The handicap, ONLY when the two lines disagree in sign.
@@ -433,8 +452,8 @@ function mybetRows(ev, { home, away, sport }) {
   if (signsDisagree) {
     const aP = num(m.ALineDiv);
     const bP = num(m.BLineDiv);
-    if (sideA && aP != null) add({ marketId: 'spread', selection: `${m.teamA} ${aL > 0 ? '+' : ''}${aL}`, outcomeNo: sideA, line: aL, price: aP, open: num(open.ALineDiv) });
-    if (sideB && bP != null) add({ marketId: 'spread', selection: `${m.teamB} ${bL > 0 ? '+' : ''}${bL}`, outcomeNo: sideB, line: bL, price: bP, open: num(open.BLineDiv) });
+    if (sideA && aP != null) add({ marketId: 'spread', selection: `${m.teamA} ${aL > 0 ? '+' : ''}${aL}`, outcomeNo: sideA, line: aL, price: aP, open: num(open.ALineDiv), flucs: ladder('ALineDiv') });
+    if (sideB && bP != null) add({ marketId: 'spread', selection: `${m.teamB} ${bL > 0 ? '+' : ''}${bL}`, outcomeNo: sideB, line: bL, price: bP, open: num(open.BLineDiv), flucs: ladder('BLineDiv') });
   }
   return out;
 }
