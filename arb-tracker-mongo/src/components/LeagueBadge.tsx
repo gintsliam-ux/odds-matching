@@ -19,26 +19,52 @@ function colorFor(id: string): string {
   return PALETTE[Math.abs(hash) % PALETTE.length];
 }
 
+/**
+ * How much of the tile to give away as padding.
+ *
+ * A square tile suits a square crest and starves anything else. Measured
+ * across the league logos actually on the board, the aspect ratios run from
+ * 0.44 to 4.34 — the NBA's mark is 330x751, and at the old flat 14% it
+ * rendered 9.5px wide by 21.6 tall inside a 30px tile: 23% of the badge,
+ * beside an NHL crest filling 50%. It read as broken rather than tall.
+ *
+ * `object-contain` fits the long side, so for an extreme ratio the padding is
+ * subtracted from the dimension that was already the binding constraint. The
+ * squarer a logo is, the more it can afford; the further from square, the
+ * less it can. A 0.44 mark now fills the tile's full height.
+ */
+const padFor = (ratio: number | null, size: number): number => {
+  if (ratio == null) return size * 0.12;
+  const squareness = Math.min(ratio, 1 / ratio);   // 1 is square, 0.23 is the NBA
+  return size * (squareness > 0.8 ? 0.12 : squareness > 0.55 ? 0.07 : 0.02);
+};
+
 export function LeagueBadge({ league, size = 36 }: { league: League; size?: number }) {
   // Key the failure to the URL so a new league's badge isn't hidden by the
   // previous one's stale error when this instance is reused across events.
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  // Known only once the image has loaded, so the first paint uses the middle
+  // padding and settles rather than jumping from nothing.
+  const [ratio, setRatio] = useState<number | null>(null);
   const showImage = league.logoUrl && failedUrl !== league.logoUrl;
 
   if (showImage) {
-    // Every badge is the same square tile with the same padding, so logos of any
-    // aspect ratio (square crests, wide wordmarks, sparse icons) all render at a
-    // consistent size and stay aligned in the rail. The light chip both unifies
-    // the look and keeps dark wordmarks (ATP/WTA) legible on the dark rail.
+    // Every badge is the same square tile, so logos of any aspect ratio stay
+    // aligned in the rail. The light chip unifies the look and keeps dark
+    // wordmarks (ATP/WTA) legible on the dark rail.
     return (
       <span
         className="inline-grid shrink-0 place-items-center overflow-hidden rounded-lg bg-slate-100"
-        style={{ width: size, height: size, padding: size * 0.14 }}
+        style={{ width: size, height: size, padding: padFor(ratio, size) }}
       >
         <img
           src={league.logoUrl}
           alt={league.name}
           onError={() => setFailedUrl(league.logoUrl ?? null)}
+          onLoad={(e) => {
+            const { naturalWidth: w, naturalHeight: h } = e.currentTarget;
+            if (w && h) setRatio(w / h);
+          }}
           className="max-h-full max-w-full object-contain"
         />
       </span>
