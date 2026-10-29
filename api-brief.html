@@ -1,0 +1,441 @@
+<title>Fixtures Without Prices</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=JetBrains+Mono:wght@400;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+  :root {
+    --bg:        #f4f6f8;
+    --surface:   #ffffff;
+    --ink:       #151b24;
+    --muted:     #5b6673;
+    --faint:     #8b95a1;
+    --rule:      #dde2e8;
+    --rule-soft: #eaeef2;
+    --accent:    #1f5fa0;
+    --crit:      #a8291f;
+    --crit-bg:   #fbeceb;
+    --warn:      #825200;
+    --warn-bg:   #fbf2df;
+    --calm:      #1a6049;
+    --calm-bg:   #e6f3ee;
+
+    --fd: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+    --fb: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+    --fm: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:        #0c1016;
+      --surface:   #131920;
+      --ink:       #e4e9f0;
+      --muted:     #9aa5b3;
+      --faint:     #6c7784;
+      --rule:      #232c38;
+      --rule-soft: #1a212a;
+      --accent:    #7bb0ea;
+      --crit:      #ff8077;
+      --crit-bg:   #2a1715;
+      --warn:      #e7b94b;
+      --warn-bg:   #262013;
+      --calm:      #5ed6a4;
+      --calm-bg:   #10241d;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg:        #0c1016;
+    --surface:   #131920;
+    --ink:       #e4e9f0;
+    --muted:     #9aa5b3;
+    --faint:     #6c7784;
+    --rule:      #232c38;
+    --rule-soft: #1a212a;
+    --accent:    #7bb0ea;
+    --crit:      #ff8077;
+    --crit-bg:   #2a1715;
+    --warn:      #e7b94b;
+    --warn-bg:   #262013;
+    --calm:      #5ed6a4;
+    --calm-bg:   #10241d;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--fb);
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 50rem;
+    margin: 0 auto;
+    padding: 4rem 1.5rem 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3.5rem;
+  }
+
+  /* ---------------------------------------------------------- masthead */
+
+  .masthead { display: flex; flex-direction: column; gap: 1rem; }
+
+  .kicker {
+    font-family: var(--fm);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  h1 {
+    font-family: var(--fd);
+    font-weight: 700;
+    font-size: clamp(2.1rem, 5.5vw, 3rem);
+    line-height: 1.05;
+    letter-spacing: -0.025em;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    font-size: 1.15rem;
+    color: var(--muted);
+    margin: 0;
+    max-width: 38rem;
+  }
+
+  .scope {
+    font-family: var(--fm);
+    font-size: 0.78rem;
+    color: var(--faint);
+    border-top: 1px solid var(--rule);
+    padding-top: 0.9rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.5rem;
+  }
+
+  /* ------------------------------------------------------------ answer */
+
+  .answer {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-top: 3px solid var(--accent);
+    padding: 1.6rem 1.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+
+  .answer h2 {
+    font-family: var(--fd);
+    font-weight: 600;
+    font-size: 1.15rem;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+
+  .answer p { margin: 0; }
+
+  /* ----------------------------------------------------------- finding */
+
+  .findings { display: flex; flex-direction: column; gap: 0; }
+
+  .finding {
+    border-top: 1px solid var(--rule);
+    padding: 2.25rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .finding:last-child { border-bottom: 1px solid var(--rule); }
+
+  .fhead { display: flex; flex-direction: column; gap: 0.6rem; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+
+  .chip {
+    font-family: var(--fm);
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.25rem 0.55rem;
+    border-radius: 2px;
+  }
+  .chip.crit { background: var(--crit-bg); color: var(--crit); }
+  .chip.warn { background: var(--warn-bg); color: var(--warn); }
+  .chip.calm { background: var(--calm-bg); color: var(--calm); }
+  .chip.done { background: var(--calm-bg); color: var(--calm); }
+  .chip.scale {
+    background: transparent;
+    color: var(--faint);
+    border: 1px solid var(--rule);
+  }
+
+  .finding.resolved h3 { color: var(--muted); }
+  .finding h3 {
+    font-family: var(--fd);
+    font-weight: 600;
+    font-size: 1.4rem;
+    line-height: 1.2;
+    letter-spacing: -0.018em;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  .finding p { margin: 0; }
+  .finding p + p { margin-top: 0.4rem; }
+
+  /* -------------------------------------------------------------- data */
+
+  .data {
+    overflow-x: auto;
+    background: var(--surface);
+    border: 1px solid var(--rule-soft);
+    padding: 1rem 1.1rem;
+  }
+
+  table {
+    border-collapse: collapse;
+    font-family: var(--fm);
+    font-size: 0.78rem;
+    width: 100%;
+    white-space: nowrap;
+  }
+
+  th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.66rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--faint);
+    padding: 0 1.4rem 0.6rem 0;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  td {
+    padding: 0.42rem 1.4rem 0.42rem 0;
+    border-bottom: 1px solid var(--rule-soft);
+    color: var(--muted);
+  }
+
+  tr:last-child td { border-bottom: none; }
+
+  td.id { color: var(--ink); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; padding-right: 1.4rem; }
+  td.gone { color: var(--faint); text-decoration: line-through; text-decoration-thickness: 1px; }
+  td.kept { color: var(--ink); font-weight: 600; }
+
+  /* The arrow between a dropped name and the kept one carries the direction
+     of every fix in this brief, so it gets the accent rather than the rule. */
+  td.arrow { color: var(--accent); padding-right: 0.9rem; }
+
+  /* -------------------------------------------------------------- fix */
+
+  .fix {
+    border-left: 2px solid var(--accent);
+    padding: 0.1rem 0 0.1rem 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .fix .label {
+    font-family: var(--fm);
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  code {
+    font-family: var(--fm);
+    font-size: 0.86em;
+    background: var(--rule-soft);
+    padding: 0.08em 0.34em;
+    border-radius: 2px;
+  }
+
+  .fix code { background: transparent; padding: 0; color: var(--ink); font-weight: 600; }
+
+  /* ------------------------------------------------------------ footer */
+
+  .closing {
+    border-top: 1px solid var(--rule);
+    padding-top: 1.5rem;
+    color: var(--muted);
+    font-size: 0.95rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+  }
+
+  .closing h2 {
+    font-family: var(--fd);
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--ink);
+    margin: 0;
+  }
+
+  @media (max-width: 34rem) {
+    body { font-size: 16px; }
+    .wrap { padding: 2.5rem 1.1rem 4rem; gap: 2.5rem; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="kicker">odds-sp-api · shipped</div>
+    <h1>Fixtures Without Prices</h1>
+    <p class="standfirst">
+      <strong>Done.</strong> <code>action=list_fixtures</code> is live and the Odds Library runs
+      on it. The Mongo API that served the page from a laptop behind a throwaway tunnel has been
+      shut down — I stopped both processes and the site kept serving. Nothing of ours runs
+      anywhere now.
+    </p>
+    <div class="scope">
+      <span>9 Oct 2026</span>
+      <span>commit 1382104</span>
+      <span>odds-matching.vercel.app</span>
+    </div>
+  </header>
+
+  <section class="answer">
+    <h2>Verified on returned rows, not summary fields</h2>
+    <p>
+      Twice before this I said the swap would work, both times off a misread <code>fixtures</code>
+      count rather than the <code>data</code> array. Every case below is the length of what came back.
+    </p>
+    <div class="data">
+      <table>
+        <thead><tr><th>case</th><th class="num">rows</th><th>note</th></tr></thead>
+        <tbody>
+          <tr><td class="id">EPL October — future, unpriced</td><td class="num">20</td><td><code>league_resolved: ['soccer_england_premier_league']</code></td></tr>
+          <tr><td class="id">past unpriced MLS Next Pro, by id</td><td class="num">1</td><td>the fixture that returned nothing before</td></tr>
+          <tr><td class="id">league=nba</td><td class="num">95</td><td>only <code>basketball_nba</code> — no wnba bleed</td></tr>
+          <tr><td class="id">soccer month, paged</td><td class="num">5,000 + 4,207</td><td>the full 9,207; <code>has_more</code> honest</td></tr>
+          <tr><td class="id">settled event page</td><td class="num">254</td><td>price lines, per-book fairs, blends</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Then I killed the laptop API and its tunnel and re-rendered the live site: 254 price lines,
+      full event page, <code>:5180</code> returning <code>000</code>. That is the proof that
+      mattered.
+    </p>
+  </section>
+
+  <div class="findings">
+
+    <article class="finding">
+      <div class="fhead">
+        <div class="chips"><span class="chip warn">worth a doc edit</span></div>
+        <h3>The grouped buckets are already flat</h3>
+      </div>
+      <p>
+        <code>group=fixture</code> nests markets under the event, and I expected each entry to be a
+        market holding a <code>selections</code> array. It isn't — <code>h2h</code>,
+        <code>spreads</code> and <code>totals</code> are flat lists of <em>selection</em> rows
+        carrying <code>book_prices</code> and <code>book_fairs</code> directly, which is the
+        <code>odds_sp</code> shape the page already understood.
+      </p>
+      <p>
+        Good design; it just isn't written down. I shipped an unpacking loop for the nested shape
+        and the event page rendered <em>“0 price lines”</em> until I looked at an actual market
+        object. One line in the reference saves the next person that.
+      </p>
+    </article>
+
+    <article class="finding">
+      <div class="fhead">
+        <div class="chips">
+          <span class="chip warn">small, but it counts</span>
+          <span class="chip scale">1 fixture in 9,207</span>
+        </div>
+        <h3>A fixture can land on both sides of a page boundary</h3>
+      </div>
+      <p>
+        Paging a soccer month returned 5,000 then 4,207 rows — 9,207 — but only
+        <strong>9,206 distinct</strong> fixture_ids. One row appears on both pages, so the
+        <code>range()</code> boundary is not quite stable despite the <code>fixture_id</code>
+        tiebreak after <code>scheduled_start</code>.
+      </p>
+      <p>
+        Harmless for the page, which dedupes anyway. It would not be harmless for anything that
+        pages in order to count.
+      </p>
+    </article>
+
+    <article class="finding">
+      <div class="fhead">
+        <div class="chips"><span class="chip calm">housekeeping</span></div>
+        <h3>The reference still points at the retired Supabase project</h3>
+      </div>
+      <p>
+        Its base URL is <code>aucplqygawlpijzbfvjb.supabase.co/functions/v1/Odds-SP-API</code>,
+        which answers <code>000</code> on <code>/functions/v1/</code> and on
+        <code>/rest/v1/</code> — the project looks gone, which is what we wanted. Worth pointing
+        the doc at <code>sport.gutsysapi.com/odds-sp-api</code> so nobody integrates against a
+        dead host.
+      </p>
+    </article>
+
+    <article class="finding">
+      <div class="fhead">
+        <div class="chips"><span class="chip done">what the page depends on</span></div>
+        <h3>The contract, so it does not get broken by accident</h3>
+      </div>
+      <div class="data">
+        <table>
+          <thead><tr><th>what the page does</th><th>call</th></tr></thead>
+          <tbody>
+            <tr><td class="id">sidebar directory</td><td><code>action=list_leagues</code> (all sports, 134 KB)</td></tr>
+            <tr><td class="id">a month's fixtures and counts</td><td><code>action=list_fixtures</code> + <code>date_from/to</code>, paged</td></tr>
+            <tr><td class="id">one competition</td><td><code>action=list_fixtures&amp;league=&amp;league_exact=true</code></td></tr>
+            <tr><td class="id">event page</td><td><code>fixture_id=&amp;group=fixture</code></td></tr>
+            <tr><td class="id">search</td><td><code>action=list_fixtures&amp;team=</code></td></tr>
+            <tr><td class="id">competition badges</td><td>static <code>assets/competition-logos.json</code> — no endpoint exists</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        A month is fetched once and shared: the picker and the event list want the same rows, so
+        the counts come free rather than from a second pass. Soccer is two pages, every other sport
+        one.
+      </p>
+    </article>
+
+  </div>
+
+  <footer class="closing">
+    <h2>What this retired</h2>
+    <p>
+      A Node API on a laptop, a <code>cloudflared</code> tunnel whose hostname changed on every
+      restart, and the <code>vercel.json</code> rewrite that chased it. Nine repoints, eight
+      outages, each one invisible until somebody opened the page. <code>vercel.json</code> is
+      deleted too — every request is same-origin or straight to the API, and a stale rewrite is
+      exactly how a future merge would have broken it again.
+    </p>
+    <p>
+      Badges are the one thing with no endpoint behind it: 1,079 URLs snapshotted from
+      <code>entities</code>. They change rarely enough that a file beats a service, and re-running
+      the snapshot is one command if they drift.
+    </p>
+  </footer>
+
+</div>

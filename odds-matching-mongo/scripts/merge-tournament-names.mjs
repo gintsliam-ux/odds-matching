@@ -41,6 +41,8 @@ const WANT = {
   categories: argv.includes('--categories'),
   ids: argv.includes('--ids'),
   labels: argv.includes('--labels'),
+  convention: argv.includes('--convention'),
+  prefix: argv.includes('--prefix'),
 };
 if (!Object.values(WANT).some(Boolean)) {
   console.error('pick at least one pass: --names, --categories, --ids, --labels');
@@ -64,11 +66,114 @@ if (!Object.values(WANT).some(Boolean)) {
  * what ingest reads — fixing only the fixtures gets quietly undone, which is
  * how the Estonian categories came back. */
 const LABELS = {
+  /* Same shape as AFL. `aussierules_afl` is "AFL" with category "Australia" —
+     the competition in one field, the place in the other. SANFL and WAFL had
+     the place in both ("Australia - SANFL", category "Australia"), so the
+     sidebar read it twice.
+   *
+     This also retires the duplicate without an id merge: both SANFL ids land
+     on the same (category, tournament) and the page folds them into one entry,
+     the way the two boxing ids already do. */
+  aussierules_sanfl:           { tournament: 'SANFL', category: 'Australia' },
+  aussierules_australia_sanfl: { tournament: 'SANFL', category: 'Australia' },
+  aussierules_australia_wafl:  { tournament: 'WAFL',  category: 'Australia' },
+
   basketball_nbl1:       { tournament: 'NBL1' },
   basketball_wnbl1:      { tournament: 'WNBL1' },
   boxing_boxing:         { tournament: 'Boxing', category: 'International' },
   boxing_boxing_matches: { tournament: 'Boxing', category: 'International' },
 };
+
+/* The place belongs in `category`, not in both fields.
+ *
+ * 621 leagues name themselves "<category> - <competition>" while already
+ * carrying that category, so the sidebar prints the place twice: "Australia ·
+ * Australia - NRL". AFL never did this — it is "AFL" with category
+ * "Australia" — and that is the shape being applied here.
+ *
+ * Two things make this safe to run in bulk. Stripping only ever happens when
+ * the prefix is EXACTLY the row's own category, so a name that merely starts
+ * with a place ("England Hockey League" under category "England") is left
+ * alone. And a strip that would collide with a different competition already
+ * using the short name in the same category is skipped and reported, because
+ * the page groups on (category, tournament) and a collision would silently
+ * merge two real competitions into one sidebar entry. */
+async function passPrefix(d) {
+  const fixtures = d.collection('fixtures');
+  const leagues = d.collection('leagues');
+
+  const rows = await fixtures.aggregate([
+    { $match: { category: { $ne: null }, tournament: { $ne: null }, optic_league: { $ne: null } } },
+    { $group: { _id: { l: '$optic_league', t: '$tournament', c: '$category' }, n: { $sum: 1 } } },
+  ], { allowDiskUse: true }).toArray();
+
+  // when each league ran, so a name clash can be told from a handover
+  const spans = await fixtures.aggregate([
+    { $match: { optic_league: { $ne: null }, scheduled_start: { $ne: null } } },
+    { $group: { _id: '$optic_league', min: { $min: '$scheduled_start' }, max: { $max: '$scheduled_start' } } },
+  ], { allowDiskUse: true }).toArray();
+  const span = new Map(spans.map((x) => [x._id, { min: x.min, max: x.max }]));
+
+  // what (category, name) pairs already exist, so a strip cannot land on one
+  const taken = new Map();
+  for (const x of rows) {
+    const k = `${x._id.c}||${x._id.t}`;
+    if (!taken.has(k)) taken.set(k, new Set());
+    taken.get(k).add(x._id.l);
+  }
+
+  const todo = [], clash = [];
+  for (const x of rows) {
+    const { l: league, t: name, c: cat } = x._id;
+    const pre = `${cat} - `;
+    if (!name.startsWith(pre)) continue;
+    const short = name.slice(pre.length).trim();
+    if (!short) continue;
+    const owners = taken.get(`${cat}||${short}`);
+    const others = owners ? [...owners].filter((o) => o !== league) : [];
+    if (others.length) {
+      /* A collision with the OLD id of the same competition is not a
+         collision. Every one of these is a stranded pair mid-migration — the
+         dead id kept the short name, the live one took the prefixed form, so
+         `soccer_france_ligue_two` holds "Ligue 2" while `soccer_france_ligue_2`
+         holds "France - Ligue 2". Unifying them is the point: the page then
+         folds the two halves into one sidebar entry, which is what happened
+         with SANFL. Two competitions that genuinely ran at the same time are a
+         real clash and still skipped. */
+      const concurrent = others.filter((o) => {
+        const a = span.get(league), b = span.get(o);
+        return a && b && a.min <= b.max && b.min <= a.max;
+      });
+      if (concurrent.length) {
+        clash.push({ league, name, short, cat, n: x.n, with: concurrent });
+        continue;
+      }
+    }
+    todo.push({ league, name, short, cat, n: x.n });
+  }
+
+  todo.sort((a, b) => b.n - a.n);
+  console.log(`\n── prefix ──  ${todo.length} leagues whose name repeats their category${tag()}\n`);
+  for (const t of todo.slice(0, 20)) {
+    console.log(`   ${String(t.n).padStart(5)}  ${t.league.padEnd(38)} ${JSON.stringify(t.name)} → ${JSON.stringify(t.short)}`);
+  }
+  if (todo.length > 20) console.log(`   … and ${todo.length - 20} more`);
+
+  if (clash.length) {
+    console.log(`\n   skipped — the short name is already another competition in the same category (${clash.length}):`);
+    for (const c of clash) {
+      console.log(`     ${c.league}  ${JSON.stringify(c.name)} → ${JSON.stringify(c.short)}  held by ${c.with.join(', ')}`);
+    }
+  }
+
+  if (APPLY) {
+    for (const t of todo) {
+      await leagues.updateOne({ optic_league: t.league }, { $set: { tournament: t.short } });
+      await fixtures.updateMany({ optic_league: t.league, tournament: t.name }, { $set: { tournament: t.short } });
+    }
+  }
+  console.log(`\n${todo.reduce((a, b) => a + b.n, 0)} fixtures ${APPLY ? 'renamed' : 'would be renamed'}`);
+}
 
 async function passLabels(d) {
   const fixtures = d.collection('fixtures');
@@ -94,7 +199,14 @@ async function passLabels(d) {
     rows += wrong;
 
     if (APPLY) {
-      await leagues.updateOne({ optic_league: league }, { $set: want });
+      /* Upsert, not update: `aussierules_sanfl` has no directory row at all,
+         and leaving it without one is what let its name drift in the first
+         place. */
+      await leagues.updateOne(
+        { optic_league: league },
+        { $set: { ...want, optic_league: league, sport: league.split('_')[0] } },
+        { upsert: true },
+      );
       await fixtures.updateMany({ optic_league: league }, { $set: want });
     }
     console.log('');
@@ -295,6 +407,42 @@ const CATEGORY_OVERRIDES = {
   soccer_estonia_meistriliiga_women: 'Estonia',
 };
 
+/* Finding 5: `category` had drifted into holding the competition family where
+   a place already existed. The rule settled on is "a place where one exists,
+   the tour or body where one does not" — so ATP, WTA, PGA, UFC, CS2 and the
+   rest stay exactly as they are (41,270 fixtures in sports with no national
+   structure), and only these twelve move.
+ *
+ * The targets are not invented. Every one of these ids already files most of
+ * its own fixtures under the place below — `baseball_mlb` is 167 under "MLB"
+ * against 5,157 under "USA" — or its siblings do, which is how the
+ * confederations resolve to "International". */
+const CATEGORY_CONVENTION = {
+  MLB: 'USA', NHL: 'USA', WNBA: 'USA', NFL: 'USA', NBA: 'USA',
+  AFL: 'Australia',
+  UEFA: 'International', AFC: 'International', CAF: 'International',
+  CONCACAF: 'International', CONMEBOL: 'International', FIBA: 'International',
+};
+
+async function passConvention(d) {
+  const fixtures = d.collection('fixtures');
+  const leagues = d.collection('leagues');
+  console.log(`\n── convention ──  category: a place where one exists${tag()}\n`);
+  let moved = 0;
+  for (const [from, to] of Object.entries(CATEGORY_CONVENTION)) {
+    const ids = await fixtures.distinct('optic_league', { category: from });
+    if (!ids.length) continue;
+    const n = await fixtures.countDocuments({ category: from });
+    console.log(`   ${from.padEnd(10)} → ${to.padEnd(14)} ${String(n).padStart(4)} fixtures across ${ids.length} leagues`);
+    moved += n;
+    if (APPLY) {
+      await leagues.updateMany({ category: from }, { $set: { category: to } });
+      await fixtures.updateMany({ category: from }, { $set: { category: to } });
+    }
+  }
+  console.log(`\n${moved} fixtures ${APPLY ? 'recategorised' : 'would be recategorised'}`);
+}
+
 async function passCategories(d) {
   const groups = await d.collection('fixtures').aggregate([
     { $match: { optic_league: { $ne: null }, category: { $ne: null } } },
@@ -431,6 +579,8 @@ async function main() {
   if (WANT.categories) await passCategories(d);
   if (WANT.ids) await passIds(d);
   if (WANT.labels) await passLabels(d);
+  if (WANT.convention) await passConvention(d);
+  if (WANT.prefix) await passPrefix(d);
 }
 
 main()

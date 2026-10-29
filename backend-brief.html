@@ -1,0 +1,516 @@
+<title>Competition Name Drift</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=JetBrains+Mono:wght@400;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+  :root {
+    --bg:        #f4f6f8;
+    --surface:   #ffffff;
+    --ink:       #151b24;
+    --muted:     #5b6673;
+    --faint:     #8b95a1;
+    --rule:      #dde2e8;
+    --rule-soft: #eaeef2;
+    --accent:    #1f5fa0;
+    --crit:      #a8291f;
+    --crit-bg:   #fbeceb;
+    --warn:      #825200;
+    --warn-bg:   #fbf2df;
+    --calm:      #1a6049;
+    --calm-bg:   #e6f3ee;
+
+    --fd: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+    --fb: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+    --fm: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:        #0c1016;
+      --surface:   #131920;
+      --ink:       #e4e9f0;
+      --muted:     #9aa5b3;
+      --faint:     #6c7784;
+      --rule:      #232c38;
+      --rule-soft: #1a212a;
+      --accent:    #7bb0ea;
+      --crit:      #ff8077;
+      --crit-bg:   #2a1715;
+      --warn:      #e7b94b;
+      --warn-bg:   #262013;
+      --calm:      #5ed6a4;
+      --calm-bg:   #10241d;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg:        #0c1016;
+    --surface:   #131920;
+    --ink:       #e4e9f0;
+    --muted:     #9aa5b3;
+    --faint:     #6c7784;
+    --rule:      #232c38;
+    --rule-soft: #1a212a;
+    --accent:    #7bb0ea;
+    --crit:      #ff8077;
+    --crit-bg:   #2a1715;
+    --warn:      #e7b94b;
+    --warn-bg:   #262013;
+    --calm:      #5ed6a4;
+    --calm-bg:   #10241d;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--fb);
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 50rem;
+    margin: 0 auto;
+    padding: 4rem 1.5rem 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3.5rem;
+  }
+
+  /* ---------------------------------------------------------- masthead */
+
+  .masthead { display: flex; flex-direction: column; gap: 1rem; }
+
+  .kicker {
+    font-family: var(--fm);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  h1 {
+    font-family: var(--fd);
+    font-weight: 700;
+    font-size: clamp(2.1rem, 5.5vw, 3rem);
+    line-height: 1.05;
+    letter-spacing: -0.025em;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    font-size: 1.15rem;
+    color: var(--muted);
+    margin: 0;
+    max-width: 38rem;
+  }
+
+  .scope {
+    font-family: var(--fm);
+    font-size: 0.78rem;
+    color: var(--faint);
+    border-top: 1px solid var(--rule);
+    padding-top: 0.9rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.5rem;
+  }
+
+  /* ------------------------------------------------------------ answer */
+
+  .answer {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-top: 3px solid var(--accent);
+    padding: 1.6rem 1.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+
+  .answer h2 {
+    font-family: var(--fd);
+    font-weight: 600;
+    font-size: 1.15rem;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+
+  .answer p { margin: 0; }
+
+  /* ----------------------------------------------------------- finding */
+
+  .findings { display: flex; flex-direction: column; gap: 0; }
+
+  .finding {
+    border-top: 1px solid var(--rule);
+    padding: 2.25rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .finding:last-child { border-bottom: 1px solid var(--rule); }
+
+  .fhead { display: flex; flex-direction: column; gap: 0.6rem; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+
+  .chip {
+    font-family: var(--fm);
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.25rem 0.55rem;
+    border-radius: 2px;
+  }
+  .chip.crit { background: var(--crit-bg); color: var(--crit); }
+  .chip.warn { background: var(--warn-bg); color: var(--warn); }
+  .chip.calm { background: var(--calm-bg); color: var(--calm); }
+  .chip.done { background: var(--calm-bg); color: var(--calm); }
+  .chip.scale {
+    background: transparent;
+    color: var(--faint);
+    border: 1px solid var(--rule);
+  }
+
+  .finding.resolved h3 { color: var(--muted); }
+  .finding h3 {
+    font-family: var(--fd);
+    font-weight: 600;
+    font-size: 1.4rem;
+    line-height: 1.2;
+    letter-spacing: -0.018em;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  .finding p { margin: 0; }
+  .finding p + p { margin-top: 0.4rem; }
+
+  /* -------------------------------------------------------------- data */
+
+  .data {
+    overflow-x: auto;
+    background: var(--surface);
+    border: 1px solid var(--rule-soft);
+    padding: 1rem 1.1rem;
+  }
+
+  table {
+    border-collapse: collapse;
+    font-family: var(--fm);
+    font-size: 0.78rem;
+    width: 100%;
+    white-space: nowrap;
+  }
+
+  th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.66rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--faint);
+    padding: 0 1.4rem 0.6rem 0;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  td {
+    padding: 0.42rem 1.4rem 0.42rem 0;
+    border-bottom: 1px solid var(--rule-soft);
+    color: var(--muted);
+  }
+
+  tr:last-child td { border-bottom: none; }
+
+  td.id { color: var(--ink); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; padding-right: 1.4rem; }
+  td.gone { color: var(--faint); text-decoration: line-through; text-decoration-thickness: 1px; }
+  td.kept { color: var(--ink); font-weight: 600; }
+
+  /* The arrow between a dropped name and the kept one carries the direction
+     of every fix in this brief, so it gets the accent rather than the rule. */
+  td.arrow { color: var(--accent); padding-right: 0.9rem; }
+
+  /* -------------------------------------------------------------- fix */
+
+  .fix {
+    border-left: 2px solid var(--accent);
+    padding: 0.1rem 0 0.1rem 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .fix .label {
+    font-family: var(--fm);
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  code {
+    font-family: var(--fm);
+    font-size: 0.86em;
+    background: var(--rule-soft);
+    padding: 0.08em 0.34em;
+    border-radius: 2px;
+  }
+
+  .fix code { background: transparent; padding: 0; color: var(--ink); font-weight: 600; }
+
+  /* ------------------------------------------------------------ footer */
+
+  .closing {
+    border-top: 1px solid var(--rule);
+    padding-top: 1.5rem;
+    color: var(--muted);
+    font-size: 0.95rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+  }
+
+  .closing h2 {
+    font-family: var(--fd);
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--ink);
+    margin: 0;
+  }
+
+  @media (max-width: 34rem) {
+    body { font-size: 16px; }
+    .wrap { padding: 2.5rem 1.1rem 4rem; gap: 2.5rem; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="kicker">gutsys_sport · backend brief</div>
+    <h1>Competition Name Drift</h1>
+    <p class="standfirst">
+      <strong>Closed.</strong> All three ingest faults were fixed on 8 October and verified
+      independently: no document is keyed by anything but its fixture_id, every league in use has a
+      directory row, and no name has drifted since. What is left is historical residue and one
+      product question — nothing that regenerates.
+    </p>
+    <div class="scope">
+      <span>closed 8 Oct 2026</span>
+      <span>168,061 fixtures</span>
+      <span>851 league ids</span>
+      <span>audits: odds-matching-mongo/scripts/</span>
+    </div>
+  </header>
+
+  <section class="answer">
+    <h2>Verified after the fix</h2>
+    <div class="data">
+      <table>
+        <thead><tr><th>check</th><th class="num">before</th><th class="num">after</th></tr></thead>
+        <tbody>
+          <tr><td class="id">documents not keyed by fixture_id</td><td class="num">13,409</td><td class="num">0</td></tr>
+          <tr><td class="id">duplicated fixture_ids</td><td class="num">855</td><td class="num">0</td></tr>
+          <tr><td class="id">unique index on fixture_id</td><td class="num">no</td><td class="num">yes</td></tr>
+          <tr><td class="id">league ids with no directory row</td><td class="num">430</td><td class="num">0</td></tr>
+          <tr><td class="id">split tournament names</td><td class="num">53</td><td class="num">0</td></tr>
+          <tr><td class="id">names repeating their own category</td><td class="num">621</td><td class="num">0</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      The distinction that matters: these were the faults that <em>regenerated</em>. Name splits
+      came back within three hours of being cleared, twice. They have not moved since the ingest
+      changes landed, so the audit scripts stop being a cleanup you run after every batch and
+      become something you run occasionally to confirm nothing has slipped.
+    </p>
+  </section>
+
+  <div class="findings">
+
+    <article class="finding resolved">
+      <div class="fhead">
+        <div class="chips">
+          <span class="chip done">closed · 8 Oct</span>
+          <span class="chip scale">13,409 documents · ~95% of writes</span>
+        </div>
+        <h3>The fixture writer does not key on fixture_id</h3>
+      </div>
+      <p>
+        Fixtures are inserted without setting <code>_id</code> to the fixture_id and without
+        upserting on it, so a re-run writes a second document rather than updating the first. There
+        is no unique index to stop it. 855 ids had collided before today.
+      </p>
+      <div class="data">
+        <table>
+          <thead><tr><th>day</th><th class="num">ObjectId-keyed writes</th><th class="num">canonical writes</th></tr></thead>
+          <tbody>
+            <tr><td class="id">2026-10-08</td><td class="num">3,444</td><td class="num">520</td></tr>
+            <tr><td class="id">2026-10-07</td><td class="num">479</td><td class="num">18</td></tr>
+            <tr><td class="id">2026-10-04</td><td class="num">1,024</td><td class="num">35</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="fix">
+        <span class="label">The change, and a warning about the order</span>
+        <p>
+          Upsert on <code>fixture_id</code> and set <code>_id</code> to it. Then
+          <code>db.fixtures.createIndex({ fixture_id: 1 }, { unique: true })</code> — but
+          <strong>fix the writer first</strong>. With the index in place and the writer unchanged,
+          the duplicate insert throws <code>E11000</code> instead of duplicating, which turns silent
+          corruption into a stopped feed. The index also will not build until the 93 remaining
+          duplicates are resolved.
+        </p>
+      </div>
+    </article>
+
+    <article class="finding resolved">
+      <div class="fhead">
+        <div class="chips">
+          <span class="chip done">closed · 8 Oct</span>
+          <span class="chip scale">128 league ids · ~2–3 new a day</span>
+        </div>
+        <h3>A new league id arrives with no directory row to govern its name</h3>
+      </div>
+      <p>
+        Reading <code>category</code> and <code>tournament</code> from <code>leagues</code> fixed
+        this for the 723 ids that have a row. The other 128 have nothing governing them, so each new
+        league lands carrying whatever the payload calls it — which is where this morning's three
+        regressions came from.
+      </p>
+      <div class="data">
+        <table>
+          <thead><tr><th>league id</th><th>name written at 07:00</th><th>fault</th></tr></thead>
+          <tbody>
+            <tr><td class="id">soccer_myanmar_national_league</td><td class="gone">Myanmar - National League</td><td>split + prefix</td></tr>
+            <tr><td class="id">soccer_ethiopia_premier_league</td><td class="gone">Ethiopia - Premier League</td><td>prefix</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="fix">
+        <span class="label">The change</span>
+        <p>
+          Write the <code>leagues</code> row when an <code>optic_league</code> is first seen. That
+          also closes the <code>event_per_fixture</code> gaps — <code>golf_pga</code> and
+          <code>golf_liv</code> are buckets with no row, so nothing can declare them.
+        </p>
+      </div>
+    </article>
+
+    <article class="finding resolved">
+      <div class="fhead">
+        <div class="chips">
+          <span class="chip done">closed · 8 Oct</span>
+          <span class="chip scale">one batch = 26 splits, 15,499 fixtures</span>
+        </div>
+        <h3>An id migration moves optic_league but not tournament</h3>
+      </div>
+      <p>
+        Migrated fixtures carry their old tournament name onto the new id, so every batch recreates
+        the splits. The batch between 2 and 8 October produced 26 of them.
+      </p>
+      <div class="fix">
+        <span class="label">The change</span>
+        <p>
+          <code>{ $set: { optic_league: newId, tournament: leaguesRow.tournament } }</code> — one
+          extra field, and the follow-up pass stops being needed at all.
+        </p>
+      </div>
+    </article>
+
+    <article class="finding">
+      <div class="fhead">
+        <div class="chips">
+          <span class="chip warn">your call</span>
+          <span class="chip scale">4 decisions</span>
+        </div>
+        <h3>Data I will not delete without you saying so</h3>
+      </div>
+      <div class="data">
+        <table>
+          <thead><tr><th>what</th><th class="num">size</th><th>why it is held</th></tr></thead>
+          <tbody>
+            <tr><td class="id">orphaned odds_sp fixture_ids</td><td class="num">1,619</td><td>~190k price rows for fixtures that no longer exist; all optic-style, no syn_</td></tr>
+            <tr><td class="id">archive-vs-optic duplicate matches</td><td class="num">647</td><td>the 20 Aug backfill beside live rows; 760 of all duplicate groups are priced on both sides</td></tr>
+            <tr><td class="id">conflicting duplicate fixtures</td><td class="num">93</td><td>same updated_at to the millisecond, disagreeing on kick-off (44) or category (40) — no rule can pick</td></tr>
+            <tr><td class="id">stranded league-id pairs</td><td class="num">22 + 13</td><td>confirmed by shared teams, plus 13 where no competitor recurs; merging rewrites the FE's URL slug</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="fix">
+        <span class="label">What would unblock each</span>
+        <p>
+          For the orphans: confirm the fixtures are not coming back. For the archive twins: which
+          copy wins when both carry prices. For the 93: they need eyes, not a rule. For the stranded
+          pairs: whether breaking saved links is acceptable, and whether you want a redirect map.
+        </p>
+      </div>
+    </article>
+
+    <article class="finding resolved">
+      <div class="fhead">
+        <div class="chips">
+          <span class="chip done">closed</span>
+        </div>
+        <h3>Done, and holding</h3>
+      </div>
+      <div class="data">
+        <table>
+          <thead><tr><th>what</th><th class="num">scale</th></tr></thead>
+          <tbody>
+            <tr><td class="id">names repeating their own category</td><td class="num">621 → 6</td></tr>
+            <tr><td class="id">split tournament names</td><td class="num">53 → 1</td></tr>
+            <tr><td class="id">duplicate fixture documents</td><td class="num">855 → 93</td></tr>
+            <tr><td class="id">category holding a competition body</td><td class="num">742 → 0</td></tr>
+            <tr><td class="id">Estonian leagues filed under Finland</td><td class="num">183 → 0</td></tr>
+            <tr><td class="id">is_live true on a finished match</td><td class="num">9 → 0</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="fix">
+        <span class="label">One correction to the 1 Oct brief</span>
+        <p>
+          I reported <code>has_odds</code> as wrong on 16,820 fixtures and changed them. That was my
+          error: the flag means <em>currently open for betting</em>, not <em>has pregame odds on
+          file</em>, so a settled fixture with archived prices is correctly false. Something
+          recomputed it within hours and the count is back to normal. No action needed, and the flag
+          was never broken.
+        </p>
+      </div>
+    </article>
+
+  </div>
+
+  <footer class="closing">
+    <h2>The tooling, if you want to run it yourselves</h2>
+    <p>
+      All in <code>odds-matching-mongo/scripts/</code>, all read-only or dry-by-default:
+      <code>audit-integrity.mjs</code> (whole-DB sweep, <code>--json</code>),
+      <code>audit-stranded-ids.mjs</code> (<code>--csv</code>),
+      <code>audit-coverage.mjs</code> (missing months per league),
+      <code>dedupe-fixtures.mjs</code> (<code>--resolve --apply</code>), and
+      <code>merge-tournament-names.mjs</code> with six passes.
+    </p>
+    <p>
+      Two traps they encode, both of which produced confident false positives before being
+      filtered: national sides share their names across formats and genders, so team overlap reads
+      ~100% between a men's and a women's competition or a qualifier and its final; and a short
+      league id reduces to tokens that sit inside every similar one — <code>soccer_fa_cup</code>
+      matched Belgium's, Bangladesh's and Spain's cups alike.
+    </p>
+  </footer>
+
+</div>
