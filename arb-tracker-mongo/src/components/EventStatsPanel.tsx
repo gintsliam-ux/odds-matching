@@ -660,6 +660,36 @@ function StatBets({
       }
     }
     const teamFromSelection = (sel: string) => sel.match(/\(([^)]+)\)\s*$/)?.[1]?.trim() ?? null;
+
+    /*
+     * Which side a team name is, so the crest can come off the event.
+     *
+     * The event carries the real badges — homeLogo and awayLogo, present on
+     * every fixture on the board — and TeamLogo's own fallback is a local
+     * /logos/teams/<slug>.png that mostly is not there, so without this the
+     * line showed a grey circle of initials instead of a crest.
+     *
+     * The box score's `side` is used where there is one; before the game the
+     * only statement of the team is the selection's bracket, so that is
+     * matched against the fixture's own two names. Loose enough for "LA
+     * Galaxy" against "Los Angeles Galaxy" — every word of the shorter in the
+     * longer — and it only ever has two candidates to choose between.
+     */
+    const norm = (v: string) =>
+      v.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
+    const sideByName = (team: string | null): string | null => {
+      if (!team || !event?.home || !event?.away) return null;
+      const t = new Set(norm(team));
+      const fits = (other: string) => {
+        const o = new Set(norm(other));
+        const [small, big] = t.size <= o.size ? [t, o] : [o, t];
+        for (const w of small) if (!big.has(w)) return false;
+        return small.size > 0;
+      };
+      const h = fits(event.home);
+      const a = fits(event.away);
+      return h && !a ? 'home' : a && !h ? 'away' : null;
+    };
     // Before the first tip there is no box score, so a bet cannot be matched to
     // a player in it. The market text still identifies a player market and the
     // selection still names the player, which is enough to list them.
@@ -723,9 +753,15 @@ function StatBets({
             if (!leg.selection || !leg.market) continue;
             const market = leg.market;
             const match = namesPlayer({ ...bet, market, selection: leg.selection }, players);
-            // No box score yet: the market still says this is a player market,
-            // and the selection still says which player. See playerOf.
-            if (!match && !(noBox && fieldFor(market))) continue;
+            /*
+             * No box score yet: the market still says this is a player market
+             * and the selection still names the player — but nothing says the
+             * player is in THIS game. A multi attached to this fixture carries
+             * legs on five others, and with no box score to match against they
+             * were all being listed here. The selection's bracket is the team,
+             * so it has to be one of this fixture's two.
+             */
+            if (!match && !(noBox && fieldFor(market) && sideByName(teamFromSelection(leg.selection)))) continue;
             const stat = match ? statFor(market, match.player) : null;
             all.push({
               brand,
@@ -733,7 +769,9 @@ function StatBets({
               market,
               player: match?.player.player ?? nameFromSelection(leg.selection),
               team: match ? sideOf.get(match.player.player!)?.team ?? null : teamFromSelection(leg.selection),
-              side: match ? sideOf.get(match.player.player!)?.side ?? null : null,
+              side:
+                (match ? sideOf.get(match.player.player!)?.side : null) ??
+                sideByName(match ? sideOf.get(match.player.player!)?.team ?? null : teamFromSelection(leg.selection)),
               selection: leg.selection,
               price: leg.price,
               stat,
@@ -746,7 +784,7 @@ function StatBets({
         }
         const market = bet.market ?? bet.selection ?? 'Unknown market';
         const match = namesPlayer(bet, players);
-        if (!match && !(noBox && fieldFor(market))) continue;
+        if (!match && !(noBox && fieldFor(market) && sideByName(teamFromSelection(bet.selection ?? '')))) continue;
         const stat = match ? statFor(market, match.player) : null;
         all.push({
           brand,
@@ -754,7 +792,9 @@ function StatBets({
           market,
           player: match?.player.player ?? nameFromSelection(bet.selection ?? ''),
           team: match ? sideOf.get(match.player.player!)?.team ?? null : teamFromSelection(bet.selection ?? ''),
-          side: match ? sideOf.get(match.player.player!)?.side ?? null : null,
+          side:
+            (match ? sideOf.get(match.player.player!)?.side : null) ??
+            sideByName(match ? sideOf.get(match.player.player!)?.team ?? null : teamFromSelection(bet.selection ?? '')),
           selection: bet.selection ?? '',
           price: bet.price,
           stat,
@@ -831,7 +871,7 @@ function StatBets({
       into.stake += g.stake;
     }
     return families;
-  }, [bets, teams]);
+  }, [bets, teams, done, event]);
 
   if (state === 'loading') return <StatBetsSkeleton />;
   if (state === 'error') {
