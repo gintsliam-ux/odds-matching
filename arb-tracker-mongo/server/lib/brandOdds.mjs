@@ -104,7 +104,7 @@ function sideOfName(name, home, away) {
 }
 
 /** The grid's row shape. Only the fields buildMarkets actually reads. */
-function row({ book, marketId, selection, outcomeNo, line, price, open, at }) {
+function row({ book, marketId, selection, outcomeNo, line, price, open, at, flucs }) {
   return {
     market_id: marketId,
     market_name: null,
@@ -125,12 +125,24 @@ function row({ book, marketId, selection, outcomeNo, line, price, open, at }) {
     is_lay: false,
     current_price: price,
     open_price: open ?? null,
+    /*
+     * The ladder, where the brand keeps one.
+     *
+     * swiftbet records a `price_history` on every selection — `{odds, ts}`,
+     * median five points and up to a hundred and thirty — and it was being
+     * dropped on the floor: our rows carried a price and nothing behind it, so
+     * the grid's hover card had nothing to draw for the one book whose moves
+     * are ours. The shape the card wants is `{p, t}`, which is all this is.
+     *
+     * It travels with the rest of HISTORY_FIELDS, so the roles that are served
+     * the current price and no history keep getting exactly that.
+     */
+    flucs: flucs ?? [],
     status: null,
     current_at: iso(at),
     open_at: null,
     close_price: null,
     closed_at: null,
-    flucs: null,
   };
 }
 
@@ -252,6 +264,14 @@ function swiftRows(ev, { home, away, sport }) {
       const marketId = threeWayApplies(sport, hasDraw)
         ? (p.marketIds.find((id) => id.endsWith('_3way')) ?? p.marketIds[0])
         : p.marketIds[0];
+      /*
+       * Oldest first and only real prices. The card plots them in order and a
+       * zero would drag the axis to the floor.
+       */
+      const ladder = (s?.price_history ?? [])
+        .map((h) => ({ p: num(h?.odds), t: iso(h?.ts) }))
+        .filter((h) => h.p != null && h.t)
+        .sort((a, b) => new Date(a.t) - new Date(b.t));
       out.push(row({
         book: SWIFT_BOOK,
         marketId,
@@ -259,7 +279,10 @@ function swiftRows(ev, { home, away, sport }) {
         outcomeNo,
         line: p.line ?? null,
         price,
+        // The first price it was ever seen at, which is what "vs open" means.
+        open: ladder[0]?.p ?? null,
         at,
+        flucs: ladder,
       }));
     }
   }
