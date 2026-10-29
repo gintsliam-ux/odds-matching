@@ -99,6 +99,18 @@ const PLAN = [
    * take the stats away from exactly the game someone went looking for.
    */
   { name: 'player_stats', mode: 'watermark', field: 'updated_at' },
+  /*
+   * mybet's market book, from the `mybet` database rather than gutsys_sport.
+   *
+   * `mybet_events` gives one row per event with the headline prices on it;
+   * this is every market the brand opened. On one NBA fixture that is the
+   * difference between 6 rows on the grid and 392 — the alternate lines and
+   * totals, and the first-half and first-quarter markets, none of which the
+   * event record mentions.
+   *
+   * Watermarked on `updated_at`, and small: about four thousand documents.
+   */
+  { name: 'markets', db: 'mybet', mode: 'watermark', field: 'updated_at' },
   { name: 'competition_mapping', mode: 'replace' },
   { name: 'leagues', mode: 'replace' },
   { name: 'league_health', mode: 'replace' },
@@ -174,8 +186,14 @@ try {
 
   for (const spec of plan) {
     const t0 = Date.now();
-    const from = S.collection(spec.name);
-    const to = D.collection(spec.name);
+    /*
+     * A spec may name its own database. `mybet.markets` is the brand's market
+     * book and lives beside gutsys_sport rather than inside it, and Vercel
+     * cannot reach the NAS at all — so without mirroring it the deployed site
+     * sees three markets on a fixture where the brand opened a hundred.
+     */
+    const from = (spec.db ? S.client.db(spec.db) : S).collection(spec.name);
+    const to = (spec.db ? D.client.db(spec.db) : D).collection(spec.name);
     const total = await from.countDocuments();
 
     let filter = {};

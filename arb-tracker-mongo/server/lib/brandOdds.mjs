@@ -22,7 +22,7 @@
  * which renders a book only when a row carries a price for it.
  */
 import { coll, mirrorConfigured } from './mongo.mjs';
-import { betsConfigured, betsDb } from './betsMongo.mjs';
+import { betsConfigured, betsDb, mybetDb } from './betsMongo.mjs';
 import { parseBetMarket } from './ticker.mjs';
 
 export const SWIFT_BOOK = 'swiftbet';
@@ -448,6 +448,131 @@ function mybetRows(ev, { home, away, sport }) {
  * page. The mapping read needs `event_mapping`, which a deployed instance has
  * only through the mirror.
  */
+
+/* ------------------------------------------------- mybet's own market book */
+
+/**
+ * The markets mybet opened that the event record never mentions.
+ *
+ * `gutsy.mybet_events` carries one row per event with the headline prices on
+ * it — a head to head, a line, a total — and that is what this file has been
+ * reading. `mybet.markets` is the book proper: on one NBA fixture, 104 open
+ * markets against those three. The rest were simply invisible here.
+ *
+ * Joined on `generationwebEventId`, which holds the same id `event_mapping`
+ * already gives us for the fixture.
+ *
+ * Only the markets this grid has a column for. The brand's vocabulary runs to
+ * 88 types and most of them have nowhere to go — race-to, tribet, odd/even,
+ * line/total doubles, team totals — and inventing a column for each is a
+ * different job from showing the ones we can already draw.
+ */
+const MYBET_MARKET = {
+  'head-to-head': 'moneyline',
+  'win-draw-win': 'moneyline_3way',
+  'draw-no-bet': 'dnb',
+  'double-chance': 'double_chance',
+  'both-teams-score': 'btts',
+  'alt-line-home': 'spread',
+  'alt-line-away': 'spread',
+  'alt-total-over': 'total',
+  'alt-total-under': 'total',
+};
+
+/**
+ * The period a market belongs to, from `segment` rather than from its name.
+ *
+ * `segment` is structured — "regulation_time/half_2/quarter_4" — where the
+ * name is prose and inconsistent ("60 Minutes - Head to Head", "1st Period -
+ * ..."). Only the periods the grid defines a market for are returned; a 3rd
+ * quarter line has nowhere to be drawn, so it is skipped rather than
+ * flattened into the full-match column, which would be worse than absent.
+ */
+function periodPrefix(segment) {
+  const seg = String(segment ?? '').trim();
+  if (!seg || seg === 'regulation_time') return '';
+  if (/\/quarter_1$/.test(seg)) return '1q_';
+  if (/\/period_1$/.test(seg)) return '1p_';
+  if (/\/innings_1$/.test(seg)) return '1inn_';
+  if (/\/set_1$/.test(seg)) return '1s_';
+  if (/\/half_1$/.test(seg)) return '1h_';
+  return null;
+}
+
+/** The handicap or total a selection is at, where it carries one. */
+function lineOf(sel) {
+  // "total@203.5" on totals, "-25.50" on handicaps, and the name as a backstop.
+  const key = String(sel?.key ?? '');
+  const at = key.includes('@') ? key.split('@').pop() : key;
+  const fromKey = Number(at);
+  if (Number.isFinite(fromKey) && at !== '') return fromKey;
+  const m = String(sel?.name ?? '').match(/(-?\d+(?:\.\d+)?)\s*$/);
+  return m ? Number(m[1]) : null;
+}
+
+/** HOME/AWAY/DRAW and OVER/UNDER, in the grid's outcome numbering. */
+function outcomeOfRole(role, sel, home, away) {
+  const r = String(role ?? '');
+  if (r.endsWith('_HOME')) return 1;
+  if (r.endsWith('_AWAY')) return 2;
+  if (r.endsWith('_DRAW') || r.endsWith('_TIE')) return 3;
+  if (r.endsWith('_OVER')) return 1;
+  if (r.endsWith('_UNDER')) return 2;
+  // Alternate lines carry SELECTION_ROLE_GENERIC and say it in the name.
+  const n = String(sel?.name ?? '');
+  if (/^over\b/i.test(n)) return 1;
+  if (/^under\b/i.test(n)) return 2;
+  return sideOfName(n, home, away);
+}
+
+async function mybetMarketRows(eventId, { home, away, sport }) {
+  const db = await mybetDb();
+  if (!db || eventId == null) return [];
+  const docs = await db.collection('markets')
+    .find({ generationwebEventId: String(eventId) })
+    .project({ _id: 0, name: 1, market_type_code: 1, segment: 1, selections: 1, updated_at: 1 })
+    .limit(400)
+    .toArray()
+    .catch(() => []);
+
+  const out = [];
+  for (const d of docs) {
+    const base = MYBET_MARKET[d.market_type_code];
+    if (!base) continue;
+    const prefix = periodPrefix(d.segment);
+    if (prefix === null) continue;
+    /*
+     * A drawable sport's three-way IS its moneyline — see DRAW_IS_A_RESULT —
+     * so win-draw-win lands in the same column the two-way would.
+     */
+    const id =
+      base === 'moneyline_3way' && DRAW_IS_A_RESULT.has(sportKey(sport))
+        ? `${prefix}moneyline`
+        : `${prefix}${base}`;
+    const alt = d.market_type_code.startsWith('alt-');
+    for (const sel of d.selections ?? []) {
+      const fixed = sel?.products?.FixedWin ?? {};
+      const price = num(fixed.price);
+      if (price == null) continue;
+      const outcomeNo = outcomeOfRole(sel.role, sel, home, away);
+      if (outcomeNo == null) continue;
+      out.push(row({
+        book: MYBET_BOOK,
+        marketId: id,
+        selection: sel.name ?? null,
+        outcomeNo,
+        // Only the alternates state a line; the main ones do not carry it
+        // anywhere, which is why those keep coming from the event record.
+        line: alt ? lineOf(sel) : null,
+        price,
+        open: num(fixed.opening_price),
+        at: d.updated_at ?? null,
+      }));
+    }
+  }
+  return out;
+}
+
 export async function brandOddsFor(fixtureId, { home, away, sport } = {}) {
   if (!fixtureId || !betsConfigured) return [];
   try {
@@ -462,14 +587,29 @@ export async function brandOddsFor(fixtureId, { home, away, sport } = {}) {
     const db = await betsDb();
     if (!db) return [];
 
-    const [swiftEv, mybetEv] = await Promise.all([
+    const [swiftEv, mybetEv, book] = await Promise.all([
       swiftId ? db.collection('events').findOne({ _id: String(swiftId) }).catch(() => null) : null,
       mybetId ? db.collection('mybet_events').findOne({ _id: Number(mybetId) }).catch(() => null) : null,
+      mybetId ? mybetMarketRows(mybetId, { home, away, sport }).catch(() => []) : [],
     ]);
+
+    const fromEvent = mybetEv ? mybetRows(mybetEv, { home, away, sport }) : [];
+    /*
+     * The event record wins where both describe the same thing.
+     *
+     * It is the one with the main line on it — the market book states a
+     * handicap only on its ALTERNATES, so a main spread or total read from
+     * there would arrive with no line and land in the wrong place. So the
+     * event record keeps the markets it covers and the book supplies the ones
+     * it does not: the alternates, and the halves and quarters.
+     */
+    const covered = new Set(fromEvent.map((r) => `${r.market_id}|${r.outcome_no}|${r.line ?? ''}`));
+    const extra = book.filter((r) => !covered.has(`${r.market_id}|${r.outcome_no}|${r.line ?? ''}`));
 
     return [
       ...(swiftEv ? swiftRows(swiftEv, { home, away, sport }) : []),
-      ...(mybetEv ? mybetRows(mybetEv, { home, away, sport }) : []),
+      ...fromEvent,
+      ...extra,
     ];
   } catch {
     return [];

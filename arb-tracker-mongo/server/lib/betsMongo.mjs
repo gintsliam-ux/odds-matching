@@ -17,6 +17,23 @@ const client = betsConfigured
 
 let connecting = null;
 
+/**
+ * The brand's OWN market book, which is a different database on the same box.
+ *
+ * `gutsy.mybet_events` carries one record per event with the headline prices
+ * on it. `mybet.markets` is the market book proper — every market the brand
+ * opened, its selections, and the price on each — and on a single NBA fixture
+ * that is 104 open markets against the three we derive from the event record.
+ *
+ * Same client, so it costs no second connection.
+ */
+export async function mybetDb() {
+  if (!client) return null;
+  if (!connecting) connecting = client.connect();
+  await connecting;
+  return client.db('mybet');
+}
+
 export async function betsDb() {
   if (!client) return null;
   if (!connecting) connecting = client.connect();
