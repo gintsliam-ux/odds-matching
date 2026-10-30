@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <circle cx="50" cy="50" r="48" fill="#1a1a2e" stroke="#fff" stroke-width="2"/>
+  <!-- Star ball pattern -->
+  <g fill="none" stroke="#fff" stroke-width="1.5">
+    <!-- Central star -->
+    <polygon points="50,18 55,38 75,38 59,48 64,68 50,56 36,68 41,48 25,38 45,38" fill="#fff"/>
+    <!-- Outer stars -->
+    <polygon points="50,5 52,11 58,11 53,15 55,21 50,17 45,21 47,15 42,11 48,11" fill="#fff" transform="translate(-30,10) scale(0.6)"/>
+    <polygon points="50,5 52,11 58,11 53,15 55,21 50,17 45,21 47,15 42,11 48,11" fill="#fff" transform="translate(30,10) scale(0.6)"/>
+    <polygon points="50,5 52,11 58,11 53,15 55,21 50,17 45,21 47,15 42,11 48,11" fill="#fff" transform="translate(-20,45) scale(0.6)"/>
+    <polygon points="50,5 52,11 58,11 53,15 55,21 50,17 45,21 47,15 42,11 48,11" fill="#fff" transform="translate(20,45) scale(0.6)"/>
+  </g>
+  <!-- Ring -->
+  <circle cx="50" cy="50" r="42" fill="none" stroke="#4a9eff" stroke-width="2" opacity="0.6"/>
+</svg>

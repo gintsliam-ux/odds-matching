@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <circle cx="50" cy="50" r="48" fill="#37003c" stroke="#fff" stroke-width="2"/>
+  <!-- Lion silhouette simplified -->
+  <g fill="#fff">
+    <!-- Head -->
+    <circle cx="50" cy="30" r="12"/>
+    <!-- Mane -->
+    <ellipse cx="50" cy="28" rx="16" ry="14"/>
+    <!-- Body -->
+    <ellipse cx="50" cy="52" rx="14" ry="18"/>
+    <!-- Front legs -->
+    <rect x="38" y="62" width="5" height="18" rx="2"/>
+    <rect x="57" y="62" width="5" height="18" rx="2"/>
+    <!-- Tail -->
+    <path d="M64,45 Q78,30 72,50" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <!-- Crown -->
+    <polygon points="42,18 46,12 50,17 54,12 58,18" fill="#fbbf24"/>
+  </g>
+</svg>

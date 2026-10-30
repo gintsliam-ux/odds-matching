@@ -31,3 +31,14 @@ Thumbs.db
 logs/launchd-*.log
 **/logs/launchd-*.log
 live-fixtures/logs-*.log
+node_modules/
+/*.csv
+/INTEGRITY_AUDIT.json
+/ODDS_AUDIT.json
+/_shot.png
+/arb-tracker/
+/next-to-go/
+/racing-flucs/
+/polytracker-mongo/
+/margin-dashboard/
+/optic-coverage-pipeline/

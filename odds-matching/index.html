@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Odds Matching</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <style>
+    body { background: #030712; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    .pulse-dot { animation: pulse 2s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .tab-active { background: linear-gradient(to right, #2563eb, #3b82f6); color: white; }
+    .sport-active { background: #111827; border-color: #3b82f6; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #111827; }
+    ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+    @keyframes flash { 0% { box-shadow: 0 0 0 2px rgba(59,130,246,0); } 30% { box-shadow: 0 0 0 2px rgba(59,130,246,0.9); } 100% { box-shadow: 0 0 0 2px rgba(59,130,246,0); } }
+    .flash-highlight { animation: flash 1.6s ease-out; }
+    .event-anchor-link { color: inherit; text-decoration: none; }
+    .event-anchor-link:hover { color: #60a5fa; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div id="app" class="max-w-7xl mx-auto px-4 py-6">
+    <!-- Sport switcher -->
+    <nav id="sport-nav" class="flex flex-wrap gap-2 mb-5"></nav>
+
+    <!-- Header -->
+    <div class="flex items-center gap-3 mb-6">
+      <img id="sport-icon" src="nfl.png" alt="" class="w-10 h-10 object-contain" />
+      <h1 id="sport-title" class="text-2xl font-bold text-white">Odds Matching</h1>
+      <span id="event-count" class="text-xs text-slate-400 ml-2"></span>
+    </div>
+
+    <!-- Tabs + month picker -->
+    <div class="flex items-center gap-2 mb-6 flex-wrap">
+      <a href="#" id="tab-live" class="px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 pulse-dot"></span>
+        Live <span id="count-live" class="text-slate-400 text-xs"></span>
+      </a>
+      <a href="#" id="tab-upcoming" class="px-4 py-2 rounded-lg text-sm font-medium transition-all">
+        Upcoming <span id="count-upcoming" class="text-slate-400 text-xs"></span>
+      </a>
+      <a href="#" id="tab-resulted" class="px-4 py-2 rounded-lg text-sm font-medium transition-all">
+        Resulted <span id="count-resulted" class="text-slate-400 text-xs"></span>
+      </a>
+      <div id="month-wrap" class="ml-auto hidden">
+        <label class="text-[11px] uppercase tracking-wider text-slate-500 mr-2">Month</label>
+        <select id="month-picker" class="bg-gray-900 border border-gray-700 text-slate-200 text-sm rounded-md px-2 py-1.5 focus:outline-none focus:border-blue-500"></select>
+      </div>
+    </div>
+
+    <!-- Events container -->
+    <div id="loading" class="text-center py-20 text-slate-400">Loading events...</div>
+    <div id="events" class="space-y-4 hidden"></div>
+    <div id="empty" class="text-center py-20 text-slate-400 hidden">
+      <p class="text-lg font-medium">No events found</p>
+      <p class="text-sm text-slate-500 mt-1" id="empty-msg"></p>
+    </div>
+  </div>
+
+  <script>
+    const SUPABASE_URL = 'https://ugvwiyhdyqekahizwuhg.supabase.co';
+    const SUPABASE_KEY = 'SUPABASE_KEY_REMOVED_PROJECT_DELETED';
+    const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    // Sport config — each sport assumes `<slug>_events` and `<slug>_odds_matching` tables.
+    // If a sport's tables don't exist yet, the page will just show "No events".
+    const SPORTS = [
+      { slug: 'nfl', label: 'NFL', icon: 'nfl.png' },
+      { slug: 'nba', label: 'NBA', icon: 'nba.png' },
+      { slug: 'nhl', label: 'NHL', icon: 'nhl.png' },
+      { slug: 'mlb', label: 'MLB', icon: 'mlb.png' },
+      { slug: 'epl', label: 'EPL', icon: 'epl.png' },
+      { slug: 'ucl', label: 'UCL', icon: 'ucl.png' },
+    ];
+    const SPORT_SLUGS = SPORTS.map(s => s.slug);
+    const VALID_TABS = ['live', 'upcoming', 'resulted'];
+    const DEFAULT_SPORT = 'nfl';
+
+    // Friendly market labels. Keys are canonical (h2h, spread, total, 1h_h2h, ...).
+    const MARKET_NAMES = {
+      h2h: 'Match Winner',
+      spread: 'Handicap',
+      total: 'Total',
+      '1h_h2h': '1st Half Winner',
+      '1h_spread': '1st Half Handicap',
+      '1h_total': '1st Half Total',
+      '1q_h2h': '1st Quarter Winner',
+      '1q_spread': '1st Quarter Handicap',
+      '1q_total': '1st Quarter Total',
+      '1inn_h2h': '1st Inning Winner',
+      '1inn_total': '1st Inning Total',
+      dnb: 'Draw No Bet',
+      btts: 'Both Teams To Score',
+      double_chance: 'Double Chance',
+      '1s_h2h': '1st Set Winner',
+      set_spread: 'Set Handicap',
+      game_spread: 'Game Handicap',
+      total_sets: 'Total Sets',
+      total_games: 'Total Games',
+      '1s_game_spread': '1st Set Game Handicap',
+      '1s_total_games': '1st Set Total Games',
+    };
+    // Aliases for the plural / legacy keys currently in `*_odds_matching.sports_market_type`.
+    const MARKET_ALIASES = {
+      moneyline: 'h2h',
+      spreads: 'spread',
+      totals: 'total',
+    };
+
+    function marketKey(raw) {
+      if (!raw) return null;
+      const k = String(raw).toLowerCase().trim();
+      return MARKET_ALIASES[k] || k;
+    }
+    function marketLabel(raw) {
+      const k = marketKey(raw);
+      if (!k) return 'Other';
+      if (MARKET_NAMES[k]) return MARKET_NAMES[k];
+      // Last-resort prettifier: snake_case → Title Case
+      return k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    // Fixture identity: prefer optic_fixture_id once it lands, else fall back to slug.
+    function fixtureKey(ev)      { return ev.optic_fixture_id ?? ev.slug; }
+    function oddsFixtureKey(o)   { return o.optic_fixture_id ?? o.event_slug; }
+
+    // Event name: prefer constructed home/away (or player/team/fighter), else title, else slug.
+    function eventTitle(ev) {
+      const home = ev.home_team ?? ev.team1 ?? ev.player1 ?? ev.fighter1;
+      const away = ev.away_team ?? ev.team2 ?? ev.player2 ?? ev.fighter2;
+      if (home && away) return `${home} vs ${away}`;
+      return ev.title || ev.slug || 'Untitled';
+    }
+
+    // Per-sport cache: { [sportSlug]: { events: [], oddsMap: {} } }
+    const cache = {};
+
+    // Route state
+    let currentSport = DEFAULT_SPORT;
+    let activeTab = 'live';
+    let selectedMonth = null;   // 'YYYY-MM' for resulted, else null
+    let focusedSlug = null;     // event slug if hash is #<sport>/event/<slug>
+
+    // -------- helpers --------
+    async function fetchAll(table, select) {
+      let rows = [];
+      let from = 0;
+      const PAGE = 1000;
+      while (true) {
+        const { data, error } = await sb.from(table).select(select).range(from, from + PAGE - 1);
+        if (error) { console.error(`[${table}]`, error); break; }
+        rows = rows.concat(data || []);
+        if (!data || data.length < PAGE) break;
+        from += PAGE;
+      }
+      return rows;
+    }
+
+    function getStatus(ev) {
+      if (ev.ended) return 'resulted';
+      if (ev.live) return 'live';
+      return 'upcoming';
+    }
+
+    function monthKey(d) {
+      if (!d) return null;
+      const dt = new Date(d);
+      if (isNaN(dt.getTime())) return null;
+      return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}`;
+    }
+
+    function monthLabel(key) {
+      if (!key) return '';
+      const [y, m] = key.split('-').map(Number);
+      const dt = new Date(Date.UTC(y, m - 1, 1));
+      return dt.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+    }
+
+    function fmtOdds(val)  { return val == null ? '-' : val.toFixed(2); }
+    function fmtPct(val)   { return val == null ? '-' : (val * 100).toFixed(1) + '%'; }
+    function fmtDate(d) {
+      if (!d) return '';
+      const dt = new Date(d);
+      return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    }
+    function edgeColor(fair) {
+      if (fair == null) return 'text-slate-400';
+      if (fair > 0) return 'text-emerald-400';
+      if (fair < 0) return 'text-red-400';
+      return 'text-slate-400';
+    }
+
+    // -------- hash routing --------
+    // Routes:
+    //   #<sport>                          → default tab
+    //   #<sport>/<tab>                    → tab
+    //   #<sport>/event/<slug>             → event deep link (auto-picks tab)
+    //   #<sport>/resulted/<YYYY-MM>       → resulted tab filtered to month
+    function parseHash() {
+      const raw = (location.hash || '').replace(/^#/, '');
+      if (!raw) return { sport: null, tab: null, eventSlug: null, month: null };
+      const parts = raw.split('/').filter(Boolean);
+      let sport = null, tab = null, eventSlug = null, month = null;
+
+      if (parts.length && SPORT_SLUGS.includes(parts[0])) {
+        sport = parts.shift();
+      }
+      if (parts[0] === 'event' && parts[1]) {
+        eventSlug = decodeURIComponent(parts.slice(1).join('/'));
+      } else if (parts[0] && VALID_TABS.includes(parts[0])) {
+        tab = parts.shift();
+        if (tab === 'resulted' && parts[0] && /^\d{4}-\d{2}$/.test(parts[0])) {
+          month = parts[0];
+        }
+      }
+      return { sport, tab, eventSlug, month };
+    }
+
+    function buildHash({ sport, tab, eventSlug, month }) {
+      const s = sport || currentSport;
+      if (eventSlug) return `#${s}/event/${encodeURIComponent(eventSlug)}`;
+      if (tab === 'resulted' && month) return `#${s}/resulted/${month}`;
+      return `#${s}/${tab || activeTab}`;
+    }
+
+    function setHash(state, { replace = false } = {}) {
+      const next = buildHash(state);
+      if (location.hash === next) return;
+      if (replace) history.replaceState(null, '', next);
+      else location.hash = next;  // pushes a history entry
+    }
+
+    // -------- data loading per sport --------
+    async function loadSport(sport) {
+      if (cache[sport]) return cache[sport];
+      const [events, odds] = await Promise.all([
+        fetchAll(`${sport}_events`, '*'),
+        fetchAll(`${sport}_odds_matching`, '*'),
+      ]);
+      const tagged = events.map(e => ({
+        ...e,
+        _status: getStatus(e),
+        _month: monthKey(e.start_time_utc ?? e.commence_time),
+        _key: fixtureKey(e),
+      }));
+      const oddsMap = {};
+      for (const o of odds) {
+        const k = oddsFixtureKey(o);
+        if (k == null) continue;
+        (oddsMap[k] ||= []).push(o);
+      }
+      cache[sport] = { events: tagged, oddsMap };
+      return cache[sport];
+    }
+
+    function currentData() {
+      return cache[currentSport] || { events: [], oddsMap: {} };
+    }
+
+    function defaultTab() {
+      const events = currentData().events;
+      const has = (t) => events.some(e => e._status === t);
+      if (has('live')) return 'live';
+      if (has('upcoming')) return 'upcoming';
+      return 'resulted';
+    }
+
+    function defaultMonth() {
+      const months = monthsForResulted();
+      return months[0] || null; // most recent
+    }
+
+    function monthsForResulted() {
+      const set = new Set();
+      for (const e of currentData().events) {
+        if (e._status === 'resulted' && e._month) set.add(e._month);
+      }
+      return Array.from(set).sort().reverse();
+    }
+
+    // -------- rendering --------
+    function renderSportNav() {
+      const nav = document.getElementById('sport-nav');
+      nav.innerHTML = SPORTS.map(s => {
+        const active = s.slug === currentSport;
+        return `
+          <a href="#${s.slug}" data-sport="${s.slug}" class="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm transition-all ${active ? 'sport-active text-white' : 'border-gray-800 text-slate-400 hover:text-white hover:border-gray-600'}">
+            <img src="${s.icon}" alt="" class="w-5 h-5 object-contain" />
+            <span>${s.label}</span>
+          </a>
+        `;
+      }).join('');
+    }
+
+    function renderHeader() {
+      const sport = SPORTS.find(s => s.slug === currentSport) || SPORTS[0];
+      document.getElementById('sport-icon').src = sport.icon;
+      document.getElementById('sport-icon').alt = sport.label;
+      document.getElementById('sport-title').textContent = `${sport.label} Odds Matching`;
+    }
+
+    function renderMonthPicker() {
+      const wrap = document.getElementById('month-wrap');
+      const picker = document.getElementById('month-picker');
+      if (activeTab !== 'resulted') {
+        wrap.classList.add('hidden');
+        return;
+      }
+      const months = monthsForResulted();
+      if (months.length === 0) {
+        wrap.classList.add('hidden');
+        return;
+      }
+      wrap.classList.remove('hidden');
+      picker.innerHTML = months.map(m => `<option value="${m}" ${m === selectedMonth ? 'selected' : ''}>${monthLabel(m)}</option>`).join('');
+    }
+
+    function renderTabs() {
+      ['live', 'upcoming', 'resulted'].forEach(t => {
+        const el = document.getElementById('tab-' + t);
+        // Tab link points to default URL for that tab in current sport.
+        // For resulted, link to most recent month so refresh restores it.
+        let href;
+        if (t === 'resulted') {
+          const m = defaultMonth();
+          href = m ? `#${currentSport}/resulted/${m}` : `#${currentSport}/resulted`;
+        } else {
+          href = `#${currentSport}/${t}`;
+        }
+        el.href = href;
+        if (t === activeTab) {
+          el.className = 'px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 tab-active shadow-lg';
+        } else {
+          el.className = 'px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 bg-gray-800 text-slate-400 hover:bg-gray-700 hover:text-white';
+        }
+      });
+    }
+
+    function filteredEvents() {
+      const all = currentData().events;
+      let list = all.filter(e => e._status === activeTab);
+      if (activeTab === 'resulted' && selectedMonth) {
+        list = list.filter(e => e._month === selectedMonth);
+      }
+      list.sort((a, b) => {
+        const tA = a.start_time_utc ? new Date(a.start_time_utc).getTime() : 0;
+        const tB = b.start_time_utc ? new Date(b.start_time_utc).getTime() : 0;
+        // Always chronological — first game to last. For resulted (filtered to a
+        // month, e.g. Soccer → World Cup) this lists the month's opener first
+        // through to the final, rather than newest-first.
+        return tA - tB;
+      });
+      return list;
+    }
+
+    function renderEvents() {
+      renderSportNav();
+      renderHeader();
+      renderTabs();
+      renderMonthPicker();
+
+      const all = currentData().events;
+      const counts = { live: 0, upcoming: 0, resulted: 0 };
+      all.forEach(e => counts[e._status]++);
+      document.getElementById('count-live').textContent = counts.live || '';
+      document.getElementById('count-upcoming').textContent = counts.upcoming || '';
+      document.getElementById('count-resulted').textContent = counts.resulted || '';
+
+      const list = filteredEvents();
+      document.getElementById('event-count').textContent = list.length + ' events';
+
+      const container = document.getElementById('events');
+      const loading = document.getElementById('loading');
+      const empty = document.getElementById('empty');
+      loading.classList.add('hidden');
+
+      if (list.length === 0) {
+        container.classList.add('hidden');
+        empty.classList.remove('hidden');
+        const monthSuffix = (activeTab === 'resulted' && selectedMonth) ? ` for ${monthLabel(selectedMonth)}` : '';
+        document.getElementById('empty-msg').textContent = `No ${activeTab} ${currentSport.toUpperCase()} events${monthSuffix}`;
+        return;
+      }
+
+      empty.classList.add('hidden');
+      container.classList.remove('hidden');
+      container.innerHTML = list.map(ev => renderEventCard(ev)).join('');
+    }
+
+    // Stable display order: known canonical markets first, then anything else alphabetically.
+    const MARKET_ORDER = [
+      'h2h', 'spread', 'total',
+      'dnb', 'double_chance', 'btts',
+      '1h_h2h', '1h_spread', '1h_total',
+      '1q_h2h', '1q_spread', '1q_total',
+      '1inn_h2h', '1inn_total',
+      '1s_h2h', 'set_spread', 'game_spread', 'total_sets', 'total_games',
+      '1s_game_spread', '1s_total_games',
+    ];
+    function marketSortIndex(k) {
+      const i = MARKET_ORDER.indexOf(k);
+      return i === -1 ? MARKET_ORDER.length : i;
+    }
+
+    function renderEventCard(ev) {
+      const odds = currentData().oddsMap[ev._key] || [];
+      const title = eventTitle(ev);
+      const score = ev.score || '';
+      const statusBadge = ev._status === 'live'
+        ? `<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot"></span>Live${ev.period ? ' · ' + ev.period : ''}
+           </span>`
+        : ev._status === 'upcoming'
+        ? `<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-blue-500/20 text-blue-400 border border-blue-500/30">Upcoming</span>`
+        : `<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-gray-700/50 text-slate-400 border border-gray-600/30">Resulted</span>`;
+
+      const dateStr = fmtDate(ev.start_time_utc ?? ev.commence_time);
+
+      // Group odds dynamically by canonical market key.
+      const byMarket = new Map();
+      for (const o of odds) {
+        const k = marketKey(o.sports_market_type) || 'other';
+        if (!byMarket.has(k)) byMarket.set(k, []);
+        byMarket.get(k).push(o);
+      }
+      const allGroups = Array.from(byMarket.entries())
+        .map(([k, rows]) => ({ key: k, label: marketLabel(k), rows }))
+        .sort((a, b) => marketSortIndex(a.key) - marketSortIndex(b.key) || a.label.localeCompare(b.label));
+
+      const totalTrades = odds.reduce((s, o) => s + (o.oc1_trades || 0) + (o.oc2_trades || 0), 0);
+      const slugAttr = encodeURIComponent(ev._key);
+
+      return `
+        <div id="event-${slugAttr}" class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+          <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between flex-wrap gap-2">
+            <div class="flex items-center gap-3 min-w-0">
+              ${statusBadge}
+              <h2 class="text-sm font-semibold text-white truncate">
+                <a href="#${currentSport}/event/${slugAttr}" class="event-anchor-link" title="Link to this event">${title}</a>
+              </h2>
+              ${score ? `<span class="text-xs font-mono text-yellow-400 font-bold">${score}</span>` : ''}
+            </div>
+            <div class="flex items-center gap-3 text-[11px] text-slate-500">
+              ${dateStr ? `<span>${dateStr}</span>` : ''}
+              ${totalTrades > 0 ? `<span class="text-blue-400">${totalTrades.toLocaleString()} trades</span>` : ''}
+            </div>
+          </div>
+
+          ${allGroups.map(g => renderOddsGroup(g.label, g.rows)).join('')}
+
+          ${allGroups.length === 0 ? '<div class="px-4 py-4 text-xs text-slate-500 text-center">No odds data</div>' : ''}
+        </div>
+      `;
+    }
+
+    function renderOddsGroup(label, rows) {
+      return `
+        <div class="px-4 py-3">
+          <div class="text-[10px] uppercase tracking-wider text-slate-500 font-medium mb-2">${label}</div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-xs table-fixed">
+              <thead>
+                <tr class="text-slate-500 border-b border-gray-800">
+                  <th class="w-[20%] pb-1.5 text-left font-medium">Outcome</th>
+                  <th class="w-[8%] pb-1.5 text-right font-medium">Trades</th>
+                  <th class="w-[12%] pb-1.5 text-right font-medium">Pinnacle</th>
+                  <th class="w-[12%] pb-1.5 text-right font-medium">Pinn Fair</th>
+                  <th class="w-[12%] pb-1.5 text-right font-medium">FanDuel</th>
+                  <th class="w-[12%] pb-1.5 text-right font-medium">FD Fair</th>
+                  <th class="w-[12%] pb-1.5 text-right font-medium">Fanatics</th>
+                  <th class="w-[12%] pb-1.5 text-right font-medium">Fan Fair</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows.map(r => renderOddsRows(r)).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderOddsRows(r) {
+      return `
+        <tr class="border-b border-gray-800/50">
+          <td class="py-1.5 text-slate-300 font-medium truncate">${r.oc1_name || '-'}</td>
+          <td class="py-1.5 text-right ${(r.oc1_trades || 0) > 0 ? 'text-blue-400' : 'text-slate-600'}">${(r.oc1_trades || 0) > 0 ? r.oc1_trades.toLocaleString() : '-'}</td>
+          <td class="py-1.5 text-right text-slate-300">${fmtOdds(r.oc1_pinn_odds)}</td>
+          <td class="py-1.5 text-right ${edgeColor(r.oc1_pinn_fair)}">${fmtPct(r.oc1_pinn_fair)}</td>
+          <td class="py-1.5 text-right text-slate-300">${fmtOdds(r.oc1_fanduel_odds)}</td>
+          <td class="py-1.5 text-right ${edgeColor(r.oc1_fanduel_fair)}">${fmtPct(r.oc1_fanduel_fair)}</td>
+          <td class="py-1.5 text-right text-slate-300">${fmtOdds(r.oc1_fanatics_odds)}</td>
+          <td class="py-1.5 text-right ${edgeColor(r.oc1_fanatics_fair)}">${fmtPct(r.oc1_fanatics_fair)}</td>
+        </tr>
+        <tr class="border-b border-gray-800/30">
+          <td class="py-1.5 text-slate-300 font-medium truncate">${r.oc2_name || '-'}</td>
+          <td class="py-1.5 text-right ${(r.oc2_trades || 0) > 0 ? 'text-blue-400' : 'text-slate-600'}">${(r.oc2_trades || 0) > 0 ? r.oc2_trades.toLocaleString() : '-'}</td>
+          <td class="py-1.5 text-right text-slate-300">${fmtOdds(r.oc2_pinn_odds)}</td>
+          <td class="py-1.5 text-right ${edgeColor(r.oc2_pinn_fair)}">${fmtPct(r.oc2_pinn_fair)}</td>
+          <td class="py-1.5 text-right text-slate-300">${fmtOdds(r.oc2_fanduel_odds)}</td>
+          <td class="py-1.5 text-right ${edgeColor(r.oc2_fanduel_fair)}">${fmtPct(r.oc2_fanduel_fair)}</td>
+          <td class="py-1.5 text-right text-slate-300">${fmtOdds(r.oc2_fanatics_odds)}</td>
+          <td class="py-1.5 text-right ${edgeColor(r.oc2_fanatics_fair)}">${fmtPct(r.oc2_fanatics_fair)}</td>
+        </tr>
+      `;
+    }
+
+    function updateTitle() {
+      const sport = SPORTS.find(s => s.slug === currentSport) || { label: currentSport.toUpperCase() };
+      const base = `${sport.label} Odds Matching`;
+      if (focusedSlug) {
+        const ev = currentData().events.find(e => String(e._key) === focusedSlug);
+        if (ev) { document.title = `${eventTitle(ev)} · ${base}`; return; }
+      }
+      const tabLabel = activeTab.charAt(0).toUpperCase() + activeTab.slice(1);
+      const monthSuffix = (activeTab === 'resulted' && selectedMonth) ? ` ${monthLabel(selectedMonth)}` : '';
+      document.title = `${tabLabel}${monthSuffix} · ${base}`;
+    }
+
+    // -------- route application --------
+    let initialLoad = true;
+
+    async function applyRouteFromHash({ scroll = true } = {}) {
+      const { sport, tab, eventSlug, month } = parseHash();
+
+      const nextSport = sport && SPORT_SLUGS.includes(sport) ? sport : DEFAULT_SPORT;
+      const sportChanged = nextSport !== currentSport || !cache[nextSport];
+      currentSport = nextSport;
+
+      if (sportChanged) {
+        // Show loading while we fetch this sport
+        document.getElementById('loading').classList.remove('hidden');
+        document.getElementById('events').classList.add('hidden');
+        document.getElementById('empty').classList.add('hidden');
+        renderSportNav();
+        renderHeader();
+        await loadSport(currentSport);
+      }
+
+      // Resolve event deep-link (matches optic_fixture_id or slug, via _key).
+      focusedSlug = null;
+      if (eventSlug) {
+        const ev = currentData().events.find(e => String(e._key) === eventSlug);
+        if (ev) {
+          activeTab = ev._status;
+          focusedSlug = eventSlug;
+          selectedMonth = (ev._status === 'resulted') ? ev._month : null;
+        } else {
+          activeTab = defaultTab();
+          selectedMonth = (activeTab === 'resulted') ? defaultMonth() : null;
+        }
+      } else if (tab) {
+        activeTab = tab;
+        if (activeTab === 'resulted') {
+          selectedMonth = month || defaultMonth();
+        } else {
+          selectedMonth = null;
+        }
+      } else {
+        activeTab = defaultTab();
+        selectedMonth = (activeTab === 'resulted') ? defaultMonth() : null;
+      }
+
+      // If the URL was bare or partial, canonicalize it so refresh works.
+      const canonical = buildHash({ sport: currentSport, tab: activeTab, eventSlug: focusedSlug, month: selectedMonth });
+      if (location.hash !== canonical) {
+        history.replaceState(null, '', canonical);
+      }
+
+      renderEvents();
+      updateTitle();
+
+      if (scroll && focusedSlug) {
+        requestAnimationFrame(() => {
+          const el = document.getElementById('event-' + encodeURIComponent(focusedSlug));
+          if (el) {
+            el.scrollIntoView({ behavior: initialLoad ? 'auto' : 'smooth', block: 'start' });
+            el.classList.remove('flash-highlight');
+            void el.offsetWidth;
+            el.classList.add('flash-highlight');
+          }
+        });
+      }
+      initialLoad = false;
+    }
+
+    window.addEventListener('hashchange', () => applyRouteFromHash());
+
+    document.getElementById('month-picker').addEventListener('change', (e) => {
+      const m = e.target.value;
+      setHash({ sport: currentSport, tab: 'resulted', month: m });
+    });
+
+    applyRouteFromHash();
+  </script>
+</body>
+</html>
