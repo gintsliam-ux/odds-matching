@@ -350,9 +350,31 @@ async function swiftbetFor(db, gutsyEventId) {
  *
  * Moved here from ticker.mjs, where it was declared and never used, to settle
  * the one question `marketFromSlip` has to answer.
+ *
+ * The list was written for basketball and soccer and had no word for the
+ * gridiron or AFL stat markets. Bet 6842697 is seven legs on Eagles v
+ * Commanders — "Receiving Yards 20+", "Rushing Yards 20+", "Passing Yards
+ * 200+" — and every one of them read as a competition, so the leg had no
+ * market and the stats tab, which skips a market-less leg as a head-to-head,
+ * showed none of them. Over 60 days of SGM legs the words below were missing
+ * from 3,902 "Disposals N+" legs, 1,681 yardage legs and 56 "Race to N";
+ * every other rejected segment really was a competition.
+ *
+ * "Tri-Bet" with a hyphen was also rejected: `tri ?bet` allows a space only.
  */
 const MARKETY =
-  /\b(quarter|half|period|inning|set|game|total|over|under|handicap|line|spread|margin|score|winner|result|tri ?bet|double|alternate|player|points|goals|runs|first|last|anytime|odd|even|btts|draw)\b/i;
+  /\b(quarter|half|period|inning|set|game|total|over|under|handicap|line|spread|margin|score|winner|result|tri[ -]?bet|double|alternate|player|points|goals|runs|first|last|anytime|odd|even|btts|draw|yards|disposals|touchdowns?|tries|try|tackles|receptions|assists|rebounds|threes|race to|exact)\b/i;
+
+/**
+ * Does this leading segment read as a market?
+ *
+ * The vocabulary above, OR a stated threshold: "Disposals 20+", "Receiving
+ * Yards 20+", "Player to Score 15+ Points" all carry an "N+", and no
+ * competition does — none of the ~2,350 distinct competition segments seen on
+ * legs over 14 days — so the threshold alone is proof, whatever the stat is
+ * called.
+ */
+const readsAsMarket = (s) => MARKETY.test(s) || /\d+\s*\+/.test(s);
 
 /**
  * The market a slip names, from its own event string.
@@ -432,7 +454,7 @@ function multiLegs(row) {
     const parts = String(leg?.multileg_evetdescription ?? '').split(' - ');
     const lead = parts.length > 1 ? parts.slice(0, -1).join(' - ').trim() : '';
     out.push({
-      market: lead && MARKETY.test(lead) ? lead : null,
+      market: lead && readsAsMarket(lead) ? lead : null,
       selection: leg?.multileg_outcome ?? null,
       price: Number.isFinite(Number(leg?.multileg_dividend)) ? Number(leg.multileg_dividend) : null,
       sport: leg?.multileg_sport ?? null,
@@ -448,7 +470,7 @@ function marketFromSlip(row, satellites) {
   const market = parts.join(' - ').trim();
   if (!market) return null;
   const known = satellites?.has(Number(row.event_identifier));
-  return known || MARKETY.test(market) ? market : null;
+  return known || readsAsMarket(market) ? market : null;
 }
 
 /** The match a slip names: the last " - " segment of its event string. */
