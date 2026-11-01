@@ -510,10 +510,12 @@ export default function App() {
   // it's always in-flow and this flag is inert (md: styles override it).
   const [railOpen, setRailOpen] = useState(false);
   /*
-   * One group open at a time. Tools by default — it holds the tabs used daily,
-   * where Settings holds the two you open to change something.
+   * One group open at a time, and neither open to begin with: the rail's job
+   * on load is the event list, and an open group pushed it up for links that
+   * are reached a few times a shift. Tools held the tabs used daily and used
+   * to start open for that reason; a click is cheaper than the space.
    */
-  const [openGroup, setOpenGroup] = useState<'tools' | 'settings' | null>('tools');
+  const [openGroup, setOpenGroup] = useState<'tools' | 'settings' | null>(null);
   const toggleGroup = (g: 'tools' | 'settings') =>
     setOpenGroup((cur) => (cur === g ? null : g));
 
