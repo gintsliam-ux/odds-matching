@@ -1,4 +1,4 @@
-import { Children, useCallback, useEffect, useMemo, useState } from 'react';
+import { Children, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, AlertTriangle, ChevronDown, Clock, Hourglass, Link2, LogOut, Radio, Settings, TrendingDown, Users as UsersIcon, Wrench } from 'lucide-react';
 import { Link, Outlet, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import { Header } from './components/Header';
@@ -185,48 +185,19 @@ function matchesQuery(e: SportEvent, q: string): boolean {
   );
 }
 
-// Filters survive a page refresh via localStorage. `dateTouched` distinguishes
-// "still on the auto-today default" (rolls forward to today on a new day) from
-// a date the user actually picked or cleared (restored exactly).
-// Namespaced to this app: every Vite dev server shares the `localhost:5173`
-// origin, so an unqualified key is read and written by whichever project last
-// ran on that port — which is how a stale date from a sibling app ends up
-// deciding what this board opens on.
-const FILTERS_KEY = 'sports-odds-desk.filters.v1';
-/** The key this app used before it was renamed; read once, then retired. */
-const LEGACY_FILTERS_KEY = 'arb-tracker-mongo.filters.v1';
-interface StoredFilters {
-  sport: string[];
-  league: string[];
-  date: string;
-  dateTouched: boolean;
-}
-
-let cachedFilters: StoredFilters | null = null;
-function initialFilters(): StoredFilters {
-  if (cachedFilters) return cachedFilters;
-  const today = localDay(Date.now());
-  const fallback: StoredFilters = { sport: [], league: [], date: today, dateTouched: false };
-  try {
-    // Fall back to the pre-rename key so a rename doesn't silently reset
-    // whatever filters someone had set.
-    const raw = localStorage.getItem(FILTERS_KEY) ?? localStorage.getItem(LEGACY_FILTERS_KEY);
-    if (raw) {
-      const s = JSON.parse(raw) as Partial<StoredFilters>;
-      cachedFilters = {
-        sport: Array.isArray(s.sport) ? s.sport : [],
-        league: Array.isArray(s.league) ? s.league : [],
-        date: s.dateTouched ? (s.date ?? '') : today,
-        dateTouched: !!s.dateTouched,
-      };
-      return cachedFilters;
-    }
-  } catch {
-    // corrupt/unavailable storage — fall through to defaults
-  }
-  cachedFilters = fallback;
-  return fallback;
-}
+/*
+ * The rail opens on today with nothing filtered, every time.
+ *
+ * Filters used to survive a refresh via localStorage, which is how a board
+ * opened on Tuesday to Monday's date and last week's two sports — and, since
+ * every Vite dev server shares the localhost:5173 origin, the stored date could
+ * even be a sibling app's. A reload is now a reset: today, every sport, every
+ * league. The ticker page is untouched by this; its filters live in its URL
+ * (lib/urlState.ts), so what is in the address bar is what comes back.
+ *
+ * The keys the old behaviour wrote, cleared once so nothing stale lingers.
+ */
+const RETIRED_FILTER_KEYS = ['sports-odds-desk.filters.v1', 'arb-tracker-mongo.filters.v1'];
 
 /**
  * An error a person can read, where what we have is an error a server wrote.
@@ -375,25 +346,38 @@ export default function App() {
     };
   }, [caps.pulse]);
 
-  // --- filters (restored from localStorage so they survive a refresh) ---
-  const [sportSel, setSportSel] = useState<string[]>(() => initialFilters().sport);
-  const [leagueSel, setLeagueSel] = useState<string[]>(() => initialFilters().league);
+  // --- filters (fresh on every load; see RETIRED_FILTER_KEYS) ---
+  const [sportSel, setSportSel] = useState<string[]>([]);
+  const [leagueSel, setLeagueSel] = useState<string[]>([]);
   // The rail is a single day's board — default to today. Clearing the pill
-  // widens it back to every fixture we hold.
-  const [date, setDate] = useState(() => initialFilters().date);
-  const [dateTouched, setDateTouched] = useState(() => initialFilters().dateTouched);
+  // widens it back to every fixture we hold. `dateTouched` says whether the
+  // date is still that default (follows the calendar) or something the user
+  // picked or cleared (left alone).
+  const [date, setDate] = useState(() => localDay(Date.now()));
+  const [dateTouched, setDateTouched] = useState(false);
 
-  // Persist filters whenever they change.
   useEffect(() => {
     try {
-      localStorage.setItem(
-        FILTERS_KEY,
-        JSON.stringify({ sport: sportSel, league: leagueSel, date, dateTouched }),
-      );
+      for (const k of RETIRED_FILTER_KEYS) localStorage.removeItem(k);
     } catch {
-      // storage unavailable — filters just won't persist
+      // storage unavailable — nothing to retire
     }
-  }, [sportSel, leagueSel, date, dateTouched]);
+  }, []);
+
+  // A board left open past midnight follows the calendar: when the local day
+  // changes and the date is still the auto default, it moves to the new today
+  // and drops the sport and league filters — the view a fresh load would give.
+  // A date the user picked stays where they put it.
+  const today = localDay(minute);
+  const seenDay = useRef(today);
+  useEffect(() => {
+    if (today === seenDay.current) return;
+    seenDay.current = today;
+    if (dateTouched) return;
+    setDate(today);
+    setSportSel([]);
+    setLeagueSel([]);
+  }, [today, dateTouched]);
 
   // Browsing a past day: the live window only holds ~48h, so fetch older days on
   // demand and merge them in (deduped, cached per day).

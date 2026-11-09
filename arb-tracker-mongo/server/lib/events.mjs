@@ -437,6 +437,75 @@ async function competitionLogos() {
  * costs nothing: the result map is keyed on `sport|normalized`, so a row for the
  * wrong sport is simply never looked up.
  */
+/**
+ * Club-name affixes the feeds add or drop at will.
+ *
+ * "SBV Vitesse" and "Vitesse", "BV De Graafschap" and "De Graafschap",
+ * "Hellas Verona FC" and "Hellas Verona" are each two entity rows, and the
+ * nightly resolver found a crest for one spelling and not the other — so one
+ * side of a fixture drew initials while its sibling row held the badge.
+ * Stripped from the ENDS of a normalized name only, so "Sporting CP B" and
+ * "Dinamo Moskva" are never folded into someone else.
+ */
+const NAME_AFFIXES = new Set([
+  'fc', 'cf', 'afc', 'cfc', 'sc', 'ac', 'as', 'us', 'ud', 'cd', 'sd', 'rcd', 'ca', 'cs',
+  'bk', 'if', 'fk', 'nk', 'sk', 'hk', 'kf', 'pfc', 'pfk', 'ssc', 'bsc',
+  'sv', 'bv', 'sbv', 'vfb', 'vfl', 'tsv', 'fsv', 'spvgg', 'club', 'calcio',
+]);
+
+/** The sibling spellings to try when an entity has no usable crest. */
+export function siblingKeys(normalized) {
+  const out = [];
+  let toks = String(normalized ?? '').split('_').filter(Boolean);
+  while (toks.length > 1 && NAME_AFFIXES.has(toks[0])) {
+    toks = toks.slice(1);
+    out.push(toks.join('_'));
+  }
+  while (toks.length > 1 && NAME_AFFIXES.has(toks[toks.length - 1])) {
+    toks = toks.slice(0, -1);
+    out.push(toks.join('_'));
+  }
+  return out;
+}
+
+/**
+ * File-name words that mean the image is not a crest.
+ *
+ * The resolver takes Wikipedia's lead image for the best search hit and screens
+ * the file name; these are what reached the entities table before the screen
+ * learned them — a stadium ("GelreDome_20151129"), kit diagrams ("…_Uniform",
+ * Finnish "peliasut"), university seals, title celebrations. Caught here on the
+ * way out so the board shows the sibling's crest or initials, never a photo of
+ * the wrong thing. Tokens, not substrings: "Vodafone" is not a dome. And a
+ * word that is part of the team's own name is exempt — the New Jersey Devils
+ * are not a jersey, and HC Stadion Litoměřice really is called Stadion.
+ */
+const NOT_A_CREST = new Set([
+  'uniform', 'uniforms', 'jersey', 'jerseys', 'kit', 'kits', 'peliasut',
+  'seal', 'stadium', 'stadion', 'dome', 'celebration',
+]);
+/** A yyyymmdd in the file name is a photograph's date, never a crest's. */
+const PHOTO_DATE = /(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])/;
+
+/** The URL if it plausibly points at a crest for `normalized`, else null. */
+export function usableLogo(url, normalized = '') {
+  if (!url) return null;
+  const ownWords = new Set(String(normalized).split('_'));
+  let file = String(url).split(/[?#]/)[0].split('/').pop() ?? '';
+  try {
+    file = decodeURIComponent(file);
+  } catch {
+    // keep the raw name
+  }
+  if (PHOTO_DATE.test(file)) return null;
+  const tokens = file
+    .replace(/\.[a-z0-9]+$/i, '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z]+/);
+  return tokens.some((t) => NOT_A_CREST.has(t) && !ownWords.has(t)) ? null : url;
+}
+
 async function fixtureEntities(fixtures) {
   const out = new Map();
   // Same as competitionLogos: the NAS copy, or the Atlas mirror when deployed.
@@ -450,6 +519,8 @@ async function fixtureEntities(fixtures) {
       if (!n) continue;
       sports.add(f.sport);
       norms.add(n);
+      // One query covers the siblings too — same index, a few more keys.
+      for (const s of siblingKeys(n)) norms.add(s);
     }
   }
   if (norms.size === 0) return out;
@@ -464,11 +535,25 @@ async function fixtureEntities(fixtures) {
 
   for (const f of fixtures) {
     const rec = {};
-    const look = (name) => (name ? byKey.get(`${f.sport}|${normEntity(name)}`) : undefined);
+    // The row's own crest if it is one; else the first sibling spelling that
+    // has one; else the row with no crest, which draws initials downstream.
+    const look = (name) => {
+      if (!name) return undefined;
+      const n = normEntity(name);
+      const own = byKey.get(`${f.sport}|${n}`);
+      const ownLogo = usableLogo(own?.logo_url, n);
+      if (ownLogo) return { logoUrl: ownLogo, country: own.country ?? null };
+      for (const s of siblingKeys(n)) {
+        const sib = byKey.get(`${f.sport}|${s}`);
+        const logo = usableLogo(sib?.logo_url, n);
+        if (logo) return { logoUrl: logo, country: own?.country ?? sib.country ?? null };
+      }
+      return own ? { logoUrl: null, country: own.country ?? null } : undefined;
+    };
     const h = look(f.home_team);
     const a = look(f.away_team);
-    if (h) rec.home = { logoUrl: h.logo_url ?? null, country: h.country ?? null };
-    if (a) rec.away = { logoUrl: a.logo_url ?? null, country: a.country ?? null };
+    if (h) rec.home = h;
+    if (a) rec.away = a;
     out.set(f.fixture_id, rec);
   }
   return out;
