@@ -506,7 +506,50 @@ const quotedLiveIds = (prices, now) =>
       .map((r) => r.fixture_id),
   );
 
-function boardFor(sport, window, keySuffix = '') {
+const EMPTY_BOARD = Object.freeze({ fixtures: [], prices: [] });
+
+/**
+ * Whether the surface answers `sport=all`. Flipped off on the first 400 that
+ * says it does not — an older surface — and the board goes back to one call
+ * per sport. Never flipped back: a restart of this instance tries again.
+ */
+let allSupported = true;
+
+/**
+ * The whole board in ONE request, split per sport.
+ *
+ * Sixteen requests per sport per instance was the board's own rate-limit
+ * problem: a cold instance opened them together, the surface answered some
+ * with 429, and a sport fell off the board (see allEvents). One request
+ * cannot be partially rate-limited, and the surface reads all sixteen sports
+ * in a single pass over its fixtures index.
+ */
+function boardAll(window) {
+  return cachedDrain(
+    'board:all',
+    async () => {
+      const body = await call('board', { sport: 'all', date_from: window.date_from, date_to: window.date_to });
+      const bySport = new Map();
+      const sportOf = new Map();
+      for (const f of body.data ?? []) {
+        const sport = f.sport;
+        if (!sport) continue;
+        sportOf.set(f.optic_fixture_id, sport);
+        if (!bySport.has(sport)) bySport.set(sport, { fixtures: [], prices: [] });
+        bySport.get(sport).fixtures.push(f);
+      }
+      // Price rows carry no sport; they follow their fixture.
+      for (const r of body.prices ?? []) {
+        const sport = sportOf.get(r.fixture_id);
+        if (sport) bySport.get(sport).prices.push(canonicalRow(r));
+      }
+      return bySport;
+    },
+    BOARD_TTL_MS,
+  );
+}
+
+function boardOne(sport, window, keySuffix = '') {
   return cachedDrain(
     `board:${sport}${keySuffix}`,
     async () => {
@@ -515,6 +558,44 @@ function boardFor(sport, window, keySuffix = '') {
     },
     BOARD_TTL_MS,
   );
+}
+
+/**
+ * One sport's slice of the board window. The default window comes out of the
+ * single all-sports call; a day outside it (keySuffix) is still its own request.
+ */
+function boardFor(sport, window, keySuffix = '') {
+  if (keySuffix || !allSupported) return boardOne(sport, window, keySuffix);
+  return boardAll(window).then(
+    (bySport) => bySport.get(sport) ?? EMPTY_BOARD,
+    (err) => {
+      if (/Invalid sport/i.test(err?.message ?? '')) {
+        allSupported = false;
+        return boardOne(sport, window, keySuffix);
+      }
+      throw err;
+    },
+  );
+}
+
+/**
+ * Fixtures matching a team, event or tournament name, any sport and any date,
+ * as fixture records. The surface's /search: a whole word from its text index,
+ * a fragment from a bounded regex. Throws on an older surface without the
+ * route; the caller falls back to filtering the board.
+ */
+export async function apiSearch(term, limit = 60) {
+  const q = String(term ?? '').trim();
+  if (q.length < 2) return [];
+  const body = await cachedDrain(
+    `search:${q.toLowerCase()}:${limit}`,
+    () => call('search', { q, limit: String(limit) }),
+    BOARD_TTL_MS,
+  );
+  const now = Date.now();
+  const prices = (body.prices ?? []).map(canonicalRow);
+  const liveIds = quotedLiveIds(prices, now);
+  return (body.data ?? []).map((r) => fixtureFromPivot(r, r.sport, now, liveIds));
 }
 
 /**

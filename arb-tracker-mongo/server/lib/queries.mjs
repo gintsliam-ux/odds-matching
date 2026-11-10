@@ -6,7 +6,9 @@ import {
   expireStaleLive, FIXTURE_PROJECTION, LIVE, SKIP_SPORTS, toEvents,
 } from './events.mjs';
 import { isApi } from './source.mjs';
-import { apiFixtureById, apiFixtures, apiOddsForFixture, apiOddsForSport, apiSports, apiFixturesForDay, boardWindow } from './sportApi.mjs';
+import {
+  apiFixtureById, apiFixtures, apiFixturesForDay, apiOddsForFixture, apiOddsForSport, apiSearch, apiSports, boardWindow,
+} from './sportApi.mjs';
 
 /** BSON Dates on the wire are ISO strings. */
 const iso = (v) => (v instanceof Date ? v.toISOString() : v ?? null);
@@ -455,10 +457,21 @@ export async function searchEvents(query) {
   const term = String(query ?? '').trim();
   if (term.length < SEARCH_MIN_CHARS) return [];
   if (isApi) {
-    // No search endpoint upstream; filter the window the surface publishes.
+    /*
+     * The board first, because it is already here and it is what the user is
+     * looking at; then the surface's /search for everything the board does not
+     * hold — last month's game, next month's final. The surface can be an
+     * older one without the route, and then the board is the whole answer,
+     * as it always was.
+     */
     const re = new RegExp(escapeRe(term), 'i');
-    const all = await cachedBoard();
-    return all.filter((e) => re.test(`${e.name} ${e.home} ${e.away}`)).slice(0, SEARCH_LIMIT);
+    const [all, remote] = await Promise.all([
+      cachedBoard(),
+      apiSearch(term, SEARCH_LIMIT).then(toEvents).catch(() => []),
+    ]);
+    const local = all.filter((e) => re.test(`${e.name} ${e.home} ${e.away}`));
+    const seen = new Set(local.map((e) => e.id));
+    return [...local, ...remote.filter((e) => !seen.has(e.id))].slice(0, SEARCH_LIMIT);
   }
   const re = new RegExp(escapeRe(term), 'i');
   const or = [{ home_team: re }, { away_team: re }, { event_name: re }];
