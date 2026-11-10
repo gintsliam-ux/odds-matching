@@ -76,56 +76,6 @@ const BOOK_ALIASES = {
 };
 const canonicalBook = (b) => BOOK_ALIASES[b] ?? b;
 
-/**
- * The API names markets by shape (`h2h`, `total_games`); the grid keys off the
- * canonical market id (`moneyline`, `total`). Period prefixes — `1s_` a tennis
- * set, `1h_` a half, `1q_` a quarter, `1p_` a period, `1inn_` an inning — are
- * split off and put back, so `1s_total_games` becomes `1s_total` rather than
- * falling through as an unknown market and vanishing from the grid.
- */
-const MARKET_IDS = {
-  h2h: 'moneyline',
-  h2h_3way: 'moneyline_3way',
-  moneyline: 'moneyline',
-  moneyline_3way: 'moneyline_3way',
-  spreads: 'spread',
-  spread: 'spread',
-  game_spread: 'spread',
-  /*
-   * The surface calls the European handicap `spread_3way`; the collection on
-   * the NAS calls the same market `handicap_3way`. Unmapped, it passed through
-   * under the surface's name, matched no market definition, and so never
-   * rendered on a deployed instance — while the identical market rendered fine
-   * on the tailnet. Mapped to the NAS name because that is what the market
-   * definitions use, exactly as `h2h` is mapped to `moneyline`.
-   */
-  spread_3way: 'handicap_3way',
-  set_spread: 'set_spread',
-  totals: 'total',
-  total: 'total',
-  total_games: 'total',
-  total_points: 'total',
-  total_runs: 'total',
-  total_sets: 'total_sets',
-  asian_total: 'asian_total',
-  dnb: 'dnb',
-  double_chance: 'double_chance',
-  btts: 'btts',
-  outright: 'outright',
-};
-
-const PERIOD_PREFIX = /^(1s|1h|2h|1q|2q|3q|4q|1p|2p|3p|1inn)_/;
-
-function marketId(type) {
-  if (!type) return type;
-  const m = PERIOD_PREFIX.exec(type);
-  if (!m) return MARKET_IDS[type] ?? type;
-  const rest = type.slice(m[0].length);
-  // `1s_set_spread` would be nonsense; a period-scoped set handicap is just the
-  // period's spread.
-  const mapped = MARKET_IDS[rest] ?? rest;
-  return `${m[1]}_${mapped === 'set_spread' ? 'spread' : mapped}`;
-}
 
 /**
  * Per-request timeout, deliberately well inside the function's own budget.
@@ -388,7 +338,6 @@ const pivotCache = new Map();
  * Beyond this a stale pivot is no longer worth standing behind, and a caller
  * waits for a fresh one rather than being told something this old.
  */
-const PIVOT_STALE_MAX_MS = 3 * PIVOT_TTL_MS;
 /*
  * It bounds how long a stale pivot is served WITHOUT a wait, not how old the
  * data can get. While drains keep failing the last good value is still handed
@@ -421,74 +370,8 @@ function cachedDrain(key, produce, ttlMs = PIVOT_TTL_MS) {
   return refresh;
 }
 
-/*
- * The in-play drain on its own, shorter beat.
- *
- * This is where a deployed board's scores, periods and clocks come from, and
- * since the Optic stream started writing them on Air they change every few
- * seconds at the source. A minute here was the longest leg left between the
- * feed and the page. Prices keep the minute: they are read by the odds
- * pivots, not this.
- */
-const LIVE_TTL_MS = 15_000;
 /** One fixture's in-play rows, for the event page's live view (see apiOddsForFixture). */
 const FX_LIVE_TTL_MS = 5_000;
-
-/**
- * The cached drain if we already have one, otherwise start it and return empty.
- *
- * For a drain whose rows are worth having but not worth WAITING for. The live
- * pivot is the case: measured against the real bisecting drains across six
- * sports, it contributes 19 fixtures of 4,477 — 0.4% — while costing half of
- * every cold board build. Blocking the first paint on it charged every visitor
- * eight seconds for one fixture in 235.
- *
- * So the first build on a cold instance goes without those rows and kicks the
- * drain off behind itself; the next build, forty-five seconds later, has them.
- * Self-healing, and nothing is lost permanently — which is the only reason this
- * is acceptable at all, because a board that quietly drops fixtures is the
- * failure mode this file has been bitten by twice.
- */
-const DEFER_MS = 15_000;
-/** key -> when its drain was scheduled, so a timer that never fired is retried. */
-const deferred = new Map();
-
-function cachedDrainSoon(key, produce) {
-  const hit = pivotCache.get(key);
-  if (hit?.value && Date.now() - hit.at < PIVOT_STALE_MAX_MS) return hit.value;
-
-  /*
-   * Started on a TIMER, not immediately, and that delay is the whole point.
-   *
-   * Kicking it off at once moved the live drain off the critical path but not
-   * out of the way: every request spends a token from one shared bucket at
-   * eight a second, so the background drains simply queued ahead of the board's
-   * own pages and a cold build went from 16.5s to 14.6s instead of to 6s. The
-   * work has to be deferred in TIME, not just in await.
-   *
-   * Fifteen seconds clears a cold board (about 25 blocking calls) and still
-   * lands these rows well inside the board's 45-second TTL, so the next build
-   * has them.
-   *
-   * Re-schedulable: the timestamp is kept rather than a flag, because a
-   * serverless instance can freeze before a timer fires. If the scheduled time
-   * is long past and still nothing is cached, the next caller schedules again,
-   * so nothing is lost permanently.
-   */
-  const at = deferred.get(key);
-  if (!hit?.inflight && (at == null || Date.now() - at > DEFER_MS * 4)) {
-    deferred.set(key, Date.now());
-    const timer = setTimeout(() => {
-      deferred.delete(key);
-      // Errors swallowed: beginDrain keeps the last good value, and a failed
-      // background drain must never reject the board that did not wait for it.
-      beginDrain(key, produce, pivotCache.get(key)).catch(() => {});
-    }, DEFER_MS);
-    // Never hold the process open for a drain nobody is waiting on.
-    timer.unref?.();
-  }
-  return Promise.resolve([]);
-}
 
 function beginDrain(key, produce, hit) {
   const inflight = produce()
@@ -528,36 +411,6 @@ function beginDrain(key, produce, hit) {
 }
 
 /**
- * The board needs one row per fixture, not every line of every market.
- *
- * `market=h2h` is the cheapest way to get that and the head-to-head prices the
- * ticker shows: across seven sports it is 622 fixtures in 0.5 MB against 633 in
- * 28 MB unfiltered — 56x less data and five times faster. The eleven fixtures
- * it misses are ones with no head-to-head market at all, which could not have
- * shown a ticker price anyway; opening one by link still loads every market,
- * because the event page fetches by `fixture_id` without this filter.
- */
-const BOARD_MARKET = 'h2h';
-
-/**
- * Sports whose book is an OUTRIGHT, so the h2h drain finds them nothing.
- *
- * The board discovers its fixtures from the odds pivot filtered to h2h, and
- * golf has no h2h market at all: `market=h2h` returns 0 rows for it while
- * `market=outright` returns the tournament. So golf was drained on every cold
- * board and contributed nothing — 0 golf events of 2,546 — even though the rest
- * of the pipeline is built for it: events.mjs flags a fixture with no teams as
- * an outright, queries.mjs knows the player is in the odds selections rather
- * than the fixture, and markets.ts carries its own outright market and the
- * US-books-plus-TAB column set it is priced by. Only reaching it was missing.
- *
- * Golf also runs 2-player matchups, which DO have home and away and arrive on
- * the h2h drain as ordinary events — so both drains matter for it.
- */
-const OUTRIGHT_MARKET = 'outright';
-const OUTRIGHT_SPORTS = new Set(['golf']);
-
-/**
  * How much of the surface's week the board actually wants, as `date_from` /
  * `date_to`. Asking for the whole thing and discarding most of it is what made
  * a cold board take 38 seconds; bounded, all fourteen sports come back in three.
@@ -572,7 +425,7 @@ const WINDOW_BACK_DAYS = 3;
  *
  * `+1` dated from when this drain only ever returned settled fixtures, so the
  * forward edge bought nothing and a tight window was free. Now that `flucs=true`
- * brings unsettled fixtures through (see UNSETTLED), the forward edge is the
+ * brings unsettled fixtures through (the board carries unsettled fixtures), the forward edge is the
  * board's whole upcoming half — and at +1 it cut the weekend off: on a Friday,
  * Sunday's NRL simply did not exist as far as the board was concerned.
  *
@@ -591,284 +444,9 @@ export function boardWindow() {
   return { date_from: ymd(-WINDOW_BACK_DAYS), date_to: ymd(WINDOW_FWD_DAYS) };
 }
 
-/**
- * `flucs=true` on a CLOSING drain is not about the ladder — it is what makes
- * unsettled fixtures visible at all.
- *
- * Without it the closing pivot answers with settled fixtures only: the same
- * windowed icehockey query returns 104 fixtures and NOT ONE of them is in the
- * future, which is why the board showed 522 finals, 14 live and zero upcoming,
- * and why the ticker had nothing to put a price against. With it the same query
- * returns 299 fixtures, 190 of them future. It also explains why a game that
- * had just started looked absent from the closing pivot entirely.
- *
- * `include_unsettled=true` now does that job on its own, which is what this
- * asks for. Measured side by side over the board window: identical fixture
- * counts and identical future counts — icehockey 357/99, soccer 1237/0,
- * basketball 475/97 — for about 30% fewer bytes, because the fluc ladder is
- * not bought. Every caller of this constant enumerates fixtures or reads a
- * current price; the ladder columns went unread by all of them. The event page,
- * which genuinely wants the ladder, asks for `flucs=true` itself.
- */
-const UNSETTLED = { include_unsettled: 'true' };
-
 /** How long after a scheduled start a fixture is presumed in play rather than
  *  finished, while waiting for a book to open its in-play market. */
 const KICKOFF_GRACE_MS = 15 * 60_000;
-
-/**
- * One page big enough to hold a windowed sport whole. The surface answers
- * `has_more: false` for every sport at this size, so `drain` almost never
- * loops — but it still can, because a busy weekend is not this week.
- */
-const PAGE_LIMIT = 50_000;
-
-/**
- * Drain a paginated endpoint. The surface caps a page and reports `has_more`
- * with a `next_offset`; a busy sport runs to several pages.
- */
-/**
- * Page one request to exhaustion, reporting whether the window was CAPPED.
- *
- * Capped means the surface stopped because of its own hard limit rather than
- * because the window was exhausted: `has_more` still true while `next_offset`
- * refuses to advance. That is not a paging problem to retry — the cap is
- * terminal for the window, and `truncated_hint` says so literally ("narrow the
- * date window"). Measured: soccer over the ten-day board window returns 1,237
- * fixtures and will not page past them, where asking day by day returns 2,263.
- * The caller has to narrow; see drainSpan.
- */
-async function drainReport(route, params, { maxPages = 12 } = {}) {
-  const out = [];
-  let offset = 0;
-  let capped = false;
-  for (let page = 0; page < maxPages; page++) {
-    const body = await call(route, {
-      limit: String(PAGE_LIMIT),
-      ...params,
-      offset: String(offset),
-    });
-    out.push(...(body.data ?? []));
-    if (!body.has_more || body.next_offset == null) break;
-    /*
-     * An offset that does not move is the end, whatever `has_more` says.
-     *
-     * Cheap insurance on a loop that now carries the whole window: the old
-     * failure here was `next_offset` advancing by the requested limit instead
-     * of the rows returned, and the mirror-image fault — not advancing at all —
-     * would spin until maxPages rather than stopping.
-     */
-    if (body.next_offset <= offset) {
-      // More to come and no way to ask for it: the hard cap.
-      capped = true;
-      break;
-    }
-    offset = body.next_offset;
-    // Ran out of pages with the surface still offering more.
-    if (page === maxPages - 1) capped = true;
-  }
-  return { rows: out, capped };
-}
-
-/** The common case: just the rows. */
-async function drain(route, params, opts) {
-  return (await drainReport(route, params, opts)).rows;
-}
-
-const SPAN_MAX_DEPTH = 5;
-
-const ymdOf = (d) => new Date(d).toISOString().slice(0, 10);
-const shiftYmd = (ymd, days) =>
-  ymdOf(new Date(`${ymd}T00:00:00Z`).getTime() + days * 86_400_000);
-const daysBetween = (from, to) =>
-  Math.round((new Date(`${to}T00:00:00Z`) - new Date(`${from}T00:00:00Z`)) / 86_400_000);
-
-/**
- * One sport across a date window, narrowing only where the surface says to.
- *
- * The window still has to be split — see drainReport — but the trigger is now a
- * REPORTED cap rather than the old guess, which was "this response came back
- * with 900+ rows and its last fixture is more than a day short of the span I
- * asked for, so it was probably cut". That heuristic fired on windows that were
- * actually complete and missed ones that were not: a cold board made 288
- * requests for 24.9 MB in 161 seconds, 108 of those responses reporting the cap.
- *
- * Splitting on the fact instead means a span that fits is one request, and only
- * a span that is genuinely truncated pays for a bisect.
- */
-async function drainSpan(params, from, to, depth = 0) {
-  /*
-   * Pre-split at the top, for sports known not to fit — see PRESPLIT_DAYS.
-   *
-   * It lives here rather than in drainBoard because buildFixtures, which is
-   * what the board's fixture list actually comes from, calls drainSpan directly and
-   * never goes through drainBoard. Putting the hint in the wrong one of those
-   * two changed nothing at all.
-   */
-  if (depth === 0) {
-    const chunk = PRESPLIT_DAYS[String(params.sport ?? '').toLowerCase()];
-    if (chunk && daysBetween(from, to) >= chunk) {
-      const spans = [];
-      // YYYY-MM-DD compares correctly as a string, which is why the window is
-      // carried in that form rather than as dates.
-      for (let start = from; start <= to; start = shiftYmd(start, chunk)) {
-        const last = shiftYmd(start, chunk - 1);
-        spans.push([start, last > to ? to : last]);
-      }
-      const out = await Promise.all(spans.map(([a, b]) => drainSpan(params, a, b, 1)));
-      return out.flat();
-    }
-  }
-  const { rows, capped } = await drainReport('odds-api', { ...params, date_from: from, date_to: to });
-  const span = daysBetween(from, to);
-  if (!capped || span < 1 || depth >= SPAN_MAX_DEPTH) return rows;
-  const mid = shiftYmd(from, Math.floor(span / 2));
-  const [a, b] = await Promise.all([
-    drainSpan(params, from, mid, depth + 1),
-    drainSpan(params, shiftYmd(mid, 1), to, depth + 1),
-  ]);
-  return [...a, ...b];
-}
-
-/**
- * The surface truncates a (sport, window) query and says it is complete.
- *
- * Measured on the deployed board. Soccer, `market=h2h`, window 10-10..10-19:
- *
- *     limit=50000   1 page    1239 rows   has_more=false   latest start 10-11T18:15
- *     limit=4000    4 pages   1248 rows   has_more=false   latest start 10-11T18:15
- *
- * Both stop at the same place, roughly 1,240 rows and about 4 MB, and both
- * report that there is nothing more. There is: the identical query windowed to
- * 10-13..10-20 returns 630 rows, every one of them upcoming. The response is
- * ordered by start time, so what the cap removes is always the far end of the
- * window — which for the board is its entire upcoming half.
- *
- * That is why the deployed board carried 1,205 soccer fixtures and NOT ONE of
- * them was yet to start, while the same fixtures fetched by id returned 333 and
- * 851 price rows apiece. Rugby union and volleyball were empty for the same
- * reason. It reads exactly like an empty schedule, which is why it survived
- * this long.
- *
- * Paging past it does not work either, and the reason is worth recording:
- * `next_offset` advances by the REQUESTED `limit`, not by the number of rows
- * actually returned. At `limit=4000` the pages came back 404, 345, 438, 61 rows
- * while `next_offset` went 4000, 8000, 12000 — so each step skipped the roughly
- * 3,600 rows between what arrived and what was asked for. Honouring that offset
- * is worse than ignoring it, so `PAGE_LIMIT` stays large enough that a span is
- * answered in one page and the broken offset is never used.
- *
- * So the window is split instead, and a span that still looks truncated is
- * split again. Truncation is detected directly rather than inferred: a span
- * whose last fixture starts well before the span's own `date_to`, on a response
- * big enough to be near the cap, did not fit.
- */
-/**
- * Drain one sport across a date window.
- *
- * This used to SPLIT the window — recursively, bisecting whenever a response
- * came back looking saturated — because the surface answered truncated spans
- * with `has_more: false` and a `next_offset` that advanced by the requested
- * limit rather than the rows returned. Paging was unusable, so the only way to
- * get a whole window was to ask for narrower pieces of it until each piece fit.
- *
- * It worked and it was expensive: a cold board was 288 upstream requests,
- * 24.9 MB and 161 seconds, with 108 of those responses reporting the cap hit.
- *
- * `has_more` and `next_offset` are now honest, and `drain` already follows
- * them, so the splitting is pure duplication of work the surface will do
- * properly. Measured after: paging one window to exhaustion takes 2 requests
- * for soccer and 1 for each of basketball, tennis, ice hockey, baseball and
- * gridiron — 7 for six sports where the splitting made dozens.
- *
- * Note the units, which are not obvious: `limit`, `offset` and `next_offset`
- * count ROWS, while `count` counts FIXTURES. A limit of 5,000 came back with
- * 703 fixtures and `next_offset: 5000`, which is offset plus rows returned,
- * exactly as documented.
- */
-/**
- * The board window for one sport, narrowed only where the surface says to.
- *
- * Discovered rather than pre-split, which is the opposite of what this did
- * before and for a measured reason. Pre-splitting the window into three-day
- * spans sent 15 sports x 4 spans x 2 drains before anything was known, and
- * exactly ONE sport needs narrowing: soccer returns 1,237 fixtures against a
- * ground truth of 2,263 and reports the cap, while basketball, tennis, ice
- * hockey, baseball, gridiron and Aussie rules all come back whole and uncapped.
- * So the pre-split spent a hundred-odd requests to save soccer one round trip,
- * and the rate limit is ten a second.
- *
- * Starting whole costs the one sport that needs it a single extra round trip
- * and leaves the other fourteen at one request each.
- */
-/**
- * Sports whose board window cannot fit in one response, in days per request.
- *
- * A PERFORMANCE hint only: correctness still comes from the cap discovery in
- * drainSpan, which bisects further if a chunk this size still truncates. Get
- * the number wrong and the board is slower or chattier, never incomplete.
- *
- * Why it is needed: discovery costs a serial round trip per level, and the
- * capped call at each level has its rows DISCARDED. Soccer carries 2,604
- * fixtures over the eleven-day window and took 10 calls and 14.2 seconds of a
- * 16-second cold board — every other sport finished inside 1.4s. Three days is
- * roughly 700 rows against a cap near 1,240, so each chunk lands in one call
- * and the four chunks go out together.
- */
-const PRESPLIT_DAYS = { soccer: 3 };
-
-function drainBoard(params) {
-  const { date_from: from, date_to: to } = boardWindow();
-  return drainSpan(params, from, to);
-}
-
-/* ------------------------------------------------------------- odds rows */
-
-/** Columns that describe the fixture rather than a price. */
-const FIXTURE_COLS = new Set([
-  'optic_fixture_id', 'date', 'commence_time', 'sport_key', 'optic_league',
-  'category', 'tournament', 'location', 'home_team', 'away_team', 'event_name',
-  'home_score', 'away_score', 'sports_market_type', 'market_display_name',
-  'line', 'pair_key',
-  // In-play, added so a deployed instance can say where a live game is up to
-  // rather than only "LIVE". Fixture-level facts repeated on every row of a
-  // fixture, exactly as the scoreline already was.
-  'period_number', 'period', 'clock', 'is_clock_stopped',
-  'home_period_scores', 'away_period_scores',
-  // `actual_start` is the real jump. `scheduled_start` is Optic's not-before
-  // slot, which tennis never replaces, so a match already in play can carry a
-  // start time hours away. The two write timestamps feed the status bar.
-  'actual_start', 'fixture_updated_at', 'score_updated_at',
-  /*
-   * Added by the surface so none of this has to be inferred any more.
-   *
-   * `fixture_status` is derived from the fixture document alone — never from
-   * scores, prices or a clock — which is exactly the thing impliedStatus could
-   * not do and why a Test read Final on day two. `source_status` is Optic's raw
-   * value, kept for when the mapped one looks wrong. `finished_at` is stamped
-   * only on a completed fixture and is NOT synthesised, which is what makes it
-   * usable where `fixtures.settled_at` is not. `market_id` is the collection's
-   * own id beside the alias.
-   */
-  'fixture_status', 'source_status', 'finished_at', 'market_id',
-]);
-
-/**
- * Explode one wide pivot row into the tall per-(selection, book) rows the
- * market grid expects.
- *
- * Two shapes arrive here. Plain, the pivot carries `oc1_pinn_odds` and
- * `oc1_pinn_at`. With `flucs=true` it carries the whole life of each price —
- * `_open`, `_6h`, `_3h`, `_1h`, `_30m`, `_10m`, `_close`, `_current`, `_at` and
- * crucially `_status`. Both are handled, because the board asks for the cheap
- * shape and an event page asks for the rich one.
- *
- * `outcome_no` comes from the `ocN` prefix, which is exactly the
- * 1 = home/over/yes, 2 = away/under/no, 3 = draw convention the grid keys on.
- */
-const PRICE_FIELDS = new Set([
-  'odds', 'open', '6h', '3h', '1h', '30m', '10m', 'close', 'current', 'at', 'status', 'fair',
-]);
 
 /**
  * The canonical leg for an outcome the surface names after the teams.
@@ -902,208 +480,52 @@ const legSlug = (s) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
+/* ------------------------------------------------------------ board reads */
 
-function canonicalLeg(name, home, away) {
-  const parts = legSlug(name).split('_or_');
-  if (parts.length !== 2) return null;
-  const h = legSlug(home);
-  const a = legSlug(away);
-  const has = (w) => Boolean(w) && parts.includes(w);
-  if (has(h) && has('draw')) return 'home_draw';
-  if (has(a) && has('draw')) return 'draw_away';
-  if (has(h) && has(a)) return 'home_away';
-  return null;
-}
+/*
+ * The board and everything derived from it come from the surface's /board:
+ * one call per sport returns every fixture in the window with status, scores
+ * and clock, plus every moneyline row on it, already in this site's row
+ * shape. Before this the same data was assembled from the wide odds pivot —
+ * a drain per sport per market, bisected on the row cap, then exploded back
+ * into fixtures and prices — which cost 15-20s a sport and ~290 requests on
+ * a cold instance. /board answers in well under a second, so the pivot
+ * machinery (drainSpan, explode, mergeOpens) is gone with it.
+ */
+const BOARD_TTL_MS = 15_000;
+/** An in-play row older than this is a book that has stopped quoting. */
+const LIVE_FRESH_MS = 3 * 60_000;
 
-function explode(row, { live, unsettled }) {
-  const out = [];
-  const byOutcome = new Map();
+const canonicalRow = (r) => ({ ...r, sportsbook: canonicalBook(r.sportsbook) });
+const isFresh = (r, now) => !!r.current_at && now - Date.parse(r.current_at) < LIVE_FRESH_MS;
+/** The fixtures a book is actively quoting in-play right now. */
+const quotedLiveIds = (prices, now) =>
+  new Set(
+    prices
+      .filter((r) => r.is_live && r.status === 'active' && isFresh(r, now))
+      .map((r) => r.fixture_id),
+  );
 
-  for (const [col, value] of Object.entries(row)) {
-    if (FIXTURE_COLS.has(col) || value == null) continue;
-    const m = /^oc(\d+)_(.+?)_([a-z0-9]+)$/.exec(col);
-    if (!m) continue;
-    const [, n, rawBook, field] = m;
-    if (!PRICE_FIELDS.has(field)) continue;
-    const book = canonicalBook(rawBook);
-    const key = `${n}|${book}`;
-    const rec = byOutcome.get(key) ?? { outcome: Number(n), book };
-    rec[field] = value;
-    byOutcome.set(key, rec);
-  }
-
-  for (const rec of byOutcome.values()) {
-    // `odds` is the plain shape's only price; `current` is the rich shape's.
-    const price = Number(rec.current ?? rec.odds ?? rec.close);
-    if (!Number.isFinite(price)) continue;
-    const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-
-    /*
-     * A close, or nothing — never the current price wearing a close's hat.
-     *
-     * The plain shape has no `_close` column at all: `odds` is its only price,
-     * and because that shape only ever carried SETTLED fixtures, treating it as
-     * the close was right. `flucs=true` then brought unsettled fixtures down
-     * the same path, and the fallback started inventing a close for games that
-     * have not kicked off — Richmond v Geelong showed Ladbrokes 1.05 as a
-     * closing price while the book was still actively quoting it.
-     *
-     * So the fallback now needs the book to have actually stopped: an explicit
-     * `closed` status, or the plain shape's absence of any status at all.
-     */
-    /*
-     * `unsettled` disables the fallback entirely.
-     *
-     * It infers "this must be the close" from the plain shape having no status
-     * column, which held while the plain shape only carried settled fixtures.
-     * `include_unsettled=true` returns that same column-less shape for games
-     * that have not kicked off, so without this the current price would be
-     * stamped as a closing price on every upcoming fixture.
-     */
-    const settled =
-      !unsettled && !live && rec.status !== 'active' && rec.status !== 'suspended';
-    const closePrice = num(rec.close) ?? (settled ? price : null);
-
-    /*
-     * The collection's own id, straight off the row.
-     *
-     * `marketId` maps the surface's alias onto it and agrees with the published
-     * table on all 23 types — but a type that appears tomorrow and is not in
-     * that table passes through under the alias, matches no market definition,
-     * and is invisible with nothing to say so. That is exactly how the 3-way
-     * handicap went unrendered. Reading `market_id` when the row carries it
-     * means a new market is wrong-looking rather than absent.
-     */
-    const mid = row.market_id ?? marketId(row.sports_market_type);
-    /*
-     * The handicap each side is actually getting, taken from the row rather
-     * than inferred.
-     *
-     * This used to derive oc2's line by negating oc1's, on the understanding
-     * that `line` belonged to oc1. It did not, reliably: the pivot returned
-     * the same pair in both orientations, so the same team came back at the
-     * same line with two incompatible prices — Saints +16.5 at 1.081 from one
-     * row and at 6.75 from the other, when 6.75 is the price for Saints -16.5.
-     * Half of every alternate-line ladder read backwards as a result, and a
-     * handicap bet was compared against the opposite side of its own market.
-     *
-     * `oc1_line` / `oc2_line` now say outright what each outcome's line is, so
-     * nothing is inferred. The negation survives only as a fallback for a row
-     * that predates them, which is safe now that `line` is guaranteed to be
-     * oc1's.
-     *
-     * Totals never had a side to get wrong: Over 2.5 and Under 2.5 share the
-     * one number, and negating it would invent an "Under -2.5".
-     */
-    const handicap = /spread/.test(mid);
-    const ownLine = num(row[`oc${rec.outcome}_line`]);
-    const line =
-      ownLine != null
-        ? ownLine
-        : row.line == null
-          ? null
-          : handicap && rec.outcome === 2
-            ? -row.line
-            : row.line;
-
-    out.push({
-      market_id: mid,
-      market_name: row.market_display_name ?? null,
-      selection: row[`oc${rec.outcome}_name`] ?? null,
-      /*
-       * `ocN_selection` is the canonical leg, and it was here the whole time.
-       *
-       * This field was hard-coded null on the belief that the pivot had no
-       * such column. It does: beside `oc1_name: "Eintracht Frankfurt"` sits
-       * `oc1_selection: "home"`, and beside `oc3_name: "Draw"` sits
-       * `oc3_selection: "draw"` — the same vocabulary the NAS collection
-       * stores. Every market read through this surface was therefore served
-       * with no leg at all, leaving the grid to group outcomes on their
-       * display names and collapsing any market whose names were not distinct.
-       *
-       * `canonicalLeg` stays as the fallback for a row that lacks the column.
-       */
-      normalized_selection:
-        row[`oc${rec.outcome}_selection`] ??
-        canonicalLeg(row[`oc${rec.outcome}_name`], row.home_team, row.away_team),
-      line,
-      // Grouped on magnitude, so the two sides of one handicap stay one row.
-      line_group: line == null ? null : Math.abs(line),
-      pair_key: row.pair_key ?? null,
-      outcome_no: rec.outcome,
-      is_main: true,
-      sportsbook: rec.book,
-      is_lay: rec.book.endsWith('_lay'),
-      current_price: price,
-      open_price: num(rec.open),
-      close_price: closePrice,
-      // `closed_at` is what gates the grid's close-price rule. Only claim a
-      // close when there genuinely is one — same test as the price above, so
-      // the two can never disagree.
-      closed_at: closePrice != null ? (row.commence_time ?? null) : null,
-      current_at: rec.at ?? null,
-      open_at: null,
-      // The status the book had this price in — "suspended" is what makes the
-      // grid strike it through, and it only arrives with flucs=true.
-      status: rec.status ?? null,
-      // Still no point-by-point series upstream; the snapshots below are the
-      // whole of the available history, so the hover card draws no sparkline.
-      flucs: [],
-      daily_prices: {},
-      price_6h: num(rec['6h']),
-      price_3h: num(rec['3h']),
-      price_1h: num(rec['1h']),
-      price_30m: num(rec['30m']),
-      price_10m: num(rec['10m']),
-      fair: num(rec.fair),
-      fair_blend: row[`oc${rec.outcome}_fair_blend`] ?? null,
-      fair_prob: row[`oc${rec.outcome}_fair_prob`] ?? null,
-      og_blend: row[`oc${rec.outcome}_og_blend`] ?? null,
-      blend_tier: row[`oc${rec.outcome}_blend_tier`] ?? null,
-    });
-  }
-  return out;
+function boardFor(sport, window, keySuffix = '') {
+  return cachedDrain(
+    `board:${sport}${keySuffix}`,
+    async () => {
+      const body = await call('board', { sport, date_from: window.date_from, date_to: window.date_to });
+      return { fixtures: body.data ?? [], prices: (body.prices ?? []).map(canonicalRow) };
+    },
+    BOARD_TTL_MS,
+  );
 }
 
 /**
- * Merge the opening prices from the settled (tall) surface onto rows built from
- * the pivot. `book_opens` is the only place an opening price is published.
+ * Every moneyline row the surface has for a sport in the board window —
+ * pregame by default, in-play with `live`. Stale in-play rows are included,
+ * as they always were; callers that want only what is quoted now filter on
+ * status and current_at (see quotedLiveIds).
  */
-function mergeOpens(rows, spRows) {
-  if (!spRows?.length) return rows;
-  const opens = new Map();
-  for (const r of spRows) {
-    for (const [book, price] of Object.entries(r.book_opens ?? {})) {
-      opens.set(`${r.market_id}|${r.selection}|${r.line ?? ''}|${canonicalBook(book)}`, price);
-    }
-  }
-  for (const row of rows) {
-    const hit = opens.get(
-      `${row.market_id}|${row.selection}|${row.line ?? ''}|${row.sportsbook}`,
-    );
-    if (hit != null) row.open_price = hit;
-  }
-  return rows;
-}
-
-/** Every odds row the surface has for one sport, tall and canonicalised. */
 export async function apiOddsForSport(sport, { live = false } = {}) {
-  const pivot = await cachedDrain(`odds:${sport}:${live}`, () =>
-    drainBoard(live
-      ? { sport, live: 'true', include_stale: 'true', market: BOARD_MARKET }
-      // Upcoming fixtures only exist on this drain with `flucs=true` — see
-      // UNSETTLED. Without it the ticker has no price to show for anything
-      // that has not already been played.
-      : { sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED }),
-  );
-  const rows = [];
-  for (const r of pivot) {
-    for (const row of explode(r, { live })) {
-      row.fixture_id = r.optic_fixture_id;
-      rows.push(row);
-    }
-  }
-  return rows;
+  const { prices } = await boardFor(sport, boardWindow());
+  return prices.filter((r) => r.is_live === live);
 }
 
 /**
@@ -1126,7 +548,7 @@ function impliedStatus(row, now, liveIds, sport) {
   // `upcoming`, not null. This returned null back when the closing pivot carried
   // only settled fixtures, so a future start time meant "we have no idea" and
   // the client's mapStatus() quietly defaulted it. Now that `flucs=true` brings
-  // unsettled fixtures through (see UNSETTLED), a future start is a fact worth
+  // unsettled fixtures through (the board carries unsettled fixtures), a future start is a fact worth
   // stating rather than something downstream has to infer from a null.
   if (start > now) return 'upcoming';
   /*
@@ -1164,298 +586,43 @@ function impliedStatus(row, now, liveIds, sport) {
   const grace = isMultiDay(sport, row.optic_league) ? MULTI_DAY_GRACE_MS : KICKOFF_GRACE_MS;
   return now - start < grace ? 'live' : 'completed';
 }
-
 /**
- * The pivot rows for whatever is in play.
- *
- * This is a second source, not an overlay. A fixture that is still running has
- * no closing price, so it does not appear in the closing pivot at all — which
- * is why both the board and the per-fixture odds have to consult it. Failing
- * softly matters: live is an enhancement, and losing it should not take the
- * closing prices down with it.
+ * Every odds row of one fixture, one side of is_live, in this site's row
+ * shape with the full price history — the same rows a local instance reads
+ * off the collection. `currentOnly` asks for the slim form (no history) for
+ * callers that read the current price and nothing else, such as the ticker.
  */
-async function liveRows(sport) {
-  try {
-    // Deliberately WITHOUT include_stale. A stale live row outlives the game it
-    // belongs to, so asking for them here reports finished matches as in play —
-    // it took the board from 11 live to 554. A price someone is actively
-    // quoting is the only honest signal that a game is still running.
-    return await cachedDrain(`live:${sport}`, () =>
-      drainBoard({ sport, live: 'true', market: BOARD_MARKET }),
-    LIVE_TTL_MS);
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Odds for one fixture.
- *
- * `fixture_id` (with `sport`, which the surface requires) fetches just this
- * match — 89 rows against the 1,130 of a whole-sport drain — so an event page
- * no longer pays for the entire sport to render one grid.
- *
- * Both pivots are still consulted, for the same reason the fixture list does:
- * a game still running has no closing price and appears only in the live feed,
- * while a finished one is only in the closing pivot.
- *
- * Precedence depends on whether the price is still trading, NOT on which pivot
- * it came from. A live row only wins while its book is actually quoting it:
- * once a match ends those rows freeze at the last in-play price — pinnacle at
- * 1.021 on a dead market — and carry no snapshot ladder, so letting them win
- * showed stale in-play numbers and no history for exactly the six books the
- * live feed covers, while the four it does not were correct.
- */
-/**
- * @param {object} [opts]
- * @param {boolean} [opts.history] Fetch the full price history. True for the
- *   event page, which draws it. False for callers that only want the current
- *   price — see the note on `flucs` below.
- */
-/**
- * @param {object} [opts]
- * @param {boolean} [opts.currentOnly] Current prices only -- no ladder, no
- *   settled prices. For the ticker's comparison columns, which read
- *   `current_price` and nothing else. The event page leaves it false and gets
- *   the full history it draws.
- */
-/**
- * @param {object} [opts]
- * @param {boolean} [opts.live] The in-play rows instead of the pregame ones.
- *   `live=true` with `flucs=true` on the surface selects `is_live: true` and
- *   publishes the same open/current/at/status columns, so the rows explode
- *   the same way; the time-bucket ladder and the close simply come back
- *   empty, which is right — neither is a thing an in-play price has. Cached
- *   on a short TTL because the event page polls this view every ten seconds
- *   and the stream rewrites the rows within five.
- */
-export async function apiOddsForFixture(fixtureId, sport, { live = false, currentOnly = false, opens = !currentOnly && !live } = {}) {
-  if (!sport) return [];
-  const explodeAll = (pivotRows, isLive) => {
-    const out = [];
-    for (const r of pivotRows) {
-      if (r.optic_fixture_id !== fixtureId) continue;
-      for (const row of explode(r, { live: isLive, unsettled: currentOnly })) {
-        row.fixture_id = fixtureId;
-        out.push(row);
-      }
-    }
-    return out;
-  };
-  const one = (extra) =>
-    cachedDrain(`fx:${fixtureId}:${extra.live ?? '0'}:${currentOnly ? 'c' : 'h'}`, () =>
-      drain('odds-api', {
-        sport,
-        fixture_id: fixtureId,
-        include_stale: 'true',
-        /*
-         * `flucs` used to be the ONLY way to see an upcoming fixture here, so
-         * dropping it to avoid buying the ladder silently emptied every one of
-         * them -- bets priced fell from 96 of 150 to 50 and the columns read
-         * blank. `include_unsettled` now does that job on its own, so the two
-         * can finally be asked for separately.
-         */
-        ...(currentOnly ? { include_unsettled: 'true' } : { flucs: 'true' }),
-        ...extra,
-      }),
-      extra.live ? FX_LIVE_TTL_MS : undefined,
-    ).catch(() => []);
-
-  if (live) {
-    // Opens are not merged: a live row's `_open` is its own in-play opener,
-    // and the settled surface's `book_opens` is the pregame one.
-    /*
-     * The move-by-move series, for the head-to-head market only.
-     *
-     * The wide pivot carries open, current and status per book and nothing
-     * between; the series the stream writes (`flucs`, the last 200 moves) is
-     * published only by the tall shape. Fetched for the one market the page
-     * lists moves for and merged onto the exploded rows by outcome and
-     * book, so the event page's move log and hover sparkline draw the same
-     * history a local instance reads straight off the collection.
-     */
-    const [wide, tall] = await Promise.all([
-      one({ live: 'true' }),
-      cachedDrain(`fx:${fixtureId}:live:tall:moneyline`, () =>
-        drain('odds-api', {
-          sport,
-          fixture_id: fixtureId,
-          include_stale: 'true',
-          flucs: 'true',
-          live: 'true',
-          shape: 'tall',
-          market: 'moneyline',
-        }),
-        FX_LIVE_TTL_MS,
-      ).catch(() => []),
-    ]);
-    const rows = explodeAll(wide, true);
-    const series = new Map();
-    for (const r of tall) {
-      if (r.is_lay || !Array.isArray(r.flucs) || r.outcome_no == null) continue;
-      series.set(`${r.market_id}|${r.outcome_no}|${canonicalBook(r.sportsbook)}`, r.flucs);
-    }
-    for (const row of rows) {
-      if (row.is_lay) continue;
-      const f = series.get(`${row.market_id}|${row.outcome_no}|${row.sportsbook}`);
-      if (f?.length) row.flucs = f.filter((x) => x && typeof x.p === 'number' && x.t);
-    }
-    return rows;
-  }
-
-  // No live pivot. This site shows pre-match prices only, so the in-play feed
-  // is not a source here at all — see the merge note below.
-  /*
-   * `opens` is a SECOND REQUEST per fixture, and the settled view does not
-   * read it.
-   *
-   * Measured on the live surface: every fixture here costs exactly two calls,
-   * the pivot and this one. That is invisible at the forty fixtures the ticker
-   * asks for and decisive at the 1,283 behind fourteen days of settled bets —
-   * 2,566 requests, which at eight a second is 321 seconds against a
-   * 300-second function. The settled build was therefore guaranteed to hit its
-   * own deadline and return about half the window.
-   *
-   * Nothing in ticker.mjs reads `open_price`: the closing comparison is
-   * `close_price` through `fairsFor`, and the "vs open" column on the pending
-   * page comes from our own brand stores, not from here. The board, the event
-   * page and movers do read it, so the default is unchanged and only the
-   * caller that has no use for it opts out.
-   */
-  const [closing, sp] = await Promise.all([
-    one({}),
-    opens
-      ? call('odds-sp-api', { fixture_id: fixtureId }).then((b) => b.data ?? []).catch(() => [])
-      : Promise.resolve([]),
-  ]);
-
-  /*
-   * Closing pivot only — never the live one.
-   *
-   * This board is a pre-match product: every price on it should be one you
-   * could have taken before the off. The live feed quotes the same market
-   * mid-game, and the two are not comparable. Merging them put FanDuel at 81
-   * for the Phillies next to Pinnacle at 2.01 — both "correct", three hours
-   * apart, and meaningless side by side. Most books close their market at the
-   * off; the one or two still trading in-play then looked like outliers rather
-   * than what they were.
-   *
-   * The earlier rule here was "live wins while it is still trading", which is
-   * right only until a close exists. Rather than restore that subtlety, the
-   * live pivot is simply not consulted: the closing pivot already carries both
-   * halves of the fixture's life — `current` for an upcoming game (it tracks
-   * pre-match moves right up to the off) and `close` plus the full
-   * open/6h/3h/1h/30m/10m ladder once it starts.
-   *
-   * The live feed is still used elsewhere, but only to ENUMERATE fixtures and
-   * to decide whether one is in play (apiFixtures) — never for a price.
-   */
-  const rows = explodeAll(closing, false);
-  return mergeOpens(rows, sp);
-}
-
-/** The fixtures the surface knows about for a sport, in board shape. */
-/**
- * One fixture by id, outside the board's rolling window.
- *
- * Asked for BY ID rather than by date or by market, because neither narrowing
- * holds across the whole archive:
- *
- *   a third of fixture ids carry no date — 53,442 of 167,493 look like
- *   "afc_-_champions_league:0AB36224A28A" — so deriving the day from the id
- *   worked for the dated two thirds and silently returned nothing for the rest.
- *
- *   filtering to head-to-head loses any fixture that never had one. Darts,
- *   volleyball and rugby union fixtures exist with no h2h market at all, and
- *   their pages would not open while their odds sat there.
- *
- * Fanned out across sports because the id does not say which one it is. One
- * fixture per call is a small ask and the answer is cached, so it costs a
- * single cold page load.
- */
-export async function apiFixtureById(fixtureId, sports) {
-  if (!fixtureId) return null;
-  const list = sports?.length ? sports : FALLBACK_SPORTS;
-
-  const hits = await Promise.all(
-    list.map(async (sport) => {
-      const rows = await cachedDrain(`fx-by-id:${sport}:${fixtureId}`, () =>
-        drain('odds-api', {
-          sport, fixture_id: fixtureId, include_stale: 'true', ...UNSETTLED,
-        }, { maxPages: 1 }),
-      ).catch(() => []);
-      const row = rows.find((r) => r.optic_fixture_id === fixtureId);
-      return row ? { row, sport } : null;
-    }),
+export async function apiOddsForFixture(fixtureId, _sport, { live = false, currentOnly = false } = {}) {
+  if (!fixtureId) return [];
+  const view = live ? 'live' : 'pre';
+  const body = await cachedDrain(
+    `fx:${fixtureId}:${view}:${currentOnly ? 's' : 'h'}`,
+    () => call('fixture-odds', { id: fixtureId, view, ...(currentOnly ? { slim: '1' } : {}) }),
+    live ? FX_LIVE_TTL_MS : BOARD_TTL_MS,
   );
-  const hit = hits.find(Boolean);
-  return hit ? fixtureFromPivot(hit.row, hit.sport, Date.now(), new Set()) : null;
+  return (body.data ?? []).map(canonicalRow);
 }
-
 /**
- * Fixture metadata only, for callers that never ask whether a game is live.
- *
- * The ticker reads exactly seven fields off a fixture -- sport, category,
- * tournament, home_team, away_team, event_name, scheduled_start -- and not one
- * of them is live state. It was paying for all three of buildFixtures' drains
- * anyway, and on a cold build those were 4.7s of the ticker's 9.2s.
- *
- * Two of the three are kept because they decide WHICH fixtures exist, and both
- * share their cached result with the board (`odds:<sport>:false` and
- * `odds:<sport>:true`), so they are usually paid for already. The third,
- * liveRows, is dropped: it exists solely to work out which fixtures are in play,
- * its `live:<sport>` key is shared with nothing, and a third of the ticker's
- * upstream work went on an answer it discards.
- *
- * Deliberately NOT a thinner request. Dropping the live pivot too would lose the
- * fixtures that exist only there -- a game between the final whistle and
- * settlement has no active closing price -- and those are exactly the
- * just-finished games a bet feed is full of.
+ * One fixture by id, any sport, outside the board's window if need be. The
+ * surface looks it up by id, so this no longer fans out across every sport.
  */
+export async function apiFixtureById(fixtureId) {
+  if (!fixtureId) return null;
+  let body;
+  try {
+    body = await cachedDrain(`fixture:${fixtureId}`, () => call('fixture', { id: fixtureId }), BOARD_TTL_MS);
+  } catch (e) {
+    if (/ 404:/.test(String(e?.message))) return null;
+    throw e;
+  }
+  const r = body?.data;
+  if (!r) return null;
+  const now = Date.now();
+  return fixtureFromPivot(r, r.sport, now, quotedLiveIds((body.prices ?? []).map(canonicalRow), now));
+}
+/** The fixtures the surface knows about for a sport, in board shape. */
 export function apiFixtureIndex(sport) {
-  // Short-lived, because the explode-and-map pass over every sport's pivot is
-  // CPU the ticker was repeating on each build even when the drains were warm.
-  return cached(`fxindex:${sport}`, PIVOT_TTL_MS, async () => {
-    const w = boardWindow();
-    const [closing, liveAll, outrights] = await Promise.all([
-      cachedDrain(`odds:${sport}:false`, () =>
-        drainSpan({ sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED },
-          w.date_from, w.date_to),
-      ),
-      // Not worth waiting for here either — this index makes no live claim at
-      // all (see NO_LIVE below), so these rows only ever add fixtures.
-      cachedDrainSoon(`odds:${sport}:true`, () =>
-        drainSpan({ sport, live: 'true', include_stale: 'true', market: BOARD_MARKET },
-          w.date_from, w.date_to),
-      ),
-      outrightDrain(sport, w),
-    ]);
-    const now = Date.now();
-    const byId = new Map();
-    for (const r of [...liveAll, ...closing, ...outrights]) {
-      if (!r.optic_fixture_id || byId.has(r.optic_fixture_id)) continue;
-      // No live set: this index makes no claim about what is in play.
-      byId.set(r.optic_fixture_id, fixtureFromPivot(r, sport, now, NO_LIVE));
-    }
-    return [...byId.values()];
-  });
-}
-
-const NO_LIVE = new Set();
-
-/**
- * The outright pivot for a sport that needs one, or nothing.
- *
- * Shared by buildFixtures and apiFixtureIndex under one cache key, for the same
- * reason the h2h drains are: the request is byte-identical, and two keys over
- * one request is two drains.
- */
-function outrightDrain(sport, window, keySuffix = '') {
-  if (!OUTRIGHT_SPORTS.has(String(sport).toLowerCase())) return Promise.resolve([]);
-  return cachedDrain(`outright:${sport}${keySuffix}`, () =>
-    drainSpan({ sport, include_stale: 'true', market: OUTRIGHT_MARKET, ...UNSETTLED },
-      window.date_from, window.date_to),
-  ).catch(() => []);
+  return apiFixtures(sport);
 }
 
 export async function apiFixtures(sport) {
@@ -1474,80 +641,11 @@ export async function apiFixtures(sport) {
 export async function apiFixturesForDay(sport, date) {
   return buildFixtures(sport, { date_from: date, date_to: date }, `:day:${date}`);
 }
-
-/**
- * `keySuffix` exists because the drain keys below deliberately carry no window.
- *
- * The board shares one cached drain per sport with apiOddsForSport, and that
- * sharing is load bearing — see the notes on each key. The consequence is that
- * the `window` argument is ignored the moment the cache is warm, so asking for
- * a different window with the same keys returns the BOARD's rows and nothing
- * says so. A per-day request passes its date as the suffix and gets its own
- * entry; the board passes nothing and keeps the shared one.
- */
 async function buildFixtures(sport, window, keySuffix = '') {
-  const [closing, liveAll, outrights] = await Promise.all([
-    // SAME key apiOddsForSport uses. These two drain the identical request and
-    // deliberately share one cached result; giving this one a window-specific
-    // key split them in two, doubled the upstream work per sport, and the extra
-    // drains then failed — which `pricesFor` swallows, so the deployed ticker
-    // simply showed no comparison prices at all and said nothing was wrong.
-    cachedDrain(`odds:${sport}:false${keySuffix}`, () =>
-      drainSpan({ sport, include_stale: 'true', market: BOARD_MARKET, ...UNSETTLED },
-        window.date_from, window.date_to),
-    ),
-    // Enumeration needs the stale live rows too. A match that has just finished
-    // has no active price left, and is not yet settled into `odds_sp` — so it
-    // is in neither of the other two queries, and fell off the board entirely
-    // for the hour or so between the final whistle and settlement. Asking for
-    // stale live rows is what covers that gap.
-    // SAME key apiOddsForSport({ live: true }) uses, for the same reason the
-    // closing drain above shares one: the request is byte-identical, and two
-    // keys over one request is two drains. The pulse bar reads these rows for
-    // the live heartbeat and must not pay for a second copy of them.
-    cachedDrainSoon(`odds:${sport}:true${keySuffix}`, () =>
-      drainSpan({ sport, live: 'true', include_stale: 'true', market: BOARD_MARKET },
-        window.date_from, window.date_to),
-    ),
-    // Awaited, unlike the live drain above: for golf this is the ONLY place its
-    // fixtures come from, so deferring it would mean a board with no golf on it
-    // rather than one missing a handful of in-play rows.
-    outrightDrain(sport, window, keySuffix),
-  ]);
-  /*
-   * The live-ACTIVE drain is now fetched only if something actually needs it.
-   *
-   * Its rows exist for one purpose: `liveIds`, which `impliedStatus` consults
-   * when the pivot carries no usable `fixture_status`. The surface publishes
-   * that field on every row now — measured at 0 missing across 2,200 rows in
-   * four sports — so this was a request per sport, sixteen of them on a cold
-   * board, feeding a fallback that never fired.
-   *
-   * The test is the same one fixtureFromPivot applies, so the two cannot drift:
-   * if no row needs the fallback, no drain is made, and liveness comes entirely
-   * from the published status.
-   *
-   * Still actively-quoted prices only when it IS fetched — a stale live row
-   * outlives its game, so the stale drain's rows would report finished matches
-   * as in play.
-   */
-  const rows = [...liveAll, ...closing, ...outrights];
-  const unknown = (r) => {
-    const t = String(r.fixture_status ?? '').toLowerCase();
-    return !t || t === 'unknown';
-  };
-  const liveActive = rows.some(unknown) ? await liveRows(sport).catch(() => []) : [];
-  const liveIds = new Set(liveActive.map((r) => r.optic_fixture_id).filter(Boolean));
+  const { fixtures, prices } = await boardFor(sport, window, keySuffix);
   const now = Date.now();
-  const byId = new Map();
-  // Live first, so an in-play fixture wins over any closing row for it — see
-  // `rows` above, built before the liveActive decision because that decision
-  // reads it.
-  for (const r of rows) {
-    if (!r.optic_fixture_id || byId.has(r.optic_fixture_id)) continue;
-    byId.set(r.optic_fixture_id, fixtureFromPivot(r, sport, now, liveIds));
-  }
-  return [...byId.values()];
+  const liveIds = quotedLiveIds(prices, now);
+  return fixtures.map((r) => fixtureFromPivot(r, sport, now, liveIds));
 }
 
 /**
