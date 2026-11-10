@@ -26,6 +26,7 @@ import { EventDetailsPanel } from './EventDetailsPanel';
 import { BetsPanel } from './BetsPanel';
 import { useCapabilities } from '../lib/capabilitiesContext';
 import { useParam } from '../lib/urlState';
+import type { OddsView } from '../lib/db';
 
 // Selection + Best (+ Betfair back/lay for two-sided events), then one column
 // per fixed-odds book. Golf outrights have no exchange, so those two drop out.
@@ -181,9 +182,69 @@ interface Props {
   /** Book columns in display order — computed per event by buildMarkets. */
   books: Bookmaker[];
   loading: boolean;
+  /** Which price set the grid holds — see OddsView. Owned by EventView, which fetches it. */
+  oddsView: OddsView;
+  onOddsView: (v: OddsView) => void;
 }
 
-export function EventDetail({ event, now, markets, books, loading }: Props) {
+/**
+ * Pre-match | In-play. A segmented control rather than two more pills, so it
+ * reads as a different axis from the market groups beside it: those choose
+ * WHICH markets, this chooses WHEN the price was quoted.
+ */
+function OddsViewToggle({
+  view,
+  onChange,
+  inPlay,
+}: {
+  view: OddsView;
+  onChange: (v: OddsView) => void;
+  /** The game is on now — the dot pulses. Off, the in-play set is the last one seen. */
+  inPlay: boolean;
+}) {
+  const options: { key: OddsView; label: string }[] = [
+    { key: 'pre', label: 'Pre-match' },
+    { key: 'live', label: 'In-play' },
+  ];
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Price view"
+      className="ml-auto flex shrink-0 items-center gap-0.5 rounded-md border border-surface-border bg-surface-raised p-0.5"
+    >
+      {options.map((o) => {
+        const on = o.key === view;
+        return (
+          <button
+            key={o.key}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            onClick={() => onChange(o.key)}
+            className={`flex items-center gap-1.5 rounded px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
+              on
+                ? o.key === 'live'
+                  ? 'bg-emerald-500/15 text-emerald-300'
+                  : 'bg-white/10 text-slate-100'
+                : 'text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            {o.key === 'live' && (
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  inPlay ? 'animate-pulse bg-emerald-400' : on ? 'bg-emerald-400/60' : 'bg-slate-600'
+                }`}
+              />
+            )}
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+export function EventDetail({ event, now, markets, books, loading, oddsView, onOddsView }: Props) {
   const cd = countdownFor(event, now);
   const { home, away, homeScore, awayScore, periodScores } = event;
   const status = effectiveStatus(event, now);
@@ -265,6 +326,15 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
   const activeKinds =
     MARKET_GROUPS.find((g) => g.key === activeGroup)?.kinds ?? MARKET_GROUPS[0].kinds;
   const shownMarkets = markets.filter((m) => activeKinds.includes(m.kind));
+  /*
+   * The toggle is offered once there can be in-play rows to switch to: from
+   * kick-off on, and after the final whistle (the last in-play prices stay
+   * readable beside the close). An upcoming fixture has only pre-match, so
+   * the control would be a dead end there — unless the URL already asks for
+   * in-play, in which case it must be possible to get back.
+   */
+  const showOddsView =
+    !outright && (status === 'live' || status === 'final' || oddsView === 'live');
   // Selection labels carry a competitor name; map it back to its flag.
   const countryFor = (team: string) =>
     team === home ? event.homeCountry : team === away ? event.awayCountry : null;
@@ -421,6 +491,11 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
           tabs={groupTabs}
           active={activeGroup}
           onChange={setMarketGroup}
+          trailing={
+            showOddsView ? (
+              <OddsViewToggle view={oddsView} onChange={onOddsView} inPlay={status === 'live'} />
+            ) : null
+          }
         />
       )}
       {tab === 'markets' && (status === 'cancelled' ? (
@@ -430,8 +505,25 @@ export function EventDetail({ event, now, markets, books, loading }: Props) {
       ) : loading ? (
         <MarketsSkeleton />
       ) : shownMarkets.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center text-sm text-slate-500">
-          No odds available for this event.
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-slate-500">
+          {oddsView === 'live' ? (
+            <>
+              <span>
+                {status === 'live'
+                  ? 'No book is pricing this event in-play yet.'
+                  : 'No in-play prices were seen for this event.'}
+              </span>
+              <button
+                type="button"
+                onClick={() => onOddsView('pre')}
+                className="rounded-md border border-surface-border px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-white/5"
+              >
+                Show pre-match
+              </button>
+            </>
+          ) : (
+            'No odds available for this event.'
+          )}
         </div>
       ) : (
         // Scrolling detaches the card from the cell it describes, so drop it.

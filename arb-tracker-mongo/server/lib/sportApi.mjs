@@ -431,6 +431,8 @@ function cachedDrain(key, produce, ttlMs = PIVOT_TTL_MS) {
  * pivots, not this.
  */
 const LIVE_TTL_MS = 15_000;
+/** One fixture's in-play rows, for the event page's live view (see apiOddsForFixture). */
+const FX_LIVE_TTL_MS = 5_000;
 
 /**
  * The cached drain if we already have one, otherwise start it and return empty.
@@ -1217,8 +1219,29 @@ async function liveRows(sport) {
  *   `current_price` and nothing else. The event page leaves it false and gets
  *   the full history it draws.
  */
-export async function apiOddsForFixture(fixtureId, sport, { currentOnly = false, opens = !currentOnly } = {}) {
+/**
+ * @param {object} [opts]
+ * @param {boolean} [opts.live] The in-play rows instead of the pregame ones.
+ *   `live=true` with `flucs=true` on the surface selects `is_live: true` and
+ *   publishes the same open/current/at/status columns, so the rows explode
+ *   the same way; the time-bucket ladder and the close simply come back
+ *   empty, which is right — neither is a thing an in-play price has. Cached
+ *   on a short TTL because the event page polls this view every ten seconds
+ *   and the stream rewrites the rows within five.
+ */
+export async function apiOddsForFixture(fixtureId, sport, { live = false, currentOnly = false, opens = !currentOnly && !live } = {}) {
   if (!sport) return [];
+  const explodeAll = (pivotRows, isLive) => {
+    const out = [];
+    for (const r of pivotRows) {
+      if (r.optic_fixture_id !== fixtureId) continue;
+      for (const row of explode(r, { live: isLive, unsettled: currentOnly })) {
+        row.fixture_id = fixtureId;
+        out.push(row);
+      }
+    }
+    return out;
+  };
   const one = (extra) =>
     cachedDrain(`fx:${fixtureId}:${extra.live ?? '0'}:${currentOnly ? 'c' : 'h'}`, () =>
       drain('odds-api', {
@@ -1235,7 +1258,14 @@ export async function apiOddsForFixture(fixtureId, sport, { currentOnly = false,
         ...(currentOnly ? { include_unsettled: 'true' } : { flucs: 'true' }),
         ...extra,
       }),
+      extra.live ? FX_LIVE_TTL_MS : undefined,
     ).catch(() => []);
+
+  if (live) {
+    // Opens are not merged: a live row's `_open` is its own in-play opener,
+    // and the settled surface's `book_opens` is the pregame one.
+    return explodeAll(await one({ live: 'true' }), true);
+  }
 
   // No live pivot. This site shows pre-match prices only, so the in-play feed
   // is not a source here at all — see the merge note below.
@@ -1262,18 +1292,6 @@ export async function apiOddsForFixture(fixtureId, sport, { currentOnly = false,
       ? call('odds-sp-api', { fixture_id: fixtureId }).then((b) => b.data ?? []).catch(() => [])
       : Promise.resolve([]),
   ]);
-
-  const explodeAll = (pivotRows, isLive) => {
-    const out = [];
-    for (const r of pivotRows) {
-      if (r.optic_fixture_id !== fixtureId) continue;
-      for (const row of explode(r, { live: isLive, unsettled: currentOnly })) {
-        row.fixture_id = fixtureId;
-        out.push(row);
-      }
-    }
-    return out;
-  };
 
   /*
    * Closing pivot only — never the live one.

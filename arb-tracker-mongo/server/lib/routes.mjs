@@ -58,7 +58,7 @@ import {
  * five-minute settle. The browser polls on the same beat; anything longer
  * here would answer most of those polls from this cache unchanged.
  */
-const TTL = { board: 15_000, pulse: 45_000, odds: 10_000, day: 5 * 60_000, meta: 10 * 60_000, bets: 20_000, mapping: 5 * 60_000 };
+const TTL = { board: 15_000, pulse: 45_000, odds: 10_000, liveOdds: 5_000, day: 5 * 60_000, meta: 10 * 60_000, bets: 20_000, mapping: 5 * 60_000 };
 
 /* ---------------------------------------------------------------- routes */
 
@@ -257,11 +257,18 @@ const ROUTES = {
     const id = url.searchParams.get('fixtureId') ?? '';
     // The API source needs the sport to know which pivot to pull.
     const sport = url.searchParams.get('sport') ?? '';
+    // `live=1` is the event page's in-play view: the stream's rows, on a
+    // shorter beat because the page polls them every ten seconds.
+    const live = url.searchParams.get('live') === '1';
     // The sport belongs in the key. Without it the first caller's sport answered
     // for every later one, so a request that would have returned nothing was
     // served a warm, correct result instead — which is exactly what hid the
     // capitalisation bug above until the network tab showed the real URL.
-    return cached(`odds:${id}:${sport}`, TTL.odds, () => oddsForFixture(id, sport));
+    return cached(
+      `odds:${id}:${sport}:${live ? 'live' : 'pre'}`,
+      live ? TTL.liveOdds : TTL.odds,
+      () => oddsForFixture(id, sport, { live }),
+    );
   },
 
   // The ticker asks about the whole board at once. A POST carries the id list

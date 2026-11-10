@@ -153,7 +153,10 @@ export default async function handler(req, res) {
     const LIVE_FEED = new Set(['/api/ticker']);
     const statusful = CHEAP_AND_LIVE.has(url.pathname);
     const perFixture = PER_FIXTURE.has(url.pathname);
-    const liveFeed = LIVE_FEED.has(url.pathname);
+    // The event page's in-play view polls every ten seconds; the per-fixture
+    // window would answer two of every three polls from the browser.
+    const liveOdds = url.pathname === '/api/odds' && url.searchParams.get('live') === '1';
+    const liveFeed = LIVE_FEED.has(url.pathname) || liveOdds;
     /*
      * Behind a sign-in these become PRIVATE.
      *

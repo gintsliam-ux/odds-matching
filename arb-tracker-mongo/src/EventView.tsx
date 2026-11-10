@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { EventDetail } from './components/EventDetail';
-import { fetchOdds } from './lib/db';
+import { fetchOdds, type OddsView } from './lib/db';
 import { buildMarkets, type Bookmaker, type MarketGroup } from './lib/markets';
+import { effectiveStatus } from './lib/countdown';
 import { eventPath, eventSlug } from './lib/routing';
+import { useParam } from './lib/urlState';
 import { EventPageSkeleton } from './components/Skeleton';
 import type { SportEvent } from './lib/types';
 
@@ -34,6 +36,18 @@ export default function EventView() {
   const selected = events.find((e) => e.id === fixtureId) ?? null;
 
   /*
+   * Pre-match or in-play prices, in the URL like the tab is.
+   *
+   * The default follows the game: a fixture in play opens on its in-play
+   * prices, anything else on pre-match. `useParam` drops a value equal to the
+   * default, so the query only carries a choice someone actually made — and
+   * when a game kicks off under an untouched page, the default moves with it.
+   */
+  const inPlay = !!selected && effectiveStatus(selected, now) === 'live';
+  const [oddsParam, setOddsParam] = useParam('odds', inPlay ? 'live' : 'pre');
+  const oddsView: OddsView = oddsParam === 'live' ? 'live' : 'pre';
+
+  /*
    * The odds are stored WITH the fixture they belong to, and "loading" is
    * derived from that rather than tracked alongside it.
    *
@@ -48,8 +62,15 @@ export default function EventView() {
    * Keyed state cannot be out of step with the render: either what we hold is
    * for the fixture being shown or it isn't, and if it isn't, we are loading.
    */
-  const [odds, setOdds] = useState<{ id: string; markets: MarketGroup[]; books: Bookmaker[] } | null>(null);
-  const ready = !!selected && odds?.id === selected.id;
+  const [odds, setOdds] = useState<{
+    id: string;
+    view: OddsView;
+    markets: MarketGroup[];
+    books: Bookmaker[];
+  } | null>(null);
+  // Keyed on the view too: flipping to in-play must not show pre-match rows
+  // under an in-play label while the fetch is away.
+  const ready = !!selected && odds?.id === selected.id && odds.view === oddsView;
   const markets = ready ? odds!.markets : [];
   const books = ready ? odds!.books : [];
 
@@ -68,12 +89,13 @@ export default function EventView() {
      * rather than a request having failed. The retry costs one request on the
      * rare path and nothing on the normal one.
      */
+    const view = oddsView;
     const load = (attempt = 0): Promise<void> =>
-      fetchOdds(selected)
+      fetchOdds(selected, view)
         .then((rows) => {
           if (cancelled) return;
           const built = buildMarkets(rows, selected.home, selected.away, selected.league.id);
-          setOdds({ id, markets: built.groups, books: built.books });
+          setOdds({ id, view, markets: built.groups, books: built.books });
         })
         .catch((e) => {
           if (cancelled) return;
@@ -83,7 +105,7 @@ export default function EventView() {
           console.error(e);
           // Stamped with the id so the page stops loading and says so, rather
           // than showing a skeleton for a request that is not coming back.
-          setOdds({ id, markets: [], books: [] });
+          setOdds({ id, view, markets: [], books: [] });
         });
 
     load();
@@ -91,30 +113,33 @@ export default function EventView() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id]);
+  }, [selected?.id, oddsView]);
 
-  // Silently refresh odds every 30s, updating markets in place — no loading
-  // toggle, so the grid never flashes.
+  // Silently refresh odds in place — no loading toggle, so the grid never
+  // flashes. Every 30s for pre-match; every 10s for in-play, where the stream
+  // rewrites the rows within five seconds and the API serves them on a
+  // five-second cache.
   useEffect(() => {
     if (!selected) return;
     let cancelled = false;
+    const view = oddsView;
     const id = setInterval(() => {
-      fetchOdds(selected)
+      fetchOdds(selected, view)
         .then((rows) => {
           if (cancelled) return;
           const built = buildMarkets(rows, selected.home, selected.away, selected.league.id);
-          // Same id, so this updates in place and `ready` never drops — which
-          // is what keeps a refresh from flashing the grid.
-          setOdds({ id: selected.id, markets: built.groups, books: built.books });
+          // Same id and view, so this updates in place and `ready` never
+          // drops — which is what keeps a refresh from flashing the grid.
+          setOdds({ id: selected.id, view, markets: built.groups, books: built.books });
         })
         .catch(() => {});
-    }, 30_000);
+    }, view === 'live' ? 10_000 : 30_000);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id]);
+  }, [selected?.id, oddsView]);
 
   // Normalise the URL to the canonical name slug for the fixture.
   useEffect(() => {
@@ -131,6 +156,8 @@ export default function EventView() {
         markets={markets}
         books={books}
         loading={!ready}
+        oddsView={oddsView}
+        onOddsView={setOddsParam}
       />
     );
   }

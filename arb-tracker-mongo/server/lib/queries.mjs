@@ -798,10 +798,15 @@ function foldBookAliases(rows, aliases) {
 }
 
 /**
- * The odds rows for a single fixture. In-play rows (`is_live: true`) are
- * excluded — we price off pregame/close odds only (the live capture covers
- * sports it shouldn't and its rows lack `outcome_no`), so they're filtered at
- * the source. Rides the `{fixture_id, is_live, status}` index.
+ * The odds rows for a single fixture, ONE side of `is_live` at a time.
+ *
+ * Pregame and in-play are separate rows per book and selection, and the grid
+ * shows one or the other — never both, because a closing price and a price
+ * quoted mid-game are not comparable side by side (see the merge note in
+ * apiOddsForFixture). The default is pregame; `live` asks for the in-play
+ * rows the stream writes (capture.mjs runStream), which carry their own
+ * open/current/flucs and a `suspended` status when the book pulls the market.
+ * Rides the `{fixture_id, is_live, status}` index either way.
  */
 /**
  * TAB's own prices for a TAB-sourced fixture, from the mirror.
@@ -828,7 +833,7 @@ async function tabOddsFor(fixtureId) {
   }
 }
 
-export async function oddsForFixture(fixtureId, sport) {
+export async function oddsForFixture(fixtureId, sport, { live = false } = {}) {
   if (!fixtureId) return [];
   /*
    * Our own two brands are appended to whatever the field is, on every path.
@@ -842,16 +847,17 @@ export async function oddsForFixture(fixtureId, sport) {
 
   if (isApi) {
     // Checked first and returned whole: a fixture with mirrored TAB odds has
-    // nothing on the surface to merge with.
-    const tab = await tabOddsFor(fixtureId);
+    // nothing on the surface to merge with. The mirror holds pregame rows
+    // only, so the in-play view goes straight to the surface.
+    const tab = live ? [] : await tabOddsFor(fixtureId);
     if (tab.length) {
       return [...foldBookAliases(tab.map(serializeOdds), await bookAliases()), ...(await ours)];
     }
-    return [...(await apiOddsForFixture(fixtureId, sport)), ...(await ours)];
+    return [...(await apiOddsForFixture(fixtureId, sport, { live })), ...(await ours)];
   }
   const [rows, aliases] = await Promise.all([
     (await coll('odds'))
-      .find({ fixture_id: fixtureId, is_live: false })
+      .find({ fixture_id: fixtureId, is_live: live })
       .project(ODDS_PROJECTION)
       .sort({ id: 1 })
       .toArray(),

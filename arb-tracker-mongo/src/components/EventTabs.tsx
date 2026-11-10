@@ -93,14 +93,19 @@ export function SubTabs<T extends string>({
   active,
   onChange,
   label,
+  trailing,
 }: {
   tabs: SubTab<T>[];
   active: T;
   onChange: (t: T) => void;
   label: string;
+  /** A control that sits at the right end of the row — the price-view toggle. */
+  trailing?: React.ReactNode;
 }) {
   // A single option is a statement, not a choice — don't draw a picker for it.
-  if (tabs.length < 2) return null;
+  // The row still renders when something trails it, with the pills left out.
+  if (tabs.length < 2 && !trailing) return null;
+  const pills = tabs.length >= 2;
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     const dir = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
@@ -117,7 +122,7 @@ export function SubTabs<T extends string>({
       onKeyDown={onKeyDown}
       className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-surface-border/60 bg-surface-raised/40 px-3 py-2"
     >
-      {tabs.map((t) => {
+      {pills && tabs.map((t) => {
         const selected = t.key === active;
         return (
           <button
@@ -139,6 +144,7 @@ export function SubTabs<T extends string>({
           </button>
         );
       })}
+      {trailing}
     </div>
   );
 }
