@@ -48,6 +48,18 @@ export default function EventView() {
   const oddsView: OddsView = oddsParam === 'live' ? 'live' : 'pre';
 
   /*
+   * The query travels with you between events, so `odds=live` chosen on one
+   * game arrived on the next — and a finished or upcoming game opened on an
+   * in-play view that is empty or stale. Landing on a game that is not in
+   * play puts the view back to pre-match; choosing In-play on THAT page
+   * still sticks, because this runs only when the fixture changes.
+   */
+  useEffect(() => {
+    if (selected && !inPlay && oddsParam === 'live') setOddsParam('pre');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
+
+  /*
    * The odds are stored WITH the fixture they belong to, and "loading" is
    * derived from that rather than tracked alongside it.
    *
