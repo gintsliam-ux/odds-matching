@@ -53,12 +53,14 @@ const MIRRORED = new Set([
 ]);
 
 const client = URI
-  ? new MongoClient(URI, { serverSelectionTimeoutMS: 10_000, maxPoolSize: 12 })
+  // appName: names this process in the NAS's currentOp, which otherwise sees
+  // every Mac as the same Docker bridge address.
+  ? new MongoClient(URI, { serverSelectionTimeoutMS: 10_000, maxPoolSize: 12, appName: 'sports-odds-desk' })
   : null;
 
 // Atlas is shared with the scrapers, so the deployed site is a light reader.
 const mirrorClient = MIRROR_URI
-  ? new MongoClient(MIRROR_URI, { serverSelectionTimeoutMS: 15_000, maxPoolSize: 6 })
+  ? new MongoClient(MIRROR_URI, { serverSelectionTimeoutMS: 15_000, maxPoolSize: 6, appName: 'sports-odds-desk' })
   : null;
 
 let connecting = null;
