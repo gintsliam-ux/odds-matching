@@ -307,8 +307,11 @@ export default function App() {
     };
   }, []);
 
-  // The board auto-polls — no manual refresh. Pull fresh events (statuses, new
-  // fixtures) every 60s and nudge the open event's odds to reload with them.
+  // The board auto-polls — no manual refresh. Pull fresh events (statuses,
+  // scores, clocks, new fixtures) every 15s and nudge the open event's odds
+  // to reload with them. 15s rather than 60s: the source now carries in-play
+  // state within seconds of it changing, and a minute between reads was the
+  // longest leg left in the chain.
   useEffect(() => {
     const id = setInterval(() => {
       fetchAllEvents()
@@ -317,7 +320,7 @@ export default function App() {
           setOddsNonce((n) => n + 1);
         })
         .catch(() => {});
-    }, 60_000);
+    }, 15_000);
     return () => clearInterval(id);
   }, []);
 

@@ -52,7 +52,13 @@ import {
  * quicker poll mean anything. It costs a rebuild every 20s on a busy instance,
  * which stale-while-revalidate hands over instantly and refreshes behind.
  */
-const TTL = { board: 45_000, pulse: 45_000, odds: 10_000, day: 5 * 60_000, meta: 10 * 60_000, bets: 20_000, mapping: 5 * 60_000 };
+/*
+ * Board at 15s, down from 45s, now that in-play scores, clocks and prices
+ * reach the source within seconds (the Optic stream on Air) rather than on a
+ * five-minute settle. The browser polls on the same beat; anything longer
+ * here would answer most of those polls from this cache unchanged.
+ */
+const TTL = { board: 15_000, pulse: 45_000, odds: 10_000, day: 5 * 60_000, meta: 10 * 60_000, bets: 20_000, mapping: 5 * 60_000 };
 
 /* ---------------------------------------------------------------- routes */
 
@@ -91,7 +97,9 @@ const ROUTES = {
 
   'GET /api/event': (url) => {
     const id = url.searchParams.get('id') ?? '';
-    return cached(`event:${id}`, TTL.board, () => eventById(id));
+    // A single event is what the open page re-reads for its score and
+    // clock, so it refreshes on the odds beat rather than the board's.
+    return cached(`event:${id}`, TTL.odds, () => eventById(id));
   },
 
   // Lazily loaded by the Details tab, so it is not on the board's hot path.

@@ -411,15 +411,26 @@ const PIVOT_STALE_MAX_MS = 3 * PIVOT_TTL_MS;
  * a refresh: the stale check deliberately comes before the in-flight check,
  * because joining the refresh is the very wait this exists to avoid.
  */
-function cachedDrain(key, produce) {
+function cachedDrain(key, produce, ttlMs = PIVOT_TTL_MS) {
   const hit = pivotCache.get(key);
   const age = hit ? Date.now() - hit.at : Infinity;
-  if (hit?.value && age < PIVOT_TTL_MS) return hit.value;
+  if (hit?.value && age < ttlMs) return hit.value;
 
   const refresh = hit?.inflight ?? beginDrain(key, produce, hit);
-  if (hit?.value && age < PIVOT_STALE_MAX_MS) return hit.value;
+  if (hit?.value && age < 3 * ttlMs) return hit.value;
   return refresh;
 }
+
+/*
+ * The in-play drain on its own, shorter beat.
+ *
+ * This is where a deployed board's scores, periods and clocks come from, and
+ * since the Optic stream started writing them on Air they change every few
+ * seconds at the source. A minute here was the longest leg left between the
+ * feed and the page. Prices keep the minute: they are read by the odds
+ * pivots, not this.
+ */
+const LIVE_TTL_MS = 15_000;
 
 /**
  * The cached drain if we already have one, otherwise start it and return empty.
@@ -1169,7 +1180,7 @@ async function liveRows(sport) {
     // quoting is the only honest signal that a game is still running.
     return await cachedDrain(`live:${sport}`, () =>
       drainBoard({ sport, live: 'true', market: BOARD_MARKET }),
-    );
+    LIVE_TTL_MS);
   } catch {
     return [];
   }

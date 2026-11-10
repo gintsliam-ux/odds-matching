@@ -135,6 +135,9 @@ export default async function handler(req, res) {
        * median of 3 minutes at Pinnacle, so 30s is still slower than the data.
        */
       '/api/movers',
+      // The ticker's prices, refreshed with the board; on the 300s window a
+      // live favourite's price sat five minutes behind the strip's own clock.
+      '/api/h2h',
     ]);
     const PER_FIXTURE = new Set(['/api/odds', '/api/event/details']);
     /*
@@ -164,12 +167,18 @@ export default async function handler(req, res) {
      * cache (see TTL in routes.mjs) is what spares the sixteen-sport drain,
      * not the CDN.
      */
+    /*
+     * Halved. The board polls every 15s and an open event's odds every 30s,
+     * and a browser window longer than the poll answers the poll from the
+     * browser's own copy — the function was never asked. The windows now sit
+     * just under their polls, so every poll reaches the function's cache.
+     */
     const window = liveFeed
       ? [5, 15]
       : statusful
-      ? [30, 60]
+      ? [10, 20]
       : perFixture
-        ? [60, 120]
+        ? [20, 40]
         // Still generous, but an hour of stale was long enough that a mapping
         // applied on one page load was missing from the next.
         : [300, 600];
