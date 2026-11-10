@@ -806,18 +806,8 @@ function foldBookAliases(rows, aliases) {
  * apiOddsForFixture). The default is pregame; `live` asks for the in-play
  * rows the stream writes (capture.mjs runStream), which carry their own
  * open/current/flucs and a `suspended` status when the book pulls the market.
- *
- * In-play is what you can take NOW, so only rows a book is actively quoting
- * come back: `active`, and priced inside LIVE_QUOTE_MAX_AGE_MS. On a live
- * tennis match the other rows were the majority — 62 suspended beside 8
- * active — and a grid of struck-through markets said nothing useful. A market
- * every book has pulled simply drops out of the view. Rides the
- * `{fixture_id, is_live, status}` index either way.
+ * Rides the `{fixture_id, is_live, status}` index either way.
  */
-/** How old an `active` in-play price may be and still count as quoted. The
- *  stream rewrites a traded price within seconds; one untouched this long is
- *  a book the reconcile has not yet caught up with. */
-const LIVE_QUOTE_MAX_AGE_MS = 15 * 60_000;
 /**
  * TAB's own prices for a TAB-sourced fixture, from the mirror.
  *
@@ -867,16 +857,7 @@ export async function oddsForFixture(fixtureId, sport, { live = false } = {}) {
   }
   const [rows, aliases] = await Promise.all([
     (await coll('odds'))
-      .find(
-        live
-          ? {
-              fixture_id: fixtureId,
-              is_live: true,
-              status: 'active',
-              current_at: { $gt: new Date(Date.now() - LIVE_QUOTE_MAX_AGE_MS) },
-            }
-          : { fixture_id: fixtureId, is_live: false },
-      )
+      .find({ fixture_id: fixtureId, is_live: live })
       .project(ODDS_PROJECTION)
       .sort({ id: 1 })
       .toArray(),

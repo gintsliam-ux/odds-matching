@@ -433,9 +433,6 @@ function cachedDrain(key, produce, ttlMs = PIVOT_TTL_MS) {
 const LIVE_TTL_MS = 15_000;
 /** One fixture's in-play rows, for the event page's live view (see apiOddsForFixture). */
 const FX_LIVE_TTL_MS = 5_000;
-/** How old an `active` in-play price may be and still count as quoted — same
- *  cut as queries.mjs applies on the Mongo path. */
-const LIVE_QUOTE_MAX_AGE_MS = 15 * 60_000;
 
 /**
  * The cached drain if we already have one, otherwise start it and return empty.
@@ -1267,14 +1264,7 @@ export async function apiOddsForFixture(fixtureId, sport, { live = false, curren
   if (live) {
     // Opens are not merged: a live row's `_open` is its own in-play opener,
     // and the settled surface's `book_opens` is the pregame one.
-    //
-    // Only what a book is quoting NOW — see oddsForFixture. The surface's
-    // flucs shape has no staleness filter of its own (that is on its plain
-    // live path), so the cut is applied here to the same fields.
-    const cut = Date.now() - LIVE_QUOTE_MAX_AGE_MS;
-    return explodeAll(await one({ live: 'true' }), true).filter(
-      (r) => r.status === 'active' && r.current_at && Date.parse(r.current_at) > cut,
-    );
+    return explodeAll(await one({ live: 'true' }), true);
   }
 
   // No live pivot. This site shows pre-match prices only, so the in-play feed
