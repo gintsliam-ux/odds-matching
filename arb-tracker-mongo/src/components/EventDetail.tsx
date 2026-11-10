@@ -199,7 +199,7 @@ function OddsViewToggle({
 }: {
   view: OddsView;
   onChange: (v: OddsView) => void;
-  /** The game is on now — the dot pulses. Off, the in-play set is the last one seen. */
+  /** The game is on now — the dot pulses. */
   inPlay: boolean;
 }) {
   const options: { key: OddsView; label: string }[] = [
@@ -327,14 +327,13 @@ export function EventDetail({ event, now, markets, books, loading, oddsView, onO
     MARKET_GROUPS.find((g) => g.key === activeGroup)?.kinds ?? MARKET_GROUPS[0].kinds;
   const shownMarkets = markets.filter((m) => activeKinds.includes(m.kind));
   /*
-   * The toggle is offered once there can be in-play rows to switch to: from
-   * kick-off on, and after the final whistle (the last in-play prices stay
-   * readable beside the close). An upcoming fixture has only pre-match, so
-   * the control would be a dead end there — unless the URL already asks for
-   * in-play, in which case it must be possible to get back.
+   * The toggle is offered while the game is on, which is the only time the
+   * in-play view holds anything: it shows what a book is quoting NOW, so a
+   * finished game's in-play set is empty by definition and an upcoming one
+   * has no such rows yet. The one exception is a URL that already asks for
+   * in-play, where the control has to be there to get back.
    */
-  const showOddsView =
-    !outright && (status === 'live' || status === 'final' || oddsView === 'live');
+  const showOddsView = !outright && (status === 'live' || oddsView === 'live');
   // Selection labels carry a competitor name; map it back to its flag.
   const countryFor = (team: string) =>
     team === home ? event.homeCountry : team === away ? event.awayCountry : null;
@@ -510,8 +509,8 @@ export function EventDetail({ event, now, markets, books, loading, oddsView, onO
             <>
               <span>
                 {status === 'live'
-                  ? 'No book is pricing this event in-play yet.'
-                  : 'No in-play prices were seen for this event.'}
+                  ? 'No book is quoting this event in-play right now.'
+                  : 'In-play prices are only shown while the game is on.'}
               </span>
               <button
                 type="button"
