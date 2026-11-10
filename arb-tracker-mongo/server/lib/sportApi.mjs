@@ -212,6 +212,17 @@ let lastRefill = Date.now();
  */
 let pausedUntil = 0;
 
+/**
+ * Whether the surface has told us this key is not rate-limited at all.
+ *
+ * The surface exempts its own keys and says so with
+ * `X-RateLimit-Limit: unlimited` on every answer. Once seen, the bucket below
+ * is skipped: pacing ourselves at eight a second against a limit that does
+ * not exist only made the board slower. A 429 can still arrive (the in-flight
+ * cap, or an older surface), and `pauseAll` still applies to it.
+ */
+let unlimited = false;
+
 /** Hold every request back for as long as the surface asked. */
 function pauseAll(ms) {
   const until = Date.now() + Math.min(ms, RETRY_AFTER_CAP_MS);
@@ -225,6 +236,7 @@ async function takeToken() {
       await new Promise((r) => setTimeout(r, wait));
       continue;
     }
+    if (unlimited) return;
     const now = Date.now();
     tokens = Math.min(BURST, tokens + ((now - lastRefill) / 1000) * RATE_PER_SEC);
     lastRefill = now;
@@ -264,6 +276,7 @@ async function callRaw(route, params) {
         signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
         headers: { accept: 'application/json' },
       });
+      if (res.headers.get('x-ratelimit-limit') === 'unlimited') unlimited = true;
       if (!res.ok) {
         const body = await res.text().catch(() => '');
         // A 4xx is our mistake — a bad sport, a bad key — and will not improve
