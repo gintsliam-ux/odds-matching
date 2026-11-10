@@ -1264,7 +1264,43 @@ export async function apiOddsForFixture(fixtureId, sport, { live = false, curren
   if (live) {
     // Opens are not merged: a live row's `_open` is its own in-play opener,
     // and the settled surface's `book_opens` is the pregame one.
-    return explodeAll(await one({ live: 'true' }), true);
+    /*
+     * The move-by-move series, for the head-to-head market only.
+     *
+     * The wide pivot carries open, current and status per book and nothing
+     * between; the series the stream writes (`flucs`, the last 200 moves) is
+     * published only by the tall shape. Fetched for the one market the page
+     * lists moves for and merged onto the exploded rows by outcome and
+     * book, so the event page's move log and hover sparkline draw the same
+     * history a local instance reads straight off the collection.
+     */
+    const [wide, tall] = await Promise.all([
+      one({ live: 'true' }),
+      cachedDrain(`fx:${fixtureId}:live:tall:moneyline`, () =>
+        drain('odds-api', {
+          sport,
+          fixture_id: fixtureId,
+          include_stale: 'true',
+          flucs: 'true',
+          live: 'true',
+          shape: 'tall',
+          market: 'moneyline',
+        }),
+        FX_LIVE_TTL_MS,
+      ).catch(() => []),
+    ]);
+    const rows = explodeAll(wide, true);
+    const series = new Map();
+    for (const r of tall) {
+      if (r.is_lay || !Array.isArray(r.flucs) || r.outcome_no == null) continue;
+      series.set(`${r.market_id}|${r.outcome_no}|${canonicalBook(r.sportsbook)}`, r.flucs);
+    }
+    for (const row of rows) {
+      if (row.is_lay) continue;
+      const f = series.get(`${row.market_id}|${row.outcome_no}|${row.sportsbook}`);
+      if (f?.length) row.flucs = f.filter((x) => x && typeof x.p === 'number' && x.t);
+    }
+    return rows;
   }
 
   // No live pivot. This site shows pre-match prices only, so the in-play feed
