@@ -35,8 +35,14 @@ fi
 out=$(node --env-file=.env scripts/sync-to-atlas.mjs --only=player_stats,markets 2>&1)
 code=$?
 if [ $code -ne 0 ]; then
-  echo "$(stamp) FAILED (code=$code)"
-  echo "$out"
+  # One line, not the stack. A NAS blip printed ninety lines of MongoDB driver
+  # internals that then sat at the tail of this log for a day, and the
+  # dashboard counted them as three errors every time it looked. The cause is
+  # one sentence; the whole output is kept beside the log for the rare time it
+  # is not.
+  brief=$(printf '%s\n' "$out" | grep -m1 -oE '(Mongo[A-Za-z]*Error|[A-Za-z]*Error): [^(]{0,140}' | tr -d '\n')
+  echo "$(stamp) FAILED (code=$code) ${brief:-see logs/.player-stats-last-failure}"
+  printf '%s\n' "$out" > logs/.player-stats-last-failure
   exit $code
 fi
 # Speak only when the mirror actually grew.
