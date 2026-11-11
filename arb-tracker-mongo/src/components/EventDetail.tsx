@@ -24,7 +24,6 @@ import { EventTabs, SubTabs, type EventTab, type SubTab } from './EventTabs';
 import { EventStatsPanel } from './EventStatsPanel';
 import { EventDetailsPanel } from './EventDetailsPanel';
 import { BetsPanel } from './BetsPanel';
-import { H2HFlucs } from './H2HFlucs';
 import { useCapabilities } from '../lib/capabilitiesContext';
 import { useParam } from '../lib/urlState';
 import type { OddsView } from '../lib/db';
@@ -336,15 +335,6 @@ export function EventDetail({ event, now, markets, books, loading, oddsView, onO
    */
   const showOddsView =
     !outright && (status === 'live' || status === 'final' || oddsView === 'live');
-  /*
-   * The in-play view carries the head-to-head move log above the grid. Only
-   * for an account served price history: a trading account's rows arrive
-   * with the series stripped, and the panel would have nothing to list.
-   */
-  const h2hGroup =
-    oddsView === 'live' && canHover
-      ? (markets.find((m) => m.key === 'moneyline') ?? markets.find((m) => m.kind === 'h2h') ?? null)
-      : null;
   // Selection labels carry a competitor name; map it back to its flag.
   const countryFor = (team: string) =>
     team === home ? event.homeCountry : team === away ? event.awayCountry : null;
@@ -508,7 +498,6 @@ export function EventDetail({ event, now, markets, books, loading, oddsView, onO
           }
         />
       )}
-      {tab === 'markets' && !loading && h2hGroup && <H2HFlucs group={h2hGroup} />}
       {tab === 'markets' && (status === 'cancelled' ? (
         <div className="flex flex-1 items-center justify-center text-sm text-rose-300">
           This fixture was cancelled.
