@@ -120,6 +120,10 @@ function localLeagueLogo(sport, cat, name) {
   if (sport === 'basketball' && is('wnba')) return '/logos/leagues/wnba.png';
   if (sport === 'mma' && is('ufc')) return '/logos/leagues/ufc.png';
   if (sport === 'amfootball' && is('ncaaf')) return '/logos/leagues/ncaaf.png';
+  // Every other college competition: NCAAB was resolved to the Wikiquote logo
+  // and NCAAW to Cornell's "C", because a Wikipedia search for the acronym
+  // lands on the wrong article. The mark is the same one for all of them.
+  if (is('ncaa')) return '/logos/leagues/ncaa.png';
   if (sport === 'amfootball' && is('nfl')) return '/logos/leagues/nfl.png';
   if (sport === 'darts' && is('modus')) return '/logos/leagues/modus.png';
   return undefined;
