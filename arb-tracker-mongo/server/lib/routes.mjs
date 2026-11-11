@@ -58,7 +58,7 @@ import {
  * five-minute settle. The browser polls on the same beat; anything longer
  * here would answer most of those polls from this cache unchanged.
  */
-const TTL = { board: 15_000, pulse: 45_000, odds: 10_000, liveOdds: 5_000, day: 5 * 60_000, meta: 10 * 60_000, bets: 20_000, mapping: 5 * 60_000 };
+const TTL = { board: 15_000, pulse: 45_000, odds: 10_000, liveOdds: 5_000, liveEvent: 3_000, day: 5 * 60_000, meta: 10 * 60_000, bets: 20_000, mapping: 5 * 60_000 };
 
 /* ---------------------------------------------------------------- routes */
 
@@ -98,8 +98,10 @@ const ROUTES = {
   'GET /api/event': (url) => {
     const id = url.searchParams.get('id') ?? '';
     // A single event is what the open page re-reads for its score and
-    // clock, so it refreshes on the odds beat rather than the board's.
-    return cached(`event:${id}`, TTL.odds, () => eventById(id));
+    // clock, so it refreshes on the odds beat rather than the board's — and
+    // with live=1, the in-play page's five-second poll, on a three-second one.
+    const live = url.searchParams.get('live') === '1';
+    return cached(`event:${id}${live ? ':live' : ''}`, live ? TTL.liveEvent : TTL.odds, () => eventById(id, { live }));
   },
 
   // Lazily loaded by the Details tab, so it is not on the board's hot path.

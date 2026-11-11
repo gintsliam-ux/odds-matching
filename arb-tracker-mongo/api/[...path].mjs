@@ -156,7 +156,12 @@ export default async function handler(req, res) {
     // The event page's in-play view polls every ten seconds; the per-fixture
     // window would answer two of every three polls from the browser.
     const liveOdds = url.pathname === '/api/odds' && url.searchParams.get('live') === '1';
-    const liveFeed = LIVE_FEED.has(url.pathname) || liveOdds;
+    // The open page's in-play re-read of its own score and clock. Polled every
+    // five seconds, and the stream lands a score on the NAS within a couple:
+    // a ten-second CDN copy was the longest leg left between the two.
+    const liveEvent = url.pathname === '/api/event' && url.searchParams.get('live') === '1';
+    const inPlay = liveOdds || liveEvent;
+    const liveFeed = LIVE_FEED.has(url.pathname);
     /*
      * Behind a sign-in these become PRIVATE.
      *
@@ -176,7 +181,9 @@ export default async function handler(req, res) {
      * browser's own copy — the function was never asked. The windows now sit
      * just under their polls, so every poll reaches the function's cache.
      */
-    const window = liveFeed
+    const window = inPlay
+      ? [3, 6]
+      : liveFeed
       ? [5, 15]
       : statusful
       ? [10, 20]

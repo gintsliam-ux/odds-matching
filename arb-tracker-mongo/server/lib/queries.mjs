@@ -375,11 +375,12 @@ export async function eventsForDay(dateStr) {
  * promise that it opens what it says, so the filters (and the odds check) are
  * deliberately skipped here.
  */
-export async function eventById(fixtureId) {
+export async function eventById(fixtureId, { live = false } = {}) {
   if (!fixtureId) return null;
   if (isApi) {
-    const all = await cachedBoard();
-    const onBoard = all.find((e) => e.id === fixtureId);
+    // The in-play re-read wants the score as of now, not as of the board's
+    // fifteen-second copy, so it goes straight to the single-fixture read.
+    const onBoard = live ? null : (await cachedBoard()).find((e) => e.id === fixtureId);
     if (onBoard) return onBoard;
     // Off the board, which for anything more than two days old is every link
     // ever shared. The id names the day it happened on, so ask for that day
@@ -389,7 +390,7 @@ export async function eventById(fixtureId) {
     // surface is forgiving about case — but stamped the label onto the fixture
     // as its sport, so the page then asked for odds with `sport=Basketball` and
     // got nothing back.
-    const row = await apiFixtureById(fixtureId, await apiSports().catch(() => []));
+    const row = await apiFixtureById(fixtureId, { live });
     return row ? (await toEvents([row]))[0] ?? null : null;
   }
   const row = await (await coll('fixtures'))

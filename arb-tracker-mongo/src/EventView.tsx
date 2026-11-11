@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { EventDetail } from './components/EventDetail';
-import { fetchOdds, type OddsView } from './lib/db';
+import { fetchEventById, fetchOdds, type OddsView } from './lib/db';
 import { buildMarkets, type Bookmaker, type MarketGroup } from './lib/markets';
 import { effectiveStatus } from './lib/countdown';
 import { eventPath, eventSlug } from './lib/routing';
@@ -33,7 +33,44 @@ export default function EventView() {
   const { events, now, eventsLoading, linkResolving } = useOutletContext<LayoutContext>();
   const navigate = useNavigate();
 
-  const selected = events.find((e) => e.id === fixtureId) ?? null;
+  const boardRow = events.find((e) => e.id === fixtureId) ?? null;
+
+  /*
+   * In play, the page re-reads its own event every five seconds.
+   *
+   * The score and clock used to arrive only with the board, which is polled
+   * every fifteen seconds and cached for longer at each hop behind it, so a
+   * basket could take a minute to show on the page that was open on the
+   * game. The single-event read is cached three seconds end to end. The
+   * board row stays underneath for everything the re-read does not carry.
+   */
+  const [liveRow, setLiveRow] = useState<SportEvent | null>(null);
+  const selected = useMemo<SportEvent | null>(
+    () => (boardRow && liveRow && liveRow.id === boardRow.id ? { ...boardRow, ...liveRow } : boardRow),
+    [boardRow, liveRow],
+  );
+  const boardInPlay = !!boardRow && effectiveStatus(boardRow, now) === 'live';
+  useEffect(() => {
+    if (!boardRow || !boardInPlay) {
+      setLiveRow(null);
+      return;
+    }
+    const id = boardRow.id;
+    let cancelled = false;
+    const read = () =>
+      fetchEventById(id, true)
+        .then((row) => {
+          if (!cancelled && row && row.id === id) setLiveRow(row);
+        })
+        .catch(() => {});
+    read();
+    const timer = setInterval(read, 5_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boardRow?.id, boardInPlay]);
 
   /*
    * Pre-match or in-play prices, in the URL like the tab is.
@@ -145,7 +182,7 @@ export default function EventView() {
           setOdds({ id: selected.id, view, markets: built.groups, books: built.books });
         })
         .catch(() => {});
-    }, view === 'live' ? 10_000 : 30_000);
+    }, view === 'live' ? 5_000 : 30_000);
     return () => {
       cancelled = true;
       clearInterval(id);

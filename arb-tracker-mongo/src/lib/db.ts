@@ -82,8 +82,10 @@ export const fetchEventsForDay = (dateStr: string): Promise<SportEvent[]> =>
  * anything older than the rolling window, or filtered out of it. A URL is a
  * promise that it opens what it says, so the server ignores the filters here.
  */
-export const fetchEventById = (fixtureId: string): Promise<SportEvent | null> =>
-  fixtureId ? apiGet<SportEvent | null>(`/api/event?id=${encodeURIComponent(fixtureId)}`) : Promise.resolve(null);
+export const fetchEventById = (fixtureId: string, live = false): Promise<SportEvent | null> =>
+  fixtureId
+    ? apiGet<SportEvent | null>(`/api/event?id=${encodeURIComponent(fixtureId)}${live ? '&live=1' : ''}`)
+    : Promise.resolve(null);
 
 /**
  * Team/player search over the whole fixtures archive — deliberately NOT scoped

@@ -721,11 +721,22 @@ export async function apiOddsForFixture(fixtureId, _sport, { live = false, curre
  * One fixture by id, any sport, outside the board's window if need be. The
  * surface looks it up by id, so this no longer fans out across every sport.
  */
-export async function apiFixtureById(fixtureId) {
+const LIVE_FIXTURE_TTL_MS = 3_000;
+
+/**
+ * One fixture by id. With `live`, the open page's in-play re-read: the score
+ * and clock are what it is after, so the copy lives three seconds rather
+ * than the board window's fifteen.
+ */
+export async function apiFixtureById(fixtureId, { live = false } = {}) {
   if (!fixtureId) return null;
   let body;
   try {
-    body = await cachedDrain(`fixture:${fixtureId}`, () => call('fixture', { id: fixtureId }), BOARD_TTL_MS);
+    body = await cachedDrain(
+      `fixture:${fixtureId}${live ? ':live' : ''}`,
+      () => call('fixture', { id: fixtureId }),
+      live ? LIVE_FIXTURE_TTL_MS : BOARD_TTL_MS,
+    );
   } catch (e) {
     if (/ 404:/.test(String(e?.message))) return null;
     throw e;

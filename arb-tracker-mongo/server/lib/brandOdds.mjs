@@ -232,6 +232,29 @@ const threeWayApplies = (sport, hasDraw) => hasDraw && !DRAW_IS_A_RESULT.has(spo
  */
 const DNB_SPORTS = new Set(['soccer', 'cricket']);
 
+/**
+ * Which side a swiftbet selection is, from swiftbet's OWN team list.
+ *
+ * The event record names its teams and says which is Home and which is Away,
+ * and a head-to-head selection is one of those names verbatim. Comparing the
+ * selection against OUR names instead lost a side whenever the two brands
+ * spell a club differently: Flamengo v Sesi Franca Basquete is "Flamengo Rio
+ * De Janeiro" v "Sesi SP/Franca BC" on swiftbet, and "Sesi SP/Franca BC" has
+ * no "basquete" in it, so the away price was dropped and the row showed one
+ * outcome. The word test stays as the fallback for a selection that is not a
+ * team name as written ("Flamengo (+2.5)" on a handicap).
+ */
+function swiftSide(name, ev) {
+  const n = norm(name).replace(/\s*\([^)]*\)\s*$/, '').trim();
+  for (const t of ev?.teams ?? []) {
+    if (!t?.name || norm(t.name) !== n) continue;
+    const pos = String(t.team_position ?? '').toLowerCase();
+    if (pos === 'home') return 1;
+    if (pos === 'away') return 2;
+  }
+  return null;
+}
+
 function swiftRows(ev, { home, away, sport }) {
   const out = [];
   const at = ev?.scraped_at ?? null;
@@ -247,7 +270,9 @@ function swiftRows(ev, { home, away, sport }) {
       const price = num(s?.odds);
       if (price == null) continue;
       const sName = String(s?.name ?? '');
-      if (COMBO_SELECTION.test(sName)) continue;
+      // "Sesi SP/Franca BC" has a slash and is a team; the combo test only
+      // applies to a selection that is not one of the event's own teams.
+      if (COMBO_SELECTION.test(sName) && swiftSide(sName, ev) == null) continue;
       /*
        * The bet parser decides the market, so a market it refuses — a player
        * prop, a combo, a period nothing prices — is refused here too. That is
@@ -259,7 +284,7 @@ function swiftRows(ev, { home, away, sport }) {
       const outcomeNo =
         p.kind === 'total' ? (p.side === 'over' ? 1 : 2)
         : p.kind === 'btts' ? (/^yes$/i.test(p.name ?? '') ? 1 : /^no$/i.test(p.name ?? '') ? 2 : null)
-        : sideOfName(p.name || sName, home, away);
+        : swiftSide(sName, ev) ?? sideOfName(p.name || sName, home, away);
       if (outcomeNo == null) continue;
       const marketId = threeWayApplies(sport, hasDraw)
         ? (p.marketIds.find((id) => id.endsWith('_3way')) ?? p.marketIds[0])
