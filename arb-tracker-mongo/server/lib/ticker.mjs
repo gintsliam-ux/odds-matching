@@ -1,5 +1,5 @@
 import { coll, mongoConfigured } from './mongo.mjs';
-import { apiFixtureIndex, apiOddsForFixture, apiOddsForSport } from './sportApi.mjs';
+import { apiFixtureIndex, apiOddsForFixture, apiOddsForSport, apiPropOdds } from './sportApi.mjs';
 import { betsConfigured, betsDb } from './betsMongo.mjs';
 import { betInstant } from './bets.mjs';
 // From betVocab, not bets.mjs: these three are read at module load, and
@@ -206,6 +206,9 @@ const CLOSING_BUDGET_MS = 240_000;
  * started yet can still be abandoned, where a promise already created cannot.
  */
 const FETCH_LANES = 16;
+/** Prop fixtures priced per build, and how many Optic calls go out together. */
+const PROP_FIXTURE_CAP = 40;
+const PROP_LANES = 6;
 
 /**
  * Phase timings, reported on the payload.
@@ -1067,12 +1070,155 @@ const handicapIds = (period, line, sport) =>
  * can be compared. Matching on names alone priced none of these: 14 totals and
  * 10 handicaps went bare because "Total Under 7.5 runs" is not "Under".
  */
+/*
+ * Player props: the stat words a brand uses, per sport, and the Optic market
+ * they are. Order matters within a sport — "three pointers" has to be seen
+ * before "points", and the combos before their parts (the parts are found
+ * by set, below). Keyed by the sport label the feed carries.
+ */
+const PROP_STAT_WORDS = {
+  Basketball: [
+    [/\b(three pointers?|threes|3 pointers?|3pt|three point)\b/, 'threes'],
+    [/\bdouble double\b/, 'double_double'], [/\btriple double\b/, 'triple_double'],
+    [/\bpoints?\b/, 'points'], [/\brebounds?\b/, 'rebounds'], [/\bassists?\b/, 'assists'],
+    [/\bsteals?\b/, 'steals'], [/\bblocks?\b/, 'blocks'], [/\bturnovers?\b/, 'turnovers'],
+  ],
+  'Ice Hockey': [
+    [/\bpoints?\b/, 'points'], [/\bgoals?\b/, 'goals'], [/\bassists?\b/, 'assists'],
+    [/\bshots? on goal\b|\bshots?\b/, 'shots_on_goal'], [/\bsaves?\b/, 'saves'],
+  ],
+  'American Football': [
+    [/\bpassing yards\b/, 'passing_yards'], [/\brushing yards\b/, 'rushing_yards'],
+    [/\breceiving yards\b/, 'receiving_yards'], [/\breceptions?\b/, 'receptions'],
+    [/\bpassing touchdowns?\b/, 'passing_touchdowns'],
+  ],
+  Baseball: [
+    [/\bstrikeouts?\b/, 'strikeouts'], [/\bhome runs?\b/, 'home_runs'], [/\bhits\b/, 'hits'],
+    [/\b(total )?bases\b/, 'bases'], [/\brbis?\b/, 'rbis'],
+  ],
+  Soccer: [
+    [/\bshots? on target\b/, 'shots_on_target'], [/\bshots?\b/, 'shots'], [/\bassists?\b/, 'assists'],
+    [/\bpasses\b/, 'passes'], [/\btackles\b/, 'tackles'],
+  ],
+  Tennis: [[/\baces\b/, 'aces'], [/\bdouble faults\b/, 'double_faults'], [/\bgames won\b/, 'games_won']],
+  Cricket: [[/\bwickets?\b/, 'wickets'], [/\bsixes\b/, 'sixes'], [/\bfours\b/, 'fours'], [/\bruns\b/, 'runs']],
+};
+/** The Optic market name for a set of stats; the sorted, joined set is the key. */
+const PROP_MARKET = {
+  points: 'Player Points', rebounds: 'Player Rebounds', assists: 'Player Assists', steals: 'Player Steals',
+  blocks: 'Player Blocks', turnovers: 'Player Turnovers', threes: 'Player Made Threes',
+  double_double: 'Player Double Double', triple_double: 'Player Triple Double',
+  'assists+points+rebounds': 'Player Points + Rebounds + Assists',
+  'points+rebounds': 'Player Points + Rebounds', 'assists+points': 'Player Points + Assists',
+  'assists+rebounds': 'Player Rebounds + Assists', 'blocks+steals': 'Player Steals + Blocks',
+  'blocks+points': 'Player Points + Blocks', 'blocks+points+rebounds': 'Player Points + Rebounds + Blocks',
+  goals: 'Player Goals', shots_on_goal: 'Player Shots On Goal', saves: 'Player Saves',
+  passing_yards: 'Player Passing Yards', rushing_yards: 'Player Rushing Yards', receiving_yards: 'Player Receiving Yards',
+  receptions: 'Player Receptions', passing_touchdowns: 'Player Passing Touchdowns',
+  strikeouts: 'Player Strikeouts', home_runs: 'Player Home Runs', hits: 'Player Hits', bases: 'Player Bases', rbis: 'Player RBIs',
+  shots_on_target: 'Player Shots On Target', shots: 'Player Shots', passes: 'Player Passes', tackles: 'Player Tackles',
+  aces: 'Player Aces', double_faults: 'Player Double Faults', games_won: 'Player Games Won',
+  wickets: 'Player Wickets', sixes: 'Player Sixes', fours: 'Player Fours', runs: 'Player Runs',
+};
+const PROP_PERIOD = [
+  [/\b(1st|first) quarter\b|\bq1\b/, '1st Quarter '], [/\b(2nd|second) quarter\b|\bq2\b/, '2nd Quarter '],
+  [/\b(3rd|third) quarter\b|\bq3\b/, '3rd Quarter '], [/\b(4th|fourth) quarter\b|\bq4\b/, '4th Quarter '],
+  [/\b(1st|first) half\b|\bh1\b/, '1st Half '], [/\b(2nd|second) half\b|\bh2\b/, '2nd Half '],
+  [/\b(1st|first) period\b|\bp1\b/, '1st Period '],
+];
+
+/**
+ * A bet on one player's stat line, as the brands write it, to the Optic
+ * market and side the surface can price live.
+ *
+ *   "Player points Jayson Tatum" / "Player points - Jayson Tatum 25+ (Match)"
+ *   "points - J. Brown"          / "J. Brown 20+ Points"
+ *   "rebounds over/under - Jayson Tatum 7.5" / "Jayson Tatum - Under 7.5"
+ *   "points + assists + rebounds over/under - K. Towns 37.5" / "K. Towns - Under 37.5"
+ *   "double double - Darius Acuff Jr." / "Darius Acuff Jr."
+ *   "Q1 Player points K. Kuzma" / "Player points - K. Kuzma 3+ (1st quarter)"
+ *
+ * "25+" is Over 24.5; a double-double is Over 0.5, which is how Optic lists
+ * it. The player's name is whatever is left of the outcome once the stat
+ * words, the line and the period are taken out, and the market text is the
+ * fallback. Null for anything that is not one player and one stat — a
+ * same-game multi, a team total — so the caller's own rules apply.
+ */
+export function parsePlayerProp(market, outcome, sport) {
+  const words = PROP_STAT_WORDS[sportLabel(sport)];
+  if (!words) return null;
+  const m = String(market ?? '');
+  const o = String(outcome ?? '');
+  const km = key(m);
+  const ko = key(o);
+  // Several legs, or a team's number rather than a player's.
+  if (/same game multi|\bsgm\b|\bmultis?\b/.test(km) || /,\s|\s&\s|\bto get\b/.test(o)) return null;
+  if (!/\bplayer\b/.test(km) && /\b(total|team|match points|match goals|game points)\b/.test(km)) return null;
+
+  const stats = new Set();
+  let text = `${km} ${ko}`;
+  for (const [re, stat] of words) {
+    if (re.test(text)) { stats.add(stat); text = text.replace(new RegExp(re.source, 'g'), ' '); }
+  }
+  if (!stats.size) return null;
+  const statKey = [...stats].sort().join('+');
+  const base = PROP_MARKET[statKey];
+  if (!base) return null;
+  let period = '';
+  for (const [re, p] of PROP_PERIOD) if (re.test(km) || re.test(ko)) { period = p; break; }
+
+  // The side and the line. "25+" is over 24.5; "over 27.5" / "under 7.5" as
+  // written; a double or triple double is a yes, which Optic lists as over 0.5.
+  // Read off the raw text, not the normalised one: `key` turns "7.5" into
+  // "7 5", and an Under 7.5 priced against the Under 7 row is a different bet.
+  let side = null;
+  let line = null;
+  const lo = o.toLowerCase();
+  const lm = m.toLowerCase();
+  const plus = lo.match(/(\d+(?:\.\d+)?)\s*\+/);
+  const ou = lo.match(/\b(over|under)\b\s*\+?(\d+(?:\.\d+)?)/) ?? lo.match(/(\d+(?:\.\d+)?)\s*\b(over|under)\b/);
+  if (plus) { side = 'over'; line = Number(plus[1]) - 0.5; }
+  else if (ou) { const [, a, b] = ou; const isWord = /^(over|under)$/.test(a); side = isWord ? a : b; line = Number(isWord ? b : a); }
+  else if (stats.has('double_double') || stats.has('triple_double')) { side = 'over'; line = 0.5; }
+  else if (/\b(over|under)\b/.test(lo)) {
+    side = /\bunder\b/.test(lo) ? 'under' : 'over';
+    const n = lm.match(/(\d+(?:\.\d+)?)\s*$/) ?? lm.match(/\b(\d+\.5)\b/);
+    line = n ? Number(n[1]) : null;
+  }
+  if (!side || line == null || !Number.isFinite(line)) return null;
+
+  // The player is what is left of the outcome, or failing that the market.
+  const strip = (txt) => {
+    let x = String(txt)
+      .replace(/\((match|game|1st quarter|2nd quarter|3rd quarter|4th quarter|1st half|2nd half|1st period|90 mins)\)/gi, ' ')
+      .replace(/\b(player|q[1-4]|in the match|over\/under|over under|over|under|match|to score|to record|to get)\b/gi, ' ')
+      // A period is never a name: "1st half points 84.5" left "st half" behind.
+      .replace(/\b(1st|2nd|3rd|4th|first|second|third|fourth|quarter|half|period|time|full|game)\b/gi, ' ')
+      .replace(/\d+(?:\.\d+)?\s*\+?/g, ' ')
+      .replace(/[+\-/():]/g, ' ');
+    for (const [re] of words) x = x.replace(new RegExp(re.source, 'gi'), ' ');
+    return x.replace(/\s+/g, ' ').trim();
+  };
+  const looksLikeName = (n) => /^[A-Za-z'.\u00C0-\u024F-]+(\s[A-Za-z'.\u00C0-\u024F-]+)+$/.test(n) || /^[A-Z]\.?\s?[A-Za-z'.-]{2,}$/.test(n);
+  let name = strip(o);
+  if (!looksLikeName(name)) name = strip(m);
+  if (!looksLikeName(name)) return null;
+
+  return { kind: 'prop', marketIds: [], market: `${period}${base}`, name, side, line };
+}
+
 export function parseBetMarket(market, outcome, sport) {
   const m = String(market ?? '');
   const o = String(outcome ?? '');
   const km = key(m);
   const ko = key(o);
   if (!km && !ko) return null;
+
+  // One player's stat line, priced live through the surface rather than from
+  // the board's own markets. Before the rejections below, two of which ("to
+  // score", "anytime") would otherwise throw every one of these away.
+  const prop = parsePlayerProp(m, o, sport);
+  if (prop) return prop;
 
   /*
    * Both-teams-to-score, on its own, IS a market the surface prices — `btts`,
@@ -1590,6 +1736,42 @@ async function pricesFor(bets, byEventId, fixtures, timings, { closing = false }
     rows = [...rows, ...extra.flat()];
   }
 
+  /*
+   * Player props come from Optic live, through the surface, one call per
+   * fixture carrying every prop market the bets on it need. Never for the
+   * settled view: a closing price for a prop is not something anyone stores,
+   * and today's ladder beside last week's bet would be a comparison that is
+   * not real. Failures leave the bet unpriced rather than failing the feed.
+   */
+  if (!closing) {
+    const propMarkets = new Map(); // fixture_id -> Set of Optic market names
+    for (const [b, w] of want) {
+      if (w.kind !== 'prop') continue;
+      const m = byEventId.get(String(b.eventId));
+      if (!m) continue;
+      const set = propMarkets.get(m.optic_fixture_id) ?? new Set();
+      set.add(w.market);
+      propMarkets.set(m.optic_fixture_id, set);
+    }
+    if (propMarkets.size) {
+      const queue = [...propMarkets.entries()].slice(0, PROP_FIXTURE_CAP);
+      const lane = async () => {
+        const out = [];
+        while (queue.length) {
+          const [fixtureId, markets] = queue.shift();
+          const got = await apiPropOdds(fixtureId, [...markets]).catch(() => []);
+          for (const r of got) out.push(r);
+        }
+        return out;
+      };
+      const propRows = await timed(timings, 'propOdds', () =>
+        Promise.all(Array.from({ length: Math.min(PROP_LANES, queue.length) }, lane)),
+      );
+      if (timings) timings.propFixtures = propMarkets.size;
+      rows = [...rows, ...propRows.flat()];
+    }
+  }
+
   const byFixture = new Map();
   for (const r of rows) {
     const list = byFixture.get(r.fixture_id) ?? [];
@@ -1635,6 +1817,15 @@ async function pricesFor(bets, byEventId, fixtures, timings, { closing = false }
        * worse than it was.
        */
       let hits = [];
+      if (w.kind === 'prop') {
+        // The market is Optic's name, the player is matched the way a runner
+        // is, and the line and side both have to agree: "25+" is only ever
+        // the Over 24.5 row, never the main line beside it.
+        const inMarket = all.filter((r) => !r.is_lay && r.market_name === w.market);
+        hits = pickByName(inMarket, w.name).filter(
+          (r) => sameLine(r.line, w.line) && r.outcome_no === (w.side === 'over' ? 1 : 2),
+        );
+      }
       for (const marketId of w.marketIds) {
         const inMarket = all.filter((r) => !r.is_lay && r.market_id === marketId);
         if (!inMarket.length) continue;

@@ -591,6 +591,27 @@ function boardFor(sport, window, keySuffix = '') {
   );
 }
 
+const PROP_TTL_MS = 15_000;
+
+/**
+ * Player-market prices for one fixture, asked of Optic through the surface at
+ * request time and never stored: the capture keeps no player props, so a bet
+ * on "Tatum 25+ points" has no row to be compared against anywhere else.
+ * `markets` are Optic's display names ("Player Points", "1st Quarter Player
+ * Rebounds"). Rows come back in the OddsRow shape: selection is the player,
+ * line the number, outcome_no 1 over / 2 under, market_name the Optic name.
+ */
+export async function apiPropOdds(fixtureId, markets) {
+  const list = [...new Set((markets ?? []).filter(Boolean))].sort();
+  if (!fixtureId || !list.length) return [];
+  const body = await cachedDrain(
+    `prop:${fixtureId}:${list.join('|')}`,
+    () => call('prop-odds', { id: fixtureId, market: list.join(',') }),
+    PROP_TTL_MS,
+  );
+  return (body.data ?? []).map(canonicalRow);
+}
+
 /**
  * Fixtures matching a team, event or tournament name, any sport and any date,
  * as fixture records. The surface's /search: a whole word from its text index,
