@@ -1,4 +1,4 @@
-import { lazy, StrictMode, Suspense } from 'react';
+import React, { lazy, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import App from './App';
@@ -17,14 +17,50 @@ import EventView from './EventView';
  * need, and making the sign-in screen wait on a second request is the opposite
  * of the point.
  */
-const TickerPage = lazy(() => import('./pages/TickerPage'));
-const MoversPage = lazy(() => import('./pages/MoversPage'));
-const MappingPage = lazy(() => import('./pages/MappingPage'));
+/*
+ * A page chunk that is no longer there reloads the app instead of showing nothing.
+ *
+ * Chunk names carry a hash, and a deploy replaces every one of them. A tab
+ * opened before the deploy still holds the old index, so its first click on
+ * Ticker or Mapping asks for a file that has gone, the import rejects, and
+ * under a Suspense whose fallback is null the page simply never arrives —
+ * until somebody refreshes by hand, which is the one thing that fixes it. So
+ * the refresh happens here, once: the flag in sessionStorage stops a build
+ * that is genuinely broken from reloading forever.
+ */
+const RELOADED_KEY = 'chunk-reloaded';
+function reloadOnce(): boolean {
+  try {
+    if (sessionStorage.getItem(RELOADED_KEY) === location.href) return false;
+    sessionStorage.setItem(RELOADED_KEY, location.href);
+  } catch {
+    // Storage unavailable: reload anyway rather than leave the page blank.
+  }
+  location.reload();
+  return true;
+}
+function page<T extends { default: React.ComponentType }>(load: () => Promise<T>) {
+  return lazy(() =>
+    load().catch((err: unknown) => {
+      // A reload is in flight: hold the promise open so nothing renders under it.
+      if (reloadOnce()) return new Promise<T>(() => {});
+      throw err;
+    }),
+  );
+}
+// Stylesheets and shared chunks preloaded for a page can go stale the same way.
+window.addEventListener('vite:preloadError', (event) => {
+  if (reloadOnce()) event.preventDefault();
+});
+
+const TickerPage = page(() => import('./pages/TickerPage'));
+const MoversPage = page(() => import('./pages/MoversPage'));
+const MappingPage = page(() => import('./pages/MappingPage'));
 import { CapabilitiesProvider } from './lib/capabilities';
-const UsersPage = lazy(() => import('./pages/UsersPage'));
-const SettlementPage = lazy(() => import('./pages/SettlementPage'));
-const LateBetsPage = lazy(() => import('./pages/LateBetsPage'));
-const PendingBetsPage = lazy(() => import('./pages/PendingBetsPage'));
+const UsersPage = page(() => import('./pages/UsersPage'));
+const SettlementPage = page(() => import('./pages/SettlementPage'));
+const LateBetsPage = page(() => import('./pages/LateBetsPage'));
+const PendingBetsPage = page(() => import('./pages/PendingBetsPage'));
 import LoginPage from './pages/LoginPage';
 import { AuthProvider } from './lib/auth';
 import { useAuth } from './lib/useAuth';
