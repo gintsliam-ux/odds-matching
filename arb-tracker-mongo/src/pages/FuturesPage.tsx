@@ -90,19 +90,28 @@ function Placeholder({ text }: { text: string }) {
   );
 }
 
+/** A labelled switch: the setting's name, then a track whose knob sits right when it is on. */
 function Toggle({ on, onChange, children }: { on: boolean; onChange: (v: boolean) => void; children: React.ReactNode }) {
   return (
     <button
       type="button"
+      role="switch"
+      aria-checked={on}
       onClick={() => onChange(!on)}
-      aria-pressed={on}
-      className={`rounded-md border px-2 py-1 text-[11px] font-medium transition ${
-        on
-          ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-200'
-          : 'border-surface-border bg-surface text-slate-500 hover:text-slate-300'
-      }`}
+      className="flex w-full items-center justify-between gap-3 rounded-md px-1 py-1 text-left text-xs text-slate-300 transition hover:bg-white/5"
     >
-      {children}
+      <span>{children}</span>
+      <span
+        className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${
+          on ? 'bg-emerald-500' : 'bg-slate-700'
+        }`}
+      >
+        <span
+          className={`absolute left-0.5 h-3 w-3 rounded-full bg-white shadow transition-transform ${
+            on ? 'translate-x-3' : 'translate-x-0'
+          }`}
+        />
+      </span>
     </button>
   );
 }
@@ -263,13 +272,15 @@ export default function FuturesPage() {
                 </option>
               ))}
             </select>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="space-y-0.5">
               <Toggle on={outrightOnly} onChange={setOutrightOnly}>Outright only</Toggle>
               <Toggle on={mybetOnly} onChange={setMybetOnly}>Priced by mybet</Toggle>
-              <span className="ml-auto self-center text-[11px] text-slate-600">{visible.length}</span>
             </div>
           </div>
 
+          <div className="shrink-0 px-3 py-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+            {list ? `${visible.length} futures` : 'Futures'}
+          </div>
           <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-4">
             {!list && !listError && <RowsSkeleton rows={10} lead="w-12" />}
             {listError && (
