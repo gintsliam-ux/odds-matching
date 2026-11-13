@@ -751,12 +751,17 @@ export async function teamLogos(sport, names) {
   for (const [name, n] of normOf) {
     const own = byKey.get(n);
     const ownLogo = usableLogo(own?.logo_url, n);
-    if (ownLogo) { out.set(name, { logoUrl: ownLogo, country: own.country ?? null }); continue; }
+    if (ownLogo) { out.set(name, { key: n, logoUrl: ownLogo, country: own.country ?? null }); continue; }
+    let hit = null;
     for (const s of siblingKeys(n)) {
       const sib = byKey.get(s);
       const logo = usableLogo(sib?.logo_url, n);
-      if (logo) { out.set(name, { logoUrl: logo, country: own?.country ?? sib.country ?? null }); break; }
+      if (logo) { hit = { key: s, logoUrl: logo, country: own?.country ?? sib.country ?? null }; break; }
     }
+    // Known to the table but without a crest: still the same team wherever
+    // its name appears, so the key is kept and only the crest is missing.
+    if (hit) out.set(name, hit);
+    else if (own) out.set(name, { key: n, logoUrl: null, country: own.country ?? null });
   }
   return out;
 }

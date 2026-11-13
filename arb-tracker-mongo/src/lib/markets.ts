@@ -413,6 +413,8 @@ export interface OddsRow {
   /** A crest for the selection itself, on a futures row (the board's crests come off the fixture). */
   selection_logo?: string | null;
   selection_country?: string | null;
+  /** One key per team across the books' spellings, on a futures row. */
+  selection_key?: string | null;
 }
 
 // Canonical market ids are shared across sports (spread, total, moneyline, …);
@@ -1041,7 +1043,9 @@ export function buildMarkets(
       // US books "scottie_scheffler", and accents get dropped inconsistently).
       const byPlayer = new Map<string, OddsRow[]>();
       for (const r of marketRows) {
-        const key = playerKey(r.selection);
+        // A futures row arrives keyed by the team it resolves to; a golf row
+        // merges on the player's name.
+        const key = r.selection_key || playerKey(r.selection);
         (byPlayer.get(key) ?? byPlayer.set(key, []).get(key)!).push(r);
       }
       selections = [...byPlayer.values()]
