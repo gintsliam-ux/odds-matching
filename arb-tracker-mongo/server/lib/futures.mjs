@@ -362,7 +362,8 @@ async function swiftRows(swiftId, marketName, futureId) {
 async function attachLeagues(rows) {
   const cache = new Map();
   for (const r of rows) {
-    const key = `${r.sport}|${r.leagueName}`;
+    // Golf is badged per tournament (a major has its own mark), the rest per league.
+    const key = `${r.sport}|${r.leagueName}|${r.sport === 'golf' ? `${r.tournament ?? ''} ${r.name}` : ''}`;
     if (!cache.has(key)) {
       let category = null;
       let tournament = r.leagueName;
@@ -375,6 +376,7 @@ async function attachLeagues(rows) {
         tournament = r.leagueName.replace(/\b\d{4}(?:\/\d{2,4})?\b/g, ' ').replace(/\bfutures?\b/gi, ' ').replace(/\s+/g, ' ').trim() || r.leagueName;
       }
       if (r.sport === 'tennis' && /^(atp|wta)$/i.test(tournament)) category = tournament.toUpperCase();
+      if (r.sport === 'golf') { category = r.leagueName; tournament = `${r.tournament ?? ''} ${r.name}`.trim(); }
       cache.set(key, leagueFor(r.sport, category, tournament).catch(() => null));
     }
     const league = await cache.get(key);

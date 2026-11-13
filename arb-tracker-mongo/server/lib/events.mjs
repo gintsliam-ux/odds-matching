@@ -232,14 +232,31 @@ function deriveLeague(sport, category, tournament, stage, compLogos) {
   }
 
   if (sport === 'golf') {
-    const tour = cat || 'Golf';
-    const t = tour.toLowerCase();
-    const logoUrl = t.includes('liv')
-      ? '/logos/leagues/golf-liv.png'
-      : t.includes('pga')
-        ? '/logos/leagues/golf-pga.png'
-        : '/logos/leagues/golf.png';
+    const tour = cat || tourn || 'Golf';
+    // A major carries its own mark whichever tour lists it; otherwise the
+    // tour's. Read off the tour and the tournament together, so "PGA" with
+    // "Masters Tournament 2027" is the Masters and "PGA Championship" is not
+    // the PGA Tour. DP World Tour and LPGA have no mark on file and fall to
+    // the generic one.
+    const t = `${cat} ${tourn}`.toLowerCase();
+    const logoUrl = /\bmasters\b/.test(t) ? '/logos/leagues/golf-masters.png'
+      : /\b(the )?open championship\b|\bthe open\b|\bbritish open\b/.test(t) ? '/logos/leagues/golf-open.png'
+        : /\bu\.?s\.? open\b/.test(t) ? '/logos/leagues/golf-usopen.png'
+          : /\b(us)?pga championship\b|\buspga\b/.test(t) ? '/logos/leagues/golf-pgachamp.png'
+            : /\bliv\b/.test(t) ? '/logos/leagues/golf-liv.png'
+              : /champions tour|pga tour champions|senior/.test(t) ? '/logos/leagues/golf-champions.png'
+                : /\b(dp ?world|dpw|european tour|lpga|ladies)\b/.test(t) ? '/logos/leagues/golf.png'
+                  : /\bpga\b/.test(t) ? '/logos/leagues/golf-pga.png'
+                    : '/logos/leagues/golf.png';
     return { league: { id, name: tour, code: code(tour), sport: label, logoUrl } };
+  }
+
+  if (sport === 'motorsport') {
+    const t = `${cat} ${tourn}`.toLowerCase();
+    const logoUrl = /formula ?(one|1)|\bf1\b|grand prix/.test(t) ? '/logos/leagues/f1.png'
+      : /supercars/.test(t) ? '/logos/leagues/supercars.png'
+        : undefined;
+    return { league: { id, name, category: context, code: code(name), sport: label, logoUrl } };
   }
 
   return {
