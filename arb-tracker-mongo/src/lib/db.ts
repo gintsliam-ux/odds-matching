@@ -486,6 +486,10 @@ export interface FutureItem {
   swiftId: string | null;
   swiftMarket: string | null;
   swiftName: string | null;
+  /** The competition this future belongs to — a rail row — and its tab label within it. */
+  groupId: string;
+  groupName: string;
+  marketLabel: string;
   /** The badge, derived the way the board derives a fixture's. */
   league: League;
 }

@@ -70,12 +70,25 @@ const yearOf = (s) => (String(s ?? '').match(/\b(20\d{2})(?:\/\d{2,4})?\b/) ?? [
 /** "Outright Winner", "Super Bowl LXI Winner", "Premiership Winner", "Champion" -> the outright. */
 const OUTRIGHT_MARKET = /^((outright|championship|premiership|grand final|tournament|series|race|super bowl( [ivxl]+)?|stanley cup|world series) )?(winner|champions?)$/i;
 
+/** The brands' names for a market that Optic names differently. */
+const MARKET_FOLDS = [
+  [/^(afc|nfc) championship( winner)?$/i, (m) => `${m[1].toUpperCase()} Conference Winner`],
+  [/^(regular season )?mvp$/i, () => 'MVP Winner'],
+  [/^(1st|first) round leader$/i, () => 'End Of Round 1 Leader'],
+  [/^to make (the )?playoffs$/i, () => 'To Make The Playoffs'],
+];
+export const foldMarket = (market) => {
+  const m0 = String(market ?? '').trim();
+  for (const [re, to] of MARKET_FOLDS) { const m = m0.match(re); if (m) return to(m); }
+  return m0;
+};
+
 /** description -> { comp, market, outright } */
 function parseDescription(desc) {
   const d = String(desc ?? '').trim();
   const i = d.lastIndexOf(' - ');
   const comp = i > 0 ? d.slice(0, i).trim() : d;
-  const market = i > 0 ? d.slice(i + 3).trim() : 'Winner';
+  const market = foldMarket(i > 0 ? d.slice(i + 3).trim() : 'Winner');
   return { comp, market, outright: OUTRIGHT_MARKET.test(market) };
 }
 
@@ -102,6 +115,31 @@ function mybetLeagueId(comp, sport) {
  * with the year required to agree where both carry one (tennis and golf
  * name the event and the year in the future itself).
  */
+/** The Optic league a brand's competition belongs to, or null: { id, name, alias }. */
+function opticLeagueOf(sport, comp, optic) {
+  const pool = optic.filter((f) => f.sport === sport);
+  if (!pool.length) return null;
+  const alias = mybetLeagueId(comp, sport);
+  if (alias) {
+    const hit = pool.find((f) => f.league_id === alias.id);
+    if (hit) return { id: hit.league_id, name: hit.league_name, alias };
+  }
+  const compT = tokens(comp);
+  const scored = new Map();
+  for (const f of pool) {
+    const lt = tokens(f.league_name);
+    let hit = 0;
+    for (const t of compT) if (lt.has(t)) hit++;
+    if (hit) scored.set(f.league_id, Math.max(scored.get(f.league_id) ?? 0, hit / Math.max(1, compT.size)));
+  }
+  const best = [...scored.entries()].sort((a, b) => b[1] - a[1]);
+  if (best.length && best[0][1] >= 0.5 && (best.length === 1 || best[0][1] > best[1][1])) {
+    const hit = pool.find((f) => f.league_id === best[0][0]);
+    return { id: hit.league_id, name: hit.league_name, alias: null };
+  }
+  return null;
+}
+
 function matchOptic({ sport, comp, market, outright }, optic) {
   if (!sport) return null;
   const compT = tokens(comp);
@@ -257,6 +295,24 @@ export async function futuresList() {
     });
   }
   rows.sort((a, b) => a.sportLabel.localeCompare(b.sportLabel) || a.leagueName.localeCompare(b.leagueName) || Number(b.outright) - Number(a.outright) || a.name.localeCompare(b.name));
+  attachGroups(rows, optic);
+  // mybet's and Swiftbet's own row for the same market in the same
+  // competition, where Optic has neither, is one future with both prices.
+  const brandOnly = new Map();
+  for (const r of rows) {
+    if (r.source === 'optic') continue;
+    const k = `${r.groupId}|${norm(r.marketLabel)}`;
+    const other = brandOnly.get(k);
+    if (!other) { brandOnly.set(k, r); continue; }
+    if (other.source === 'mybet' && r.source === 'swiftbet' && !other.swiftId) {
+      Object.assign(other, { swiftId: r.swiftId, swiftMarket: r.swiftMarket, swiftName: r.swiftName });
+      r.dropped = true;
+    } else if (other.source === 'swiftbet' && r.source === 'mybet' && !other.mybetId) {
+      Object.assign(other, { mybetId: r.mybetId, mybetName: r.mybetName });
+      r.dropped = true;
+    }
+  }
+  for (let i = rows.length - 1; i >= 0; i--) if (rows[i].dropped) rows.splice(i, 1);
   await attachLeagues(rows);
   return { count: rows.length, matched, mybet: mybet.length, swift: swift.length, swiftMatched, data: rows };
 }
@@ -304,8 +360,7 @@ async function swiftFutures() {
       const raw = String(m.name ?? '').trim();
       // A market named after its event IS the event's proposition.
       let market = SWIFT_MARKET_LABEL[norm(raw)] ?? (norm(raw) === norm(eventName) ? eventName.replace(/^.*\b(20\d{2}(?:\/\d{2})?)\s*/, '') : raw);
-      // NFL's conference title is its "championship" on Swiftbet.
-      market = market.replace(/\b(AFC|NFC) Championship\b/i, '$1 Conference');
+      market = foldMarket(market.replace(/\b(AFC|NFC) Championship Winner\b/i, '$1 Championship'));
       out.push({
         sport, comp, market, outright: OUTRIGHT_MARKET.test(market),
         swiftId: String(e._id), marketIndex: i, swiftMarket: raw, swiftName: `${eventName} · ${raw}`,
@@ -381,6 +436,61 @@ async function attachLeagues(rows) {
     }
     const league = await cache.get(key);
     r.league = league ?? { id: r.sport, name: r.leagueName, code: r.leagueName.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase(), sport: r.sportLabel };
+  }
+}
+
+/*
+ * The competition each future belongs to, and the label its market takes as
+ * a tab inside it. The rail lists competitions; a competition's futures —
+ * the outright, the conference and division winners, the awards, a golf
+ * event's top-N finishes — are tabs across the top of the page.
+ *
+ *   league futures   one competition per Optic league; a brand future Optic
+ *                    does not list joins its league's competition when the
+ *                    league can be told from its name ("NBA Cup Winner")
+ *   golf             one per tournament, across tours and brands
+ *   tennis           one per slam within the tour
+ */
+const GOLF_TOUR_PREFIX = /^(pga|dpw|dp world|lpga|liv|european)( tour)?\s+/i;
+const titleCase = (s) => String(s).replace(/\b([a-z])([a-z]*)/gi, (_, a, b) => a.toUpperCase() + b.toLowerCase());
+function attachGroups(rows, optic) {
+  for (const r of rows) {
+    let groupId; let groupName; let label = r.outright ? 'Outright' : r.name;
+    if (r.sport === 'golf') {
+      const event = r.source === 'optic' ? (r.tournament ?? r.leagueName) : r.leagueName.replace(GOLF_TOUR_PREFIX, '');
+      const ev = [...tokens(event)].sort().join('_');
+      const yr = yearOf(event) ?? '';
+      groupId = `golf|${ev}|${yr}`;
+      groupName = /[a-z]/.test(event) ? event : titleCase(event);
+      if (!r.outright) label = r.name.replace(new RegExp(`^${event.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'i'), '') || r.name;
+    } else if (r.sport === 'motorsport' && /grand prix/i.test(`${r.leagueName} ${r.name}`)) {
+      // A race: mybet files it under the race, Swiftbet under the series with
+      // the race as the event. The place before "Grand Prix" is the race.
+      const text = /grand prix/i.test(r.leagueName) ? r.leagueName : r.name;
+      const place = norm(text).split(/\s*grand prix/)[0].split(/[^a-z0-9]+/).filter((w) => w && !['f1', 'fia', 'formula', 'one', 'united', 'states'].includes(w)).slice(-2);
+      groupId = `motorsport|gp|${place.join('_')}`;
+      groupName = `F1 · ${titleCase(place.join(' '))} Grand Prix`;
+      label = r.outright ? 'Race Winner' : r.name;
+    } else if (r.sport === 'tennis' && /^(atp|wta)$/i.test(r.leagueName)) {
+      const slam = r.name.replace(/\s*winner\s*/i, ' ').replace(/\s+/g, ' ').trim();
+      groupId = `tennis|${r.leagueName.toLowerCase()}|${slam.toLowerCase()}`;
+      groupName = `${r.leagueName} · ${slam}`;
+      label = 'Winner';
+    } else {
+      let leagueId = r.source === 'optic' ? r.leagueId : null;
+      let leagueName = r.leagueName;
+      if (!leagueId) {
+        const hit = opticLeagueOf(r.sport, r.leagueName, optic);
+        if (hit) { leagueId = hit.id; leagueName = hit.name; }
+      }
+      groupId = leagueId ? `${r.sport}|${leagueId}` : `${r.sport}|brand|${[...tokens(r.leagueName)].join('_')}`;
+      groupName = leagueId ? leagueName : r.leagueName.replace(/\b20\d{2}(\/\d{2,4})?\b/g, '').replace(/\bfutures?\b/gi, '').replace(/\s+/g, ' ').trim() || r.leagueName;
+      // A brand-only future in an Optic league now reads under that league.
+      if (leagueId && r.source !== 'optic') r.leagueName = leagueName;
+    }
+    r.groupId = groupId;
+    r.groupName = groupName;
+    r.marketLabel = label;
   }
 }
 
