@@ -313,6 +313,9 @@ export interface SelectionRow {
   isMain?: boolean;
   /** True on the first row of each line pair, for a divider above it. */
   groupStart?: boolean;
+  /** The row's own crest, where the rows carry one (futures). */
+  logoUrl?: string | null;
+  country?: string | null;
 }
 
 export interface MarketGroup {
@@ -383,6 +386,9 @@ export interface OddsRow {
   current_at: string | null;
   /** Melbourne-date -> 9am snapshot price. */
   daily_prices: Record<string, number> | null;
+  /** A crest for the selection itself, on a futures row (the board's crests come off the fixture). */
+  selection_logo?: string | null;
+  selection_country?: string | null;
 }
 
 // Canonical market ids are shared across sports (spread, total, moneyline, …);
@@ -1017,7 +1023,15 @@ export function buildMarkets(
       selections = [...byPlayer.values()]
         .map((rs) => {
           const name = playerDisplayName([...new Set(rs.map((r) => r.selection))]);
-          return makeSelectionRow(books, name, name, rs);
+          // A crest where any book's row carries one — a team on a future; a
+          // golfer or a tennis player carries none and draws as before.
+          const crest = rs.find((r) => r.selection_logo);
+          const row = makeSelectionRow(books, name, name, rs, crest ? name : undefined);
+          if (crest) {
+            row.logoUrl = crest.selection_logo;
+            row.country = crest.selection_country ?? null;
+          }
+          return row;
         })
         .sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
     } else if (def.kind === 'flat') {

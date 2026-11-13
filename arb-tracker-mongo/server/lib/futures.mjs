@@ -1,6 +1,6 @@
 import { betsConfigured, betsDb } from './betsMongo.mjs';
 import { multiBetsFor } from './bets.mjs';
-import { leagueFor } from './events.mjs';
+import { leagueFor, teamLogos } from './events.mjs';
 import { apiFutureOdds, apiFutures } from './sportApi.mjs';
 
 /**
@@ -377,12 +377,23 @@ async function mybetRows(mybetId, futureId) {
 /** One future's prices: the books through the surface, and mybet's own beside them. */
 export async function futureOdds(id) {
   if (!id) return [];
-  if (id.startsWith('mybet:')) return mybetRows(id.slice(6), id);
   const list = await futuresList().catch(() => ({ data: [] }));
   const row = list.data.find((r) => r.id === id);
   const [books, ours] = await Promise.all([
-    apiFutureOdds(id).catch(() => []),
+    id.startsWith('mybet:') ? [] : apiFutureOdds(id).catch(() => []),
     row?.mybetId ? mybetRows(row.mybetId, id) : [],
   ]);
-  return [...ours, ...books];
+  const rows = [...ours, ...books];
+  // The crest beside each team, from the same entities the board draws from.
+  // A player market has none, and a team the table does not know draws no crest.
+  if (row && row.type !== 'PLAYER' && rows.length) {
+    const names = [...new Set(rows.map((r) => r.selection).filter(Boolean))];
+    const logos = await teamLogos(row.sport, names).catch(() => new Map());
+    for (const r of rows) {
+      const hit = logos.get(r.selection);
+      r.selection_logo = hit?.logoUrl ?? null;
+      r.selection_country = hit?.country ?? null;
+    }
+  }
+  return rows;
 }

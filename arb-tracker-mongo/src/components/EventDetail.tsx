@@ -703,7 +703,12 @@ function MarketRows({
             <td className={`sticky left-0 z-10 px-3 py-2 text-slate-200 ${cellBg}`}>
               <span className="flex items-center gap-2">
                 {row.team ? (
-                  <TeamLogo name={row.team} size={18} country={countryFor(row.team)} logo={logoFor(row.team)} />
+                  <TeamLogo
+                    name={row.team}
+                    size={18}
+                    country={row.country ?? countryFor(row.team)}
+                    logo={row.logoUrl ?? logoFor(row.team)}
+                  />
                 ) : DRAW_LABEL.test(row.label) ? (
                   // No competitor to crest — the sport's own object stands in.
                   <DrawIcon sport={sport} size={18} />

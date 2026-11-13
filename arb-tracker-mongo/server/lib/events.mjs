@@ -724,6 +724,43 @@ export async function leagueFor(sport, category, tournament) {
   return deriveLeague(sport, category, tournament, null, compLogos).league;
 }
 
+/**
+ * Crests for a list of team names in one sport, looked up the way a
+ * fixture's two sides are: the entity's own crest, else a sibling
+ * spelling's. For the futures grid, whose rows are teams with no fixture.
+ */
+export async function teamLogos(sport, names) {
+  const out = new Map();
+  if ((!mongoConfigured && !mirrorConfigured) || !sport) return out;
+  const norms = new Set();
+  const normOf = new Map();
+  for (const name of names) {
+    const n = normEntity(name);
+    if (!n) continue;
+    normOf.set(name, n);
+    norms.add(n);
+    for (const s of siblingKeys(n)) norms.add(s);
+  }
+  if (!norms.size) return out;
+  const rows = await (await coll('entities'))
+    .find({ sport, normalized: { $in: [...norms] } })
+    .project({ _id: 0, normalized: 1, logo_url: 1, country: 1 })
+    .toArray()
+    .catch(() => []);
+  const byKey = new Map(rows.map((r) => [r.normalized, r]));
+  for (const [name, n] of normOf) {
+    const own = byKey.get(n);
+    const ownLogo = usableLogo(own?.logo_url, n);
+    if (ownLogo) { out.set(name, { logoUrl: ownLogo, country: own.country ?? null }); continue; }
+    for (const s of siblingKeys(n)) {
+      const sib = byKey.get(s);
+      const logo = usableLogo(sib?.logo_url, n);
+      if (logo) { out.set(name, { logoUrl: logo, country: own?.country ?? sib.country ?? null }); break; }
+    }
+  }
+  return out;
+}
+
 export async function toEvents(fixtures) {
   const deduped = dedupeFixtures(fixtures).filter((f) => !SKIP_SPORTS.has(f.sport));
   if (deduped.length === 0) return [];
