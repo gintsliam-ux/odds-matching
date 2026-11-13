@@ -6,7 +6,7 @@ import { SignOut } from '../components/SignOut';
 import { EventDetail } from '../components/EventDetail';
 import { RowsSkeleton } from '../components/Skeleton';
 import { fetchFutureOdds, fetchFutures, type FutureItem, type FuturesList } from '../lib/db';
-import { buildMarkets, FUTURES_LEAGUE, type Bookmaker, type MarketGroup } from '../lib/markets';
+import { buildMarkets, FUTURES_LEAGUE, type Bookmaker, type MarketGroup, type OddsRow } from '../lib/markets';
 import { useFlagParam, useParam } from '../lib/urlState';
 import type { SportEvent } from '../lib/types';
 
@@ -24,7 +24,7 @@ const ODDS_POLL_MS = 60_000;
 const LIST_POLL_MS = 5 * 60_000;
 
 /** A future as the event page draws it: a single-sided fixture with one outright market. */
-function toEvent(f: FutureItem): SportEvent {
+function toEvent(f: FutureItem, marketCount: number): SportEvent {
   const starts = f.startsAt ?? new Date(Date.now() + 365 * 864e5).toISOString();
   return {
     id: f.id,
@@ -32,7 +32,7 @@ function toEvent(f: FutureItem): SportEvent {
     // The board's badge for the league, under the futures market set.
     league: { ...f.league, id: FUTURES_LEAGUE },
     name: f.groupName,
-    subtitle: f.variantLabel && f.variantLabel !== 'Main' ? `${f.tabLabel} · ${f.variantLabel}` : f.tabLabel,
+    subtitle: `${marketCount} market${marketCount === 1 ? '' : 's'}`,
     home: '',
     away: '',
     // A future has one date, the feed's; shown once, not as a one-day range.
@@ -118,9 +118,10 @@ function MarketTabs({ items, selected, onSelect }: { items: FutureItem[]; select
   const current = tabs.find((t) => t.label === selected.tabLabel);
   const variants = (current?.items ?? []).slice().sort((a, b) =>
     a.variantLabel.localeCompare(b.variantLabel, undefined, { numeric: true }));
-  if (tabs.length < 2 && variants.length < 2) return null;
+  if (tabs.length < 1) return null;
   return (
-    <div className="shrink-0 space-y-1.5 border-b border-surface-border bg-surface px-3 py-2">
+    <div className="shrink-0 space-y-1.5 border-b border-surface-border bg-surface-raised/40 px-3 py-2">
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Market</div>
       <div className="flex gap-1.5 overflow-x-auto pb-0.5">
         {tabs.map((t) => {
           const active = t.label === selected.tabLabel;
@@ -161,6 +162,60 @@ function MarketTabs({ items, selected, onSelect }: { items: FutureItem[]; select
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The Details tab for a competition: one line per market, saying what it is,
+ * how it is joined to mybet and Swiftbet, and — for the market open now —
+ * which books price it and which have gone quiet.
+ */
+function FutureDetails({ items, selected, rows }: { items: FutureItem[]; selected: FutureItem; rows: OddsRow[] }) {
+  const books = [...new Set(rows.filter((r) => r.status !== 'stale').map((r) => r.sportsbook))].sort();
+  const stale = [...new Set(rows.filter((r) => r.status === 'stale').map((r) => r.sportsbook))].sort();
+  const lastBy = (b: string) => rows.filter((r) => r.sportsbook === b).map((r) => r.current_at ?? '').sort().pop() ?? '';
+  const ago = (iso: string) => { const d = (Date.now() - Date.parse(iso)) / 864e5; return Number.isFinite(d) ? `${Math.round(d)}d` : '–'; };
+  const cell = 'px-3 py-1.5 text-left';
+  return (
+    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 text-xs">
+      <section className="rounded-lg border border-surface-border">
+        <div className="border-b border-surface-border px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+          {selected.tabLabel}{selected.variantLabel !== 'Main' ? ` · ${selected.variantLabel}` : ''}
+        </div>
+        <dl className="grid grid-cols-[140px_1fr] gap-x-3 gap-y-1.5 px-3 py-2">
+          <dt className="text-slate-500">Optic future</dt><dd className="font-mono text-slate-300">{selected.source === 'optic' ? selected.id : '–'}</dd>
+          <dt className="text-slate-500">Type</dt><dd className="text-slate-300">{selected.type === 'PLAYER' ? 'Player' : selected.type === 'TEAM' ? 'Team' : '–'}</dd>
+          <dt className="text-slate-500">Feed date</dt><dd className="text-slate-300">{selected.startsAt ? new Date(selected.startsAt).toLocaleDateString() : '–'}</dd>
+          <dt className="text-slate-500">mybet</dt><dd className="text-slate-300">{selected.mybetName ?? '–'}{selected.mybetId && <span className="ml-2 font-mono text-slate-500">{selected.mybetId}</span>}</dd>
+          <dt className="text-slate-500">Swiftbet</dt><dd className="text-slate-300">{selected.swiftName ?? '–'}{selected.swiftId && <span className="ml-2 font-mono text-slate-500">{selected.swiftId}</span>}</dd>
+          <dt className="text-slate-500">Priced by</dt><dd className="text-slate-300">{books.length ? books.join(', ') : '–'}</dd>
+          <dt className="text-slate-500">Stale</dt>
+          <dd className={stale.length ? 'text-amber-300' : 'text-slate-300'}>
+            {stale.length ? stale.map((b) => `${b} (${ago(lastBy(b))} since a change)`).join(', ') : 'none'}
+          </dd>
+        </dl>
+      </section>
+      <section className="rounded-lg border border-surface-border">
+        <div className="border-b border-surface-border px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+          Every market in this competition
+        </div>
+        <table className="w-full">
+          <thead className="text-[10px] uppercase tracking-wide text-slate-500">
+            <tr><th className={cell}>Market</th><th className={cell}>Type</th><th className={cell}>mybet</th><th className={cell}>Swiftbet</th></tr>
+          </thead>
+          <tbody>
+            {items.map((f) => (
+              <tr key={f.id} className={`border-t border-surface-border/50 ${f.id === selected.id ? 'bg-emerald-500/[0.06]' : ''}`}>
+                <td className={`${cell} text-slate-200`}>{f.tabLabel}{f.variantLabel !== 'Main' ? ` · ${f.variantLabel}` : ''}</td>
+                <td className={`${cell} text-slate-400`}>{f.type === 'PLAYER' ? 'Player' : f.type === 'TEAM' ? 'Team' : '–'}</td>
+                <td className={`${cell} text-slate-400`}>{f.mybetName ?? '–'}</td>
+                <td className={`${cell} text-slate-400`}>{f.swiftName ?? '–'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
     </div>
   );
 }
@@ -290,7 +345,7 @@ export default function FuturesPage() {
   );
 
   // The selected future's prices, refreshed every minute while it is open.
-  const [odds, setOdds] = useState<{ id: string; markets: MarketGroup[]; books: Bookmaker[] } | null>(null);
+  const [odds, setOdds] = useState<{ id: string; markets: MarketGroup[]; books: Bookmaker[]; rows: OddsRow[] } | null>(null);
   useEffect(() => {
     if (!selected) return;
     const id = selected.id;
@@ -300,10 +355,10 @@ export default function FuturesPage() {
         .then((rows) => {
           if (cancelled) return;
           const built = buildMarkets(rows, '', '', FUTURES_LEAGUE);
-          setOdds({ id, markets: built.groups, books: built.books });
+          setOdds({ id, markets: built.groups, books: built.books, rows });
         })
         .catch(() => {
-          if (!cancelled) setOdds((o) => (o?.id === id ? o : { id, markets: [], books: [] }));
+          if (!cancelled) setOdds((o) => (o?.id === id ? o : { id, markets: [], books: [], rows: [] }));
         });
     read();
     const timer = setInterval(read, ODDS_POLL_MS);
@@ -407,10 +462,12 @@ export default function FuturesPage() {
 
         {/* the grid */}
         <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          {selected && <MarketTabs items={tabs} selected={selected} onSelect={setSelectedId} />}
           {selected ? (
             <EventDetail
-              event={toEvent(selected)}
+              event={toEvent(selected, tabs.length)}
+              marketsHeader={<MarketTabs items={tabs} selected={selected} onSelect={setSelectedId} />}
+              betsId={`group:${selected.groupId}`}
+              detailsPanel={<FutureDetails items={tabs} selected={selected} rows={odds?.id === selected.id ? odds.rows : []} />}
               now={now}
               markets={odds?.id === selected.id ? odds.markets : []}
               books={odds?.id === selected.id ? odds.books : []}

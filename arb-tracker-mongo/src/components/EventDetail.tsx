@@ -1,3 +1,4 @@
+import type React from 'react';
 import { useState, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { SportEvent } from '../lib/types';
@@ -187,6 +188,12 @@ interface Props {
   onOddsView: (v: OddsView) => void;
   /** A future: markets, bets and details, but no box score. */
   future?: boolean;
+  /** Replaces the market-type pills at the top of the Markets tab (futures: the market picker). */
+  marketsHeader?: React.ReactNode;
+  /** The id the Bets tab loads, when it is not the event's own (futures: the whole competition). */
+  betsId?: string;
+  /** Replaces the fixture Details panel (futures: one line per market). */
+  detailsPanel?: React.ReactNode;
 }
 
 /**
@@ -246,7 +253,7 @@ function OddsViewToggle({
   );
 }
 
-export function EventDetail({ event, now, markets, books, loading, oddsView, onOddsView, future = false }: Props) {
+export function EventDetail({ event, now, markets, books, loading, oddsView, onOddsView, future = false, marketsHeader, betsId, detailsPanel }: Props) {
   const cd = countdownFor(event, now);
   const { home, away, homeScore, awayScore, periodScores } = event;
   const status = effectiveStatus(event, now);
@@ -471,7 +478,7 @@ export function EventDetail({ event, now, markets, books, loading, oddsView, onO
           aria-labelledby="tab-bets"
           className="flex min-h-0 flex-1 flex-col"
         >
-          <BetsPanel fixtureId={event.id} />
+          <BetsPanel fixtureId={betsId ?? event.id} />
         </div>
       )}
 
@@ -482,12 +489,13 @@ export function EventDetail({ event, now, markets, books, loading, oddsView, onO
           aria-labelledby="tab-details"
           className="flex min-h-0 flex-1 flex-col"
         >
-          <EventDetailsPanel fixtureId={event.id} sport={event.league.id} />
+          {detailsPanel ?? <EventDetailsPanel fixtureId={event.id} sport={event.league.id} />}
         </div>
       )}
 
       {/* Markets × bookmakers price grid — scrolls under the pinned info */}
-      {tab === 'markets' && (
+      {tab === 'markets' && marketsHeader}
+      {tab === 'markets' && !marketsHeader && (
         <SubTabs
           label="Market types"
           tabs={groupTabs}

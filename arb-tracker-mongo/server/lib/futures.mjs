@@ -522,10 +522,38 @@ function familyOf(label) {
   return { tab: base, variant: yn ? 'Yes/No' : 'Main' };
 }
 
-export const isFutureId = (id) => /^type_/.test(String(id ?? '')) || String(id ?? '').startsWith('mybet:') || String(id ?? '').startsWith('swift:');
+export const isFutureId = (id) => /^type_/.test(String(id ?? '')) || /^(mybet|swift|group):/.test(String(id ?? ''));
 
 /** The bets tab for a future: mybet's singles and multis on its mybet event, when it has one. */
 export async function betsForFuture(id) {
+  // A whole competition: every market's bets together, each bet already
+  // naming its own market.
+  if (String(id).startsWith('group:')) {
+    const groupId = String(id).slice(6);
+    const list = await futuresList().catch(() => ({ data: [] }));
+    const members = list.data.filter((r) => r.groupId === groupId && (r.mybetId || r.swiftId));
+    const parts = await Promise.all(members.map((r) => betsForFuture(r.id).catch(() => null)));
+    const merged = { configured: betsConfigured, swiftbet: { bets: [], reason: 'unmapped' }, mybet: { bets: [], reason: 'unmapped' }, multis: { bets: [], reason: 'unmapped' } };
+    for (const brand of ['swiftbet', 'mybet', 'multis']) {
+      const seen = new Set();
+      const any = parts.some((p) => p && p[brand].reason !== 'unmapped');
+      parts.forEach((p, i) => {
+        const m = members[i];
+        const label = m.variantLabel && m.variantLabel !== 'Main' ? `${m.tabLabel} · ${m.variantLabel}` : m.tabLabel;
+        for (const b of p?.[brand]?.bets ?? []) {
+          if (seen.has(b.id)) continue;
+          seen.add(b.id);
+          // mybet calls every futures bet "Win"; together with other markets'
+          // bets that says nothing, so the bet names the market it is on.
+          if (!b.market || /^(win|place|winner|each way)$/i.test(String(b.market).trim())) b.market = label;
+          merged[brand].bets.push(b);
+        }
+      });
+      merged[brand].bets.sort((a, b) => String(b.placedAt ?? '').localeCompare(String(a.placedAt ?? '')));
+      merged[brand].reason = merged[brand].bets.length ? null : any ? 'none' : 'unmapped';
+    }
+    return merged;
+  }
   const empty = (reason) => ({ bets: [], reason });
   const result = { configured: betsConfigured, swiftbet: empty('unmapped'), mybet: empty('unmapped'), multis: empty('unmapped') };
   if (!betsConfigured) {
