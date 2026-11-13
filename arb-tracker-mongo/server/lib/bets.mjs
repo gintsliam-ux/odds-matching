@@ -689,7 +689,7 @@ async function leggedFor(db, fixtureId) {
   );
 }
 
-async function multiBetsFor(db, eventId, fixtureId) {
+export async function multiBetsFor(db, eventId, fixtureId) {
   const numericId = Number(eventId);
   const joinable = Number.isFinite(numericId) && numericId !== 0;
 

@@ -1,4 +1,4 @@
-import type { SportEvent } from './types';
+import type { League, SportEvent } from './types';
 import type { OddsRow } from './markets';
 
 // The board reads the `gutsys_sport` Mongo database (fixtures / odds / entities)
@@ -483,6 +483,8 @@ export interface FutureItem {
   startsAt: string | null;
   mybetId: string | null;
   mybetName: string | null;
+  /** The badge, derived the way the board derives a fixture's. */
+  league: League;
 }
 export interface FuturesList {
   count: number;

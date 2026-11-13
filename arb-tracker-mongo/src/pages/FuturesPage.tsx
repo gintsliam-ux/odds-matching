@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Search, Trophy } from 'lucide-react';
+import { LeagueBadge } from '../components/LeagueBadge';
 import { SignOut } from '../components/SignOut';
 import { EventDetail } from '../components/EventDetail';
 import { RowsSkeleton } from '../components/Skeleton';
@@ -25,11 +26,11 @@ const LIST_POLL_MS = 5 * 60_000;
 /** A future as the event page draws it: a single-sided fixture with one outright market. */
 function toEvent(f: FutureItem): SportEvent {
   const starts = f.startsAt ?? new Date(Date.now() + 365 * 864e5).toISOString();
-  const code = f.leagueName.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() || 'FUT';
   return {
     id: f.id,
     sport: f.sportLabel,
-    league: { id: FUTURES_LEAGUE, name: f.leagueName, code, sport: f.sportLabel },
+    // The board's badge for the league, under the futures market set.
+    league: { ...f.league, id: FUTURES_LEAGUE },
     name: f.tournament && !f.name.includes(f.tournament) ? `${f.tournament} · ${f.name}` : f.name,
     subtitle: f.source === 'mybet' ? 'mybet only' : f.mybetName ? `mybet: ${f.mybetName}` : undefined,
     home: '',
@@ -39,6 +40,44 @@ function toEvent(f: FutureItem): SportEvent {
     outright: true,
     status: 'upcoming',
   };
+}
+
+/** "Jun 27" / "Feb 2027": when the future settles, for the rail's right-hand chip. */
+function settleLabel(iso: string | null): string {
+  if (!iso) return 'open';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'open';
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString(undefined, sameYear ? { day: 'numeric', month: 'short' } : { month: 'short', year: 'numeric' });
+}
+
+/** One future in the rail, drawn like a board row: badge, name, league line, a chip on the right. */
+function FutureRow({ f, selected, onSelect }: { f: FutureItem; selected: boolean; onSelect: (id: string) => void }) {
+  const name = f.tournament && !f.name.includes(f.tournament) ? `${f.tournament} · ${f.name}` : f.name;
+  const sub = f.source === 'mybet' ? `${f.leagueName} · mybet only` : f.mybetId ? `${f.leagueName} · mybet` : f.leagueName;
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(f.id)}
+      className={`flex w-full items-center gap-2.5 rounded-lg border-l-2 py-2 pl-2 pr-2 text-left transition-colors ${
+        selected ? 'border-emerald-400 bg-emerald-500/10' : 'border-transparent hover:bg-white/5'
+      }`}
+    >
+      <LeagueBadge league={f.league} size={30} />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-medium text-slate-100">{name}</div>
+        <div className="truncate text-xs text-slate-500">{sub}</div>
+      </div>
+      <span
+        className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs font-semibold tabular-nums ${
+          f.source === 'mybet' ? 'bg-amber-500/15 text-amber-300' : f.mybetId ? 'bg-emerald-500/15 text-emerald-300' : 'bg-white/5 text-slate-400'
+        }`}
+        title={f.startsAt ? `Feed date ${new Date(f.startsAt).toLocaleDateString()}` : undefined}
+      >
+        {settleLabel(f.startsAt)}
+      </span>
+    </button>
+  );
 }
 
 function Placeholder({ text }: { text: string }) {
@@ -122,21 +161,16 @@ export default function FuturesPage() {
     );
   }, [all, sport, outrightOnly, mybetOnly, query]);
 
-  // Grouped for the rail: sport, then league, in the order the server sorted them.
+  // Grouped for the rail by sport; each row carries its own league badge.
   const grouped = useMemo(() => {
-    const out: { sport: string; leagues: { league: string; items: FutureItem[] }[] }[] = [];
+    const out: { sport: string; items: FutureItem[] }[] = [];
     for (const f of visible) {
       let s = out[out.length - 1];
       if (!s || s.sport !== f.sportLabel) {
-        s = { sport: f.sportLabel, leagues: [] };
+        s = { sport: f.sportLabel, items: [] };
         out.push(s);
       }
-      let l = s.leagues[s.leagues.length - 1];
-      if (!l || l.league !== f.leagueName) {
-        l = { league: f.leagueName, items: [] };
-        s.leagues.push(l);
-      }
-      l.items.push(f);
+      s.items.push(f);
     }
     return out;
   }, [visible]);
@@ -206,8 +240,8 @@ export default function FuturesPage() {
 
       <div className="flex min-h-0 flex-1">
         {/* the catalogue */}
-        <aside className="flex w-72 shrink-0 flex-col border-r border-surface-border">
-          <div className="shrink-0 space-y-2 border-b border-surface-border p-2">
+        <aside className="flex w-[320px] shrink-0 flex-col border-r border-surface-border bg-surface">
+          <div className="shrink-0 space-y-2 border-b border-surface-border p-3">
             <label className="flex items-center gap-2 rounded-md border border-surface-border bg-surface px-2 py-1.5">
               <Search size={13} className="shrink-0 text-slate-600" />
               <input
@@ -236,55 +270,21 @@ export default function FuturesPage() {
             </div>
           </div>
 
-          <nav className="min-h-0 flex-1 overflow-y-auto">
+          <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-4">
             {!list && !listError && <RowsSkeleton rows={10} lead="w-12" />}
             {listError && (
-              <div className="px-3 py-6 text-center text-xs text-slate-500">{listError}</div>
+              <div className="px-2 py-8 text-center text-sm text-red-400">{listError}</div>
             )}
             {list && grouped.length === 0 && (
-              <div className="px-3 py-6 text-center text-xs text-slate-500">No futures match these filters.</div>
+              <div className="px-2 py-8 text-center text-sm text-slate-600">No futures match these filters.</div>
             )}
             {grouped.map((s) => (
-              <div key={s.sport} className="border-b border-surface-border/60">
-                <div className="sticky top-0 z-10 bg-surface px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              <div key={s.sport}>
+                <div className="sticky top-0 z-10 bg-surface px-2 py-2 text-xs font-medium uppercase tracking-wide text-slate-500">
                   {s.sport}
                 </div>
-                {s.leagues.map((l) => (
-                  <div key={l.league} className="pb-1">
-                    <div className="px-3 pt-1 text-[11px] text-slate-400">{l.league}</div>
-                    {l.items.map((f) => {
-                      const active = f.id === selectedId;
-                      return (
-                        <button
-                          key={f.id}
-                          type="button"
-                          onClick={() => setSelectedId(f.id)}
-                          className={`flex w-full items-center gap-2 px-3 py-1 text-left text-[12px] transition ${
-                            active
-                              ? 'bg-emerald-500/10 text-emerald-100'
-                              : 'text-slate-300 hover:bg-white/5'
-                          }`}
-                        >
-                          <span className="min-w-0 flex-1 truncate">
-                            {f.tournament && !f.name.includes(f.tournament) ? `${f.tournament} · ` : ''}
-                            {f.name}
-                          </span>
-                          {f.mybetId && (
-                            <span
-                              title={f.source === 'mybet' ? 'mybet only — not on the odds surface' : `mybet: ${f.mybetName}`}
-                              className={`shrink-0 rounded px-1 text-[9px] font-semibold uppercase ${
-                                f.source === 'mybet'
-                                  ? 'bg-amber-500/15 text-amber-300'
-                                  : 'bg-emerald-500/15 text-emerald-300'
-                              }`}
-                            >
-                              MB
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
+                {s.items.map((f) => (
+                  <FutureRow key={f.id} f={f} selected={f.id === selectedId} onSelect={setSelectedId} />
                 ))}
               </div>
             ))}
@@ -302,7 +302,7 @@ export default function FuturesPage() {
               loading={!ready}
               oddsView="pre"
               onOddsView={() => {}}
-              marketsOnly
+              future
             />
           ) : (
             <Placeholder text={list ? 'Select a future' : 'Loading futures…'} />

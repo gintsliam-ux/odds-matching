@@ -714,6 +714,16 @@ function toSportEvent(f, compLogos, entities) {
 }
 
 /** Enrich raw fixture documents into board events (dedupe, logos, flags). */
+/**
+ * The league badge for something that is not a fixture — a future — derived
+ * the way the board derives it from a fixture's category and tournament, so
+ * the same crest and code appear on the futures tab as on the board.
+ */
+export async function leagueFor(sport, category, tournament) {
+  const compLogos = await competitionLogos().catch(() => new Map());
+  return deriveLeague(sport, category, tournament, null, compLogos).league;
+}
+
 export async function toEvents(fixtures) {
   const deduped = dedupeFixtures(fixtures).filter((f) => !SKIP_SPORTS.has(f.sport));
   if (deduped.length === 0) return [];

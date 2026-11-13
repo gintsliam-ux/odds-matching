@@ -78,19 +78,15 @@ const GOLF_BOOKS: Bookmaker[] = [TAB_BOOK, DRAFTKINGS, FANDUEL, BETMGM, FANATICS
 // then the US and UK ones. Every column is optional — a future shows the
 // books that quote it and no others (Pinnacle never does; Sportsbet does not
 // today). Marks and colours only for the ones without a logo on disk.
-const POINTSBET: Bookmaker = { id: 'pointsbet', name: 'PointsBet', color: '#e11d48', mark: 'PB' };
-const UNIBET: Bookmaker = { id: 'unibet', name: 'Unibet', color: '#147b45', mark: 'UNI' };
-const NEDS: Bookmaker = { id: 'neds', name: 'Neds', color: '#f97316', mark: 'NED' };
-const CAESARS: Bookmaker = { id: 'caesars', name: 'Caesars', color: '#0b5d3b', mark: 'CZR' };
-const BETRIVERS: Bookmaker = { id: 'betrivers', name: 'BetRivers', color: '#1d4ed8', mark: 'BR' };
-const WILLIAMHILL: Bookmaker = { id: 'williamhill', name: 'William Hill', color: '#1e3a8a', mark: 'WH' };
-const PADDYPOWER: Bookmaker = { id: 'paddypower', name: 'Paddy Power', color: '#15803d', mark: 'PP' };
-const BETFAIR_UK: Bookmaker = { id: 'betfair_uk', name: 'Betfair UK', color: '#f59e0b', mark: 'BFX', logoUrl: '/logos/brands/betfair.png' };
+const POINTSBET: Bookmaker = { id: 'pointsbet', name: 'PointsBet', color: '#e11d48', mark: 'PB', logoUrl: '/logos/brands/pointsbet.jpg' };
+const UNIBET: Bookmaker = { id: 'unibet', name: 'Unibet', color: '#147b45', mark: 'UNI', logoUrl: '/logos/brands/unibet.jpg' };
+const WILLIAMHILL: Bookmaker = { id: 'williamhill', name: 'William Hill', color: '#1e3a8a', mark: 'WH', logoUrl: '/logos/brands/williamhill.jpg' };
+const PADDYPOWER: Bookmaker = { id: 'paddypower', name: 'Paddy Power', color: '#15803d', mark: 'PP', logoUrl: '/logos/brands/paddypower.jpg' };
 const coreBook = (id: string): Bookmaker => BOOKMAKERS.find((b) => b.id === id)!;
 export const FUTURES_BOOKS: Bookmaker[] = [
-  coreBook('sportsbet'), coreBook('tabtouch'), coreBook('ladbrokes'), POINTSBET, UNIBET, NEDS,
-  coreBook('bet365'), DRAFTKINGS, FANDUEL, BETMGM, CAESARS, FANATICS, BETRIVERS,
-  WILLIAMHILL, PADDYPOWER, BETFAIR_UK,
+  TAB_BOOK, coreBook('tabtouch'), POINTSBET, UNIBET, coreBook('ladbrokes'),
+  coreBook('bet365'), WILLIAMHILL, PADDYPOWER,
+  DRAFTKINGS, FANDUEL, FANATICS,
 ];
 /** The league id the futures tab builds its grid under. */
 export const FUTURES_LEAGUE = 'futures';

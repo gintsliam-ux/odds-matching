@@ -1,4 +1,6 @@
 import { betsConfigured, betsDb } from './betsMongo.mjs';
+import { multiBetsFor } from './bets.mjs';
+import { leagueFor } from './events.mjs';
 import { apiFutureOdds, apiFutures } from './sportApi.mjs';
 
 /**
@@ -231,7 +233,111 @@ export async function futuresList() {
     });
   }
   rows.sort((a, b) => a.sportLabel.localeCompare(b.sportLabel) || a.leagueName.localeCompare(b.leagueName) || Number(b.outright) - Number(a.outright) || a.name.localeCompare(b.name));
+  await attachLeagues(rows);
   return { count: rows.length, matched, mybet: mybet.length, data: rows };
+}
+
+/**
+ * The badge each row draws, derived the way the board derives a fixture's:
+ * Optic names a league "England - Premier League", which is the board's
+ * category and tournament; a bare "NBA" is a tournament with no category; a
+ * mybet competition "AFL 2027 Futures" is the tournament with the season
+ * words taken off. One derivation per distinct league, not per row.
+ */
+async function attachLeagues(rows) {
+  const cache = new Map();
+  for (const r of rows) {
+    const key = `${r.sport}|${r.leagueName}`;
+    if (!cache.has(key)) {
+      let category = null;
+      let tournament = r.leagueName;
+      const dash = r.leagueName.indexOf(' - ');
+      if (r.source === 'optic' && dash > 0) {
+        category = r.leagueName.slice(0, dash).trim();
+        tournament = r.leagueName.slice(dash + 3).trim();
+      }
+      if (r.source === 'mybet') {
+        tournament = r.leagueName.replace(/\b\d{4}(?:\/\d{2,4})?\b/g, ' ').replace(/\bfutures?\b/gi, ' ').replace(/\s+/g, ' ').trim() || r.leagueName;
+      }
+      if (r.sport === 'tennis' && /^(atp|wta)$/i.test(tournament)) category = tournament.toUpperCase();
+      cache.set(key, leagueFor(r.sport, category, tournament).catch(() => null));
+    }
+    const league = await cache.get(key);
+    r.league = league ?? { id: r.sport, name: r.leagueName, code: r.leagueName.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase(), sport: r.sportLabel };
+  }
+}
+
+export const isFutureId = (id) => /^type_/.test(String(id ?? '')) || String(id ?? '').startsWith('mybet:');
+
+/** The bets tab for a future: mybet's singles and multis on its mybet event, when it has one. */
+export async function betsForFuture(id) {
+  const empty = (reason) => ({ bets: [], reason });
+  const result = { configured: betsConfigured, swiftbet: empty('unmapped'), mybet: empty('unmapped'), multis: empty('unmapped') };
+  if (!betsConfigured) {
+    result.swiftbet = result.mybet = result.multis = empty('not-configured');
+    return result;
+  }
+  const list = await futuresList().catch(() => ({ data: [] }));
+  const row = list.data.find((r) => r.id === id);
+  const mybetId = row?.mybetId;
+  if (!mybetId) return result;
+  const db = await betsDb();
+  if (!db) return result;
+  const { mybet, multis } = await multiBetsFor(db, Number(mybetId), id);
+  result.mybet = { bets: mybet, reason: mybet.length ? null : 'none' };
+  result.multis = { bets: multis, reason: multis.length ? null : 'none' };
+  return result;
+}
+
+/** The details tab for a future, in the fixture's shape: what it is, when it settles, and how mybet sees it. */
+export async function futureDetails(id) {
+  const [list, rows] = await Promise.all([
+    futuresList().catch(() => ({ data: [] })),
+    futureOdds(id).catch(() => []),
+  ]);
+  const row = list.data.find((r) => r.id === id);
+  if (!row) return null;
+  const books = new Set();
+  let firstSeen = null;
+  let lastSeen = null;
+  for (const r of rows) {
+    if (r.sportsbook) books.add(r.sportsbook);
+    const o = r.open_at ? Date.parse(r.open_at) : NaN;
+    const c = r.current_at ? Date.parse(r.current_at) : NaN;
+    if (Number.isFinite(o) && (!firstSeen || o < firstSeen)) firstSeen = o;
+    if (Number.isFinite(c) && (!lastSeen || c > lastSeen)) lastSeen = c;
+  }
+  let mybetEvent = null;
+  if (row.mybetId && betsConfigured) {
+    const db = await betsDb();
+    const doc = db ? await db.collection('mybet_events').findOne({ _id: Number(row.mybetId) }, { projection: { comps: 0 } }).catch(() => null) : null;
+    if (doc) {
+      mybetEvent = {
+        id: String(doc._id), name: doc.description ?? row.mybetName, competition: null, competitionId: null,
+        sport: doc.sport ?? null, feedId: doc.feedId ?? null, firstSeenAt: iso(doc.firstSeenAt), lastSeenAt: iso(doc.lastSeenAt),
+        lastChangedAt: iso(doc.lastChangedAt), feedLastUpdated: iso(doc.feedLastUpdated), outcomeAt: iso(doc.outcomeAt),
+        suspendAt: iso(doc.suspendAt), teams: [],
+      };
+    }
+  }
+  const none = { mapped: false, link: null, event: null };
+  return {
+    fixtureId: id, venue: null, location: null, country: null, season: null, seasonType: null, tier: null, broadcast: null,
+    status: 'upcoming', opticStatus: null, isLive: false, source: row.source,
+    category: row.sportLabel, tournament: row.leagueName, tournamentStage: row.tournament,
+    opticLeague: row.source === 'optic' ? row.leagueId : null, opticLeagueId: null, currentRound: row.name,
+    hasOdds: rows.length > 0, hasSp: false, competitors: [],
+    mapping: {
+      configured: betsConfigured,
+      competitions: { swift: [], mybet: [] },
+      swift: none,
+      mybet: row.mybetId
+        ? { mapped: true, link: { eventId: row.mybetId, confidence: null, source: 'futures name match', resolvedAt: null, actualStart: null }, event: mybetEvent ?? { id: row.mybetId, name: row.mybetName, competition: null, competitionId: null, sport: null, teams: [] } }
+        : none,
+    },
+    times: { scheduledStart: row.startsAt, actualStart: null, endDate: row.startsAt, oddsOpenAt: firstSeen ? new Date(firstSeen).toISOString() : null, oddsCloseAt: null, settledAt: null, createdAt: null, updatedAt: lastSeen ? new Date(lastSeen).toISOString() : null },
+    coverage: { rows: rows.length, liveRows: 0, books: [...books].sort(), markets: rows.length ? ['outright'] : [], firstSeen: firstSeen ? new Date(firstSeen).toISOString() : null, lastSeen: lastSeen ? new Date(lastSeen).toISOString() : null },
+  };
 }
 
 /** mybet's selections on one future, as odds rows. */

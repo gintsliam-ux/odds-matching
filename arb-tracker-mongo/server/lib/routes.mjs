@@ -12,7 +12,7 @@
  */
 import { coll, mirrorConfigured } from './mongo.mjs';
 import { betTicker } from './ticker.mjs';
-import { futureOdds, futuresList } from './futures.mjs';
+import { betsForFuture, futureDetails, futureOdds, futuresList, isFutureId } from './futures.mjs';
 import { CAPABILITIES, DATA_SOURCE, isMongo } from './source.mjs';
 import { marketMovers } from './movers.mjs';
 import { delayedSettlements, lateBets } from './exposure.mjs';
@@ -108,6 +108,7 @@ const ROUTES = {
   // Lazily loaded by the Details tab, so it is not on the board's hot path.
   'GET /api/event/details': (url) => {
     const id = url.searchParams.get('id') ?? '';
+    if (isFutureId(id)) return cached(`details:${id}`, TTL.odds, () => futureDetails(id));
     // The API source is queried per sport; the Mongo path ignores it.
     const sport = url.searchParams.get('sport') ?? '';
     return cached(`details:${id}`, TTL.odds, () => eventDetails(id, sport));
@@ -175,6 +176,8 @@ const ROUTES = {
   'GET /api/bets': async (url) => {
     const id = url.searchParams.get('fixtureId') ?? '';
     if (!id) return { configured: false };
+    // A future's bets are mybet's on its mybet event; there is no fixture to map.
+    if (isFutureId(id)) return cached(`bets:${id}`, TTL.bets, () => betsForFuture(id));
     return cached(`bets:${id}`, TTL.bets, () => betsForFixture(id));
   },
 
