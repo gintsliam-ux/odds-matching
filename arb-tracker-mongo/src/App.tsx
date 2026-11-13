@@ -1,5 +1,5 @@
 import { Children, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, AlertTriangle, ChevronDown, Clock, Hourglass, Link2, LogOut, Radio, Settings, TrendingDown, Users as UsersIcon, Wrench } from 'lucide-react';
+import { Activity, AlertTriangle, ChevronDown, Clock, Hourglass, Link2, LogOut, Radio, Settings, TrendingDown, Trophy, Users as UsersIcon, Wrench } from 'lucide-react';
 import { Link, Outlet, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import { Header } from './components/Header';
 import { FilterBar } from './components/FilterBar';
@@ -877,6 +877,8 @@ export default function App() {
             {/* Movers reads the same price ladder the board already holds, so
                 it works on either source — no mapping tables involved. */}
             {deskOnly && <RailLink to="/movers" icon={TrendingDown}>Movers</RailLink>}
+            {/* Outright winners from the books that price futures, beside mybet's. */}
+            {deskOnly && <RailLink to="/futures" icon={Trophy}>Futures</RailLink>}
             {caps.bets && deskOnly && <RailLink to="/settlement" icon={Clock}>Settlement</RailLink>}
             {caps.bets && deskOnly && <RailLink to="/late-bets" icon={AlertTriangle}>Late Bets</RailLink>}
             {/* Admin only, matching ADMIN_ONLY on the server. */}

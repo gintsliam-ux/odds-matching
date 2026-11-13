@@ -185,6 +185,8 @@ interface Props {
   /** Which price set the grid holds — see OddsView. Owned by EventView, which fetches it. */
   oddsView: OddsView;
   onOddsView: (v: OddsView) => void;
+  /** Markets alone: a future has no bets, box score or mapping to show. */
+  marketsOnly?: boolean;
 }
 
 /**
@@ -244,7 +246,7 @@ function OddsViewToggle({
   );
 }
 
-export function EventDetail({ event, now, markets, books, loading, oddsView, onOddsView }: Props) {
+export function EventDetail({ event, now, markets, books, loading, oddsView, onOddsView, marketsOnly = false }: Props) {
   const cd = countdownFor(event, now);
   const { home, away, homeScore, awayScore, periodScores } = event;
   const status = effectiveStatus(event, now);
@@ -291,15 +293,15 @@ export function EventDetail({ event, now, markets, books, loading, oddsView, onO
 
   const tabs = [
     { key: 'markets' as const, label: 'Markets', badge: markets.length || null },
-    ...(caps.bets ? [{ key: 'bets' as const, label: 'Bets' }] : []),
-    ...(caps.mapping ? [{ key: 'details' as const, label: 'Details' }] : []),
+    ...(caps.bets && !marketsOnly ? [{ key: 'bets' as const, label: 'Bets' }] : []),
+    ...(caps.mapping && !marketsOnly ? [{ key: 'details' as const, label: 'Details' }] : []),
     /*
      * NBA and NFL only — `player_stats` carries those two and nothing else, so
      * offering the tab anywhere else would promise a box score that cannot
      * exist. Gated on the league NAME rather than the sport, because the sport
      * would take NCAAB and NCAAF with it.
      */
-    ...(event.league?.name === 'NBA' || event.league?.name === 'NFL'
+    ...((event.league?.name === 'NBA' || event.league?.name === 'NFL') && !marketsOnly
       ? [{ key: 'stats' as const, label: 'Stats' }]
       : []),
   ];

@@ -74,6 +74,27 @@ const OUR_BOOKS: Bookmaker[] = [SWIFTBET, MYBET];
 // the core AU columns, so golf uses its own list.
 const GOLF_BOOKS: Bookmaker[] = [TAB_BOOK, DRAFTKINGS, FANDUEL, BETMGM, FANATICS];
 
+// The books that price futures on the surface: the Australian ones first,
+// then the US and UK ones. Every column is optional — a future shows the
+// books that quote it and no others (Pinnacle never does; Sportsbet does not
+// today). Marks and colours only for the ones without a logo on disk.
+const POINTSBET: Bookmaker = { id: 'pointsbet', name: 'PointsBet', color: '#e11d48', mark: 'PB' };
+const UNIBET: Bookmaker = { id: 'unibet', name: 'Unibet', color: '#147b45', mark: 'UNI' };
+const NEDS: Bookmaker = { id: 'neds', name: 'Neds', color: '#f97316', mark: 'NED' };
+const CAESARS: Bookmaker = { id: 'caesars', name: 'Caesars', color: '#0b5d3b', mark: 'CZR' };
+const BETRIVERS: Bookmaker = { id: 'betrivers', name: 'BetRivers', color: '#1d4ed8', mark: 'BR' };
+const WILLIAMHILL: Bookmaker = { id: 'williamhill', name: 'William Hill', color: '#1e3a8a', mark: 'WH' };
+const PADDYPOWER: Bookmaker = { id: 'paddypower', name: 'Paddy Power', color: '#15803d', mark: 'PP' };
+const BETFAIR_UK: Bookmaker = { id: 'betfair_uk', name: 'Betfair UK', color: '#f59e0b', mark: 'BFX', logoUrl: '/logos/brands/betfair.png' };
+const coreBook = (id: string): Bookmaker => BOOKMAKERS.find((b) => b.id === id)!;
+export const FUTURES_BOOKS: Bookmaker[] = [
+  coreBook('sportsbet'), coreBook('tabtouch'), coreBook('ladbrokes'), POINTSBET, UNIBET, NEDS,
+  coreBook('bet365'), DRAFTKINGS, FANDUEL, BETMGM, CAESARS, FANATICS, BETRIVERS,
+  WILLIAMHILL, PADDYPOWER, BETFAIR_UK,
+];
+/** The league id the futures tab builds its grid under. */
+export const FUTURES_LEAGUE = 'futures';
+
 /**
  * Canonical key for a golf player across books that spell them differently —
  * US books write "Cameron Young", TAB writes "YOUNG Cameron". Used only as a
@@ -141,7 +162,9 @@ export function eventBooks(rows: OddsRow[], leagueId?: string): Bookmaker[] {
   const base =
     leagueId === 'golf'
       ? [...ours, ...GOLF_BOOKS.filter((b) => present.has(b.id))]
-      : [...ours, ...BOOKMAKERS, ...OPTIONAL_BOOKS.filter((b) => present.has(b.id))];
+      : leagueId === FUTURES_LEAGUE
+        ? [...ours, ...FUTURES_BOOKS.filter((b) => present.has(b.id))]
+        : [...ours, ...BOOKMAKERS, ...OPTIONAL_BOOKS.filter((b) => present.has(b.id))];
   const has = base.filter((b) => present.has(b.id));
   const missing = base.filter((b) => !present.has(b.id));
   return [...has, ...missing];
@@ -159,7 +182,7 @@ export const BETFAIR: Bookmaker = {
 const BETFAIR_LAY_ID = 'betfair_lay';
 
 const BY_ID: Record<string, Bookmaker> = Object.fromEntries(
-  [...BOOKMAKERS, ...OPTIONAL_BOOKS, ...GOLF_BOOKS, ...OUR_BOOKS, BETFAIR].map((b) => [b.id, b]),
+  [...BOOKMAKERS, ...OPTIONAL_BOOKS, ...GOLF_BOOKS, ...FUTURES_BOOKS, ...OUR_BOOKS, BETFAIR].map((b) => [b.id, b]),
 );
 
 export function brandById(id: string): Bookmaker | undefined {
@@ -532,8 +555,12 @@ const GOLF_MARKETS: MarketDef[] = [
   D('outright', 'Outright', 'outright'),
 ];
 
+// A future is one outright market, whatever the sport.
+const FUTURES_MARKETS: MarketDef[] = [D('outright', 'Outright', 'outright')];
+
 // Keyed by the sport slug (which is `league.id`).
 const LEAGUE_MARKETS: Record<string, MarketDef[]> = {
+  [FUTURES_LEAGUE]: FUTURES_MARKETS,
   soccer: SOCCER_MARKETS,
   amfootball: GRIDIRON_MARKETS,
   basketball: BASKETBALL_MARKETS,

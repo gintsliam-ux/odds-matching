@@ -125,6 +125,7 @@ export default async function handler(req, res) {
      */
     const CHEAP_AND_LIVE = new Set([
       '/api/bets', '/api/ticker', '/api/pulse', '/api/events', '/api/event',
+      '/api/futures',
       /*
        * Movers belongs here, and sat in the 300s bucket instead.
        *
@@ -139,7 +140,7 @@ export default async function handler(req, res) {
       // live favourite's price sat five minutes behind the strip's own clock.
       '/api/h2h',
     ]);
-    const PER_FIXTURE = new Set(['/api/odds', '/api/event/details']);
+    const PER_FIXTURE = new Set(['/api/odds', '/api/event/details', '/api/futures/odds']);
     /*
      * The bet feed is watched, not visited.
      *

@@ -12,6 +12,7 @@
  */
 import { coll, mirrorConfigured } from './mongo.mjs';
 import { betTicker } from './ticker.mjs';
+import { futureOdds, futuresList } from './futures.mjs';
 import { CAPABILITIES, DATA_SOURCE, isMongo } from './source.mjs';
 import { marketMovers } from './movers.mjs';
 import { delayedSettlements, lateBets } from './exposure.mjs';
@@ -200,6 +201,16 @@ const ROUTES = {
      * database.
      */
     return cached(`playerStats:${id}`, 20_000, () => playerStats(id));
+  },
+
+  // The futures tab: Optic's catalogue joined to mybet's futures, and one
+  // future's prices. Both read live through the surface and are cached here
+  // for a minute; the catalogue behind them refreshes every fifteen.
+  'GET /api/futures': () => cached('futures', 60_000, futuresList, { maxStaleMs: 10 * 60_000 }),
+  'GET /api/futures/odds': (url) => {
+    const id = url.searchParams.get('id') ?? '';
+    if (!id) return { error: 'id required' };
+    return cached(`futures:odds:${id}`, 30_000, () => futureOdds(id));
   },
 
   'GET /api/movers': (url) => {

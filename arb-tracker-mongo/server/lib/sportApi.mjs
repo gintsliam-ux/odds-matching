@@ -612,6 +612,22 @@ export async function apiPropOdds(fixtureId, markets) {
   return (body.data ?? []).map(canonicalRow);
 }
 
+const FUTURES_TTL_MS = 5 * 60_000;
+const FUTURE_ODDS_TTL_MS = 60_000;
+
+/** Optic's futures catalogue through the surface: every league known to carry any. */
+export async function apiFutures() {
+  const body = await cachedDrain('futures', () => call('futures', {}), FUTURES_TTL_MS);
+  return body?.data ?? [];
+}
+
+/** One future's prices from every book quoting it, in the OddsRow shape. */
+export async function apiFutureOdds(futureId) {
+  if (!futureId) return [];
+  const body = await cachedDrain(`future-odds:${futureId}`, () => call('futures-odds', { id: futureId }), FUTURE_ODDS_TTL_MS);
+  return (body?.data ?? []).map(canonicalRow);
+}
+
 /**
  * Fixtures matching a team, event or tournament name, any sport and any date,
  * as fixture records. The surface's /search: a whole word from its text index,

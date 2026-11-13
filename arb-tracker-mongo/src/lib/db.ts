@@ -468,6 +468,32 @@ export interface TickerFeed {
   bets: TickerBet[];
 }
 
+/** One future on the futures tab: Optic's, with its mybet twin attached, or mybet's own. */
+export interface FutureItem {
+  id: string;
+  source: 'optic' | 'mybet';
+  sport: string;
+  sportLabel: string;
+  leagueId: string;
+  leagueName: string;
+  tournament: string | null;
+  name: string;
+  type: string | null;
+  outright: boolean;
+  startsAt: string | null;
+  mybetId: string | null;
+  mybetName: string | null;
+}
+export interface FuturesList {
+  count: number;
+  matched: number;
+  mybet: number;
+  data: FutureItem[];
+}
+export const fetchFutures = (): Promise<FuturesList> => apiGet<FuturesList>('/api/futures');
+export const fetchFutureOdds = (id: string): Promise<OddsRow[]> =>
+  apiGet<OddsRow[]>(`/api/futures/odds?id=${encodeURIComponent(id)}`);
+
 export const fetchTicker = (): Promise<TickerFeed> => apiGet<TickerFeed>('/api/ticker');
 
 /**

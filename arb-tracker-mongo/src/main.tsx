@@ -61,6 +61,7 @@ const UsersPage = page(() => import('./pages/UsersPage'));
 const SettlementPage = page(() => import('./pages/SettlementPage'));
 const LateBetsPage = page(() => import('./pages/LateBetsPage'));
 const PendingBetsPage = page(() => import('./pages/PendingBetsPage'));
+const FuturesPage = page(() => import('./pages/FuturesPage'));
 import LoginPage from './pages/LoginPage';
 import { AuthProvider } from './lib/auth';
 import { useAuth } from './lib/useAuth';
@@ -155,6 +156,8 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/late-bets" element={<DeskOnly><LateBetsPage /></DeskOnly>} />
         {/* Our own position, bet by bet — admin only, and gated on the server too. */}
         <Route path="/pending" element={<AdminOnly><PendingBetsPage /></AdminOnly>} />
+        {/* Outrights: the books' futures beside mybet's. */}
+        <Route path="/futures" element={<DeskOnly><FuturesPage /></DeskOnly>} />
         <Route path="/mapping" element={<DeskOnly><MappingPage /></DeskOnly>} />
         <Route path="/users" element={<AdminOnly><UsersPage /></AdminOnly>} />
       </Routes>
