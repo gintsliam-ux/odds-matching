@@ -333,8 +333,11 @@ async function swiftRows(swiftId, marketName, futureId) {
       .map((h) => ({ p: Number(h?.odds), t: iso(h?.ts) }))
       .filter((h) => Number.isFinite(h.p) && h.p > 1 && h.t)
       .sort((a, b) => new Date(a.t) - new Date(b.t));
-    const live = Number.isFinite(price) && price > 1;
-    const last = ladder.length ? ladder[ladder.length - 1].p : null;
+    // Swiftbet states each selection's status; anything but open is shown
+    // suspended at its last price.
+    const open = !sel.status || /^(active|open|trading)$/i.test(String(sel.status));
+    const live = Number.isFinite(price) && price > 1 && open;
+    const last = ladder.length ? ladder[ladder.length - 1].p : Number.isFinite(price) && price > 1 ? price : null;
     if (!live && last == null) continue;
     out.push({
       fixture_id: futureId, market_id: 'outright', market_name: 'Outright',
@@ -527,7 +530,9 @@ export async function futureOdds(id) {
   if (row && row.type !== 'PLAYER' && rows.length) {
     const names = [...new Set(rows.map((r) => r.selection).filter(Boolean))];
     const logos = await teamLogos(row.sport, names).catch(() => new Map());
-    const keyed = mergeSpellings(names, logos);
+    const booksOf = new Map();
+    for (const r of rows) (booksOf.get(r.selection) ?? booksOf.set(r.selection, new Set()).get(r.selection)).add(r.sportsbook);
+    const keyed = mergeSpellings(names, logos, booksOf);
     for (const r of rows) {
       const k = keyed.get(r.selection);
       const hit = k ? logos.get(k.canonical) : null;
@@ -552,10 +557,19 @@ export async function futureOdds(id) {
  * that is unique among the candidates is taken; anything ambiguous stays its
  * own row rather than being guessed onto a team.
  */
-const NAME_NOISE = new Set(['fc', 'afc', 'sc', 'cf', 'cd', 'ac', 'as', 'fk', 'sk', 'bk', 'hc', 'kv', 'osc', 'if', 'the', 'club', 'spor', 'kulubu', 'kulup', 'de', 'ssc', 'us', 'rc']);
-const SHORT_FORMS = { man: 'manchester', syd: 'sydney', utd: 'united', nottm: 'nottingham', souths: 'south sydney', st: 'saint', bris: 'brisbane', wolves: 'wolverhampton', spurs: 'tottenham', sharks: 'cronulla', nth: 'north', sth: 'south', qld: 'queensland', nsw: 'new south wales', ill: 'illawarra', nz: 'new zealand', la: 'los angeles', ny: 'new york', sf: 'san francisco', praha: 'prague', muenchen: 'munich', munchen: 'munich', torino: 'turin', milano: 'milan', napoli: 'naples', lisboa: 'lisbon' };
-const nameTokens = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-  .split(/[^a-z0-9]+/).filter((t) => t && !NAME_NOISE.has(t));
+const NAME_NOISE = new Set(['fc', 'afc', 'sc', 'cf', 'cd', 'ac', 'as', 'fk', 'sk', 'bk', 'hc', 'kv', 'osc', 'if', 'bv', 'the', 'club', 'spor', 'kulubu', 'kulup', 'de', 'ssc', 'us', 'rc', 'balompie', '1893', '09', '1909', '1904']);
+// One spelling per word on both sides, so the native and English names meet:
+// "FC Bayern München" and "Bayern Munich", "SK Slavia Praha" and "Slavia Prague".
+const TOKEN_CANON = { munchen: 'munich', muenchen: 'munich', milano: 'milan', praha: 'prague', lisboa: 'lisbon', internazionale: 'inter', rasenballsport: 'rb', st: 'saint', ste: 'saint', torino: 'turin', napoli: 'naples', roma: 'rome', sevilla: 'seville', wien: 'vienna', kobenhavn: 'copenhagen', bruxelles: 'brussels' };
+// Whole names the words cannot reach.
+const NAME_ALIASES = { psg: 'paris saint germain', 'paris saint g': 'paris saint germain', 'sporting lisbon': 'sporting clube portugal', 'sporting cp': 'sporting clube portugal', lask: 'linzer athletik sport klub', 'lask linz': 'linzer athletik sport klub', 'man city': 'manchester city', 'man utd': 'manchester united', spurs: 'tottenham hotspur', wolves: 'wolverhampton wanderers' };
+const SHORT_FORMS = { man: 'manchester', syd: 'sydney', utd: 'united', nottm: 'nottingham', souths: 'south sydney', bris: 'brisbane', sharks: 'cronulla', nth: 'north', sth: 'south', qld: 'queensland', ill: 'illawarra', nz: 'new zealand', la: 'los angeles', ny: 'new york', sf: 'san francisco' };
+const nameTokens = (s) => {
+  const raw = String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .split(/[^a-z0-9]+/).filter((t) => t && !NAME_NOISE.has(t)).map((t) => TOKEN_CANON[t] ?? t);
+  const phrase = raw.join(' ');
+  return NAME_ALIASES[phrase] ? NAME_ALIASES[phrase].split(' ') : raw;
+};
 const editOne = (a, b) => {
   if (Math.abs(a.length - b.length) > 1) return false;
   let i = 0; let j = 0; let edits = 0;
@@ -566,74 +580,73 @@ const editOne = (a, b) => {
   }
   return edits + (a.length - i) + (b.length - j) <= 1;
 };
-const wordFits = (w, candTokens) => candTokens.some((c) => c === w || (w.length >= 3 && c.startsWith(w)) || (w.length >= 6 && editOne(w, c)));
-// The word as written first ("St George" is "St George", not "Saint"), then its expansion.
-const tokenFits = (t, candTokens) => wordFits(t, candTokens) || (!!SHORT_FORMS[t] && SHORT_FORMS[t].split(' ').every((w) => wordFits(w, candTokens)));
-// The key a spelling's entity gives it, without the club nouns: "arsenal_fc"
-// and "arsenal" are one entity whichever of them the table filed it under.
-const bareKey = (key) => nameTokens(String(key ?? '').replace(/_/g, ' ')).join('_');
-function mergeSpellings(names, logos) {
-  const out = new Map(); // spelling -> { key, canonical }
-  const canon = []; // { name, key, tokens }
-  // Two spellings with the same crest are one team whatever the table keyed
-  // them as; the first key seen for a crest stands for all of them.
-  const keyByLogo = new Map();
+const wordFits = (w, cand) => cand.some((c) => c === w || (w.length >= 3 && c.startsWith(w)) || (w.length >= 6 && editOne(w, c)));
+const tokenFits = (t, cand) => wordFits(t, cand) || (!!SHORT_FORMS[t] && SHORT_FORMS[t].split(' ').every((w) => wordFits(w, cand)));
+const fitsInto = (small, big) => small.length > 0 && small.length <= big.length && small.every((t) => tokenFits(t, big));
+
+/*
+ * One key per team across the books' spellings, as a union of spellings:
+ *   - two spellings the entities table gives the same crest are one team;
+ *   - a spelling whose words all fit inside the words of exactly one team
+ *     (equal, abbreviated, a contraction, one letter off; after native and
+ *     English names are folded together) joins that team — "Dortmund" into
+ *     "Borussia Dortmund", "Bayern Munich" into "FC Bayern München", "Man Utd"
+ *     into "Manchester United FC". Repeated until nothing moves.
+ * A spelling that fits more than one team stays its own row rather than
+ * being guessed onto either.
+ */
+function mergeSpellings(names, logos, booksOf = new Map()) {
+  const parent = new Map(names.map((n) => [n, n]));
+  const find = (n) => { while (parent.get(n) !== n) { parent.set(n, parent.get(parent.get(n))); n = parent.get(n); } return n; };
+  // The books each group's spellings come from. A book lists a team once, so
+  // two groups that share a book are two teams and are never joined: that is
+  // what keeps "Ohio" from carrying "Ohio State" into "Miami Ohio".
+  const groupBooks = new Map(names.map((n) => [n, new Set(booksOf.get(n) ?? [])]));
+  const clash = (ra, rb) => { const a = groupBooks.get(ra); for (const b of groupBooks.get(rb)) if (a.has(b)) return true; return false; };
+  const union = (a, b) => {
+    const ra = find(a); const rb = find(b);
+    if (ra === rb || clash(ra, rb)) return false;
+    parent.set(ra, rb);
+    for (const x of groupBooks.get(ra)) groupBooks.get(rb).add(x);
+    return true;
+  };
+  const toks = new Map(names.map((n) => [n, nameTokens(n)]));
+  const byLogo = new Map();
   for (const n of names) {
-    const e = logos.get(n);
-    // A name the table knows but has no crest for ("Brighton" beside
-    // "Brighton & Hove Albion FC") is matched by its words like an unknown
-    // one, so it joins the crested spelling rather than standing alone.
-    if (!e?.key || !e.logoUrl) continue;
-    let key = bareKey(e.key) || e.key;
-    if (keyByLogo.has(e.logoUrl)) key = keyByLogo.get(e.logoUrl); else keyByLogo.set(e.logoUrl, key);
-    out.set(n, { key, canonical: n });
-    canon.push({ name: n, key, tokens: nameTokens(n) });
+    const url = logos.get(n)?.logoUrl;
+    if (!url) continue;
+    if (byLogo.has(url)) union(n, byLogo.get(url)); else byLogo.set(url, n);
   }
-  // The longest known spelling of each key is its canonical, for the crest.
-  const canonicalOf = new Map();
-  for (const c of canon) if (!canonicalOf.has(c.key) || c.name.length > canonicalOf.get(c.key).length) canonicalOf.set(c.key, c.name);
-  for (const [n, v] of out) v.canonical = canonicalOf.get(v.key) ?? v.canonical;
+  // Same words after folding: one team.
+  const byPhrase = new Map();
   for (const n of names) {
-    if (out.has(n)) continue;
-    const toks = nameTokens(n);
-    if (!toks.length) continue;
-    const hits = new Set();
-    for (const c of canon) if (toks.every((t) => tokenFits(t, c.tokens))) hits.add(c.key);
-    if (hits.size === 1) { const key = [...hits][0]; out.set(n, { key, canonical: canonicalOf.get(key) }); }
-    else {
-      // Its own key, the entity's where the table knows it, so two uncrested
-      // spellings the table files together still meet.
-      const e = logos.get(n);
-      out.set(n, { key: (e?.key && bareKey(e.key)) || nameTokens(n).join('_'), canonical: n });
+    const k = toks.get(n).join(' ');
+    if (!k) continue;
+    if (byPhrase.has(k)) union(n, byPhrase.get(k)); else byPhrase.set(k, n);
+  }
+  for (let pass = 0; pass < 4; pass++) {
+    let moved = false;
+    for (const n of names) {
+      const mine = find(n);
+      const groups = new Set();
+      for (const m of names) {
+        const g = find(m);
+        if (g === mine) continue;
+        if (fitsInto(toks.get(n), toks.get(m)) && !clash(mine, g)) groups.add(g);
+      }
+      if (groups.size === 1 && union(n, [...groups][0])) moved = true;
     }
+    if (!moved) break;
   }
-  /*
-   * Last, a name that is a strict part of exactly one other: "Athletics"
-   * inside "Oakland Athletics" (the table files the renamed club twice,
-   * with two crests), "Brighton" inside "Brighton & Hove Albion", "Lens"
-   * inside "Racing de Lens". Ambiguous parts — "Sporting" inside both
-   * "Sporting Lisbon" and "Sporting Clube de Portugal" — stay their own row.
-   */
-  const tokensOfKey = new Map();
-  for (const v of out.values()) {
-    const t = new Set(nameTokens(v.canonical.replace(/_/g, ' ')));
-    const have = tokensOfKey.get(v.key);
-    if (!have || t.size > have.size) tokensOfKey.set(v.key, t);
-  }
-  const remap = new Map();
-  for (const [k, t] of tokensOfKey) {
-    if (!t.size) continue;
-    const supers = [...tokensOfKey.entries()].filter(([k2, t2]) => k2 !== k && t2.size > t.size && [...t].every((w) => t2.has(w)));
-    if (supers.length === 1) remap.set(k, supers[0][0]);
-  }
-  if (remap.size) {
-    const canonicalByKey = new Map();
-    for (const v of out.values()) if (!canonicalByKey.has(v.key) || v.canonical.length > canonicalByKey.get(v.key).length) canonicalByKey.set(v.key, v.canonical);
-    for (const v of out.values()) {
-      let k = v.key;
-      for (let i = 0; i < 3 && remap.has(k); i++) k = remap.get(k);
-      if (k !== v.key) { v.key = k; v.canonical = canonicalByKey.get(k) ?? v.canonical; }
-    }
+  // The group's key and its crest-bearing name.
+  const members = new Map();
+  for (const n of names) (members.get(find(n)) ?? members.set(find(n), []).get(find(n))).push(n);
+  const out = new Map();
+  for (const list of members.values()) {
+    const crested = list.filter((n) => logos.get(n)?.logoUrl).sort((a, b) => b.length - a.length);
+    const canonical = crested[0] ?? list.slice().sort((a, b) => b.length - a.length)[0];
+    const key = nameTokens(canonical).join('_') || canonical;
+    for (const n of list) out.set(n, { key, canonical });
   }
   return out;
 }

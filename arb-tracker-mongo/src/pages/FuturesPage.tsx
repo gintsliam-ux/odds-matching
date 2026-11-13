@@ -38,8 +38,8 @@ function toEvent(f: FutureItem): SportEvent {
           : [f.mybetName && `mybet: ${f.mybetName}`, f.swiftName && `Swiftbet: ${f.swiftName}`].filter(Boolean).join(' · ') || undefined,
     home: '',
     away: '',
+    // A future has one date, the feed's; shown once, not as a one-day range.
     startsAt: starts,
-    endsAt: f.startsAt ?? undefined,
     outright: true,
     status: 'upcoming',
   };
