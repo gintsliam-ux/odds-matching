@@ -490,6 +490,9 @@ export interface FutureItem {
   groupId: string;
   groupName: string;
   marketLabel: string;
+  /** The tab it sits under, and its button within that tab when the tab holds several. */
+  tabLabel: string;
+  variantLabel: string;
   /** The badge, derived the way the board derives a fixture's. */
   league: League;
 }

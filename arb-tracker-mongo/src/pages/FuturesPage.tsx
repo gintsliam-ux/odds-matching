@@ -32,7 +32,7 @@ function toEvent(f: FutureItem): SportEvent {
     // The board's badge for the league, under the futures market set.
     league: { ...f.league, id: FUTURES_LEAGUE },
     name: f.groupName,
-    subtitle: f.marketLabel,
+    subtitle: f.variantLabel && f.variantLabel !== 'Main' ? `${f.tabLabel} · ${f.variantLabel}` : f.tabLabel,
     home: '',
     away: '',
     // A future has one date, the feed's; shown once, not as a one-day range.
@@ -97,32 +97,70 @@ function CompetitionRow({ c, selected, onSelect }: { c: Competition; selected: b
   );
 }
 
-/** The competition's markets as tabs across the top, the brands' ones marked. */
-function MarketTabs({ items, selectedId, onSelect }: { items: FutureItem[]; selectedId: string; onSelect: (id: string) => void }) {
-  if (items.length < 2) return null;
+const Brands = ({ items }: { items: FutureItem[] }) => (
+  <>
+    {items.some((f) => f.mybetId) && <span className="rounded bg-emerald-500/20 px-1 text-[9px] font-semibold text-emerald-300">MB</span>}
+    {items.some((f) => f.swiftId) && <span className="rounded bg-sky-500/20 px-1 text-[9px] font-semibold text-sky-300">SB</span>}
+  </>
+);
+
+/**
+ * The competition's markets as tabs across the top, the brands' ones marked;
+ * a tab that holds several pieces of one market (the seeds, the divisions, a
+ * Yes/No version) shows them as a second row of buttons.
+ */
+function MarketTabs({ items, selected, onSelect }: { items: FutureItem[]; selected: FutureItem; onSelect: (id: string) => void }) {
+  const tabs: { label: string; items: FutureItem[] }[] = [];
+  for (const f of items) {
+    const t = tabs.find((x) => x.label === f.tabLabel);
+    if (t) t.items.push(f); else tabs.push({ label: f.tabLabel, items: [f] });
+  }
+  const current = tabs.find((t) => t.label === selected.tabLabel);
+  const variants = (current?.items ?? []).slice().sort((a, b) =>
+    a.variantLabel.localeCompare(b.variantLabel, undefined, { numeric: true }));
+  if (tabs.length < 2 && variants.length < 2) return null;
   return (
-    <div className="shrink-0 border-b border-surface-border bg-surface px-3 py-2">
+    <div className="shrink-0 space-y-1.5 border-b border-surface-border bg-surface px-3 py-2">
       <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-        {items.map((f) => {
-          const active = f.id === selectedId;
+        {tabs.map((t) => {
+          const active = t.label === selected.tabLabel;
+          // A tab opens on its brand-priced piece if it has one, else the main one.
+          const open = t.items.find((f) => f.mybetId || f.swiftId) ?? t.items.find((f) => f.variantLabel === 'Main') ?? t.items[0];
           return (
             <button
-              key={f.id}
+              key={t.label}
               type="button"
-              onClick={() => onSelect(f.id)}
+              onClick={() => onSelect(open.id)}
               className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition ${
                 active
                   ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-100'
                   : 'border-surface-border bg-surface-raised text-slate-400 hover:text-slate-200'
               }`}
             >
-              {f.marketLabel}
-              {f.mybetId && <span title={f.mybetName ?? 'mybet'} className="rounded bg-emerald-500/20 px-1 text-[9px] font-semibold text-emerald-300">MB</span>}
-              {f.swiftId && <span title={f.swiftName ?? 'Swiftbet'} className="rounded bg-sky-500/20 px-1 text-[9px] font-semibold text-sky-300">SB</span>}
+              {t.label}
+              {t.items.length > 1 && <span className="text-[10px] text-slate-500">{t.items.length}</span>}
+              <Brands items={t.items} />
             </button>
           );
         })}
       </div>
+      {variants.length > 1 && (
+        <div className="flex gap-1 overflow-x-auto pb-0.5">
+          {variants.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => onSelect(f.id)}
+              className={`flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-[11px] transition ${
+                f.id === selected.id ? 'bg-white/10 text-slate-100' : 'text-slate-500 hover:text-slate-300'
+              }`}
+            >
+              {f.variantLabel === 'Main' ? 'Winner' : f.variantLabel}
+              <Brands items={[f]} />
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -369,7 +407,7 @@ export default function FuturesPage() {
 
         {/* the grid */}
         <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          {selected && <MarketTabs items={tabs} selectedId={selected.id} onSelect={setSelectedId} />}
+          {selected && <MarketTabs items={tabs} selected={selected} onSelect={setSelectedId} />}
           {selected ? (
             <EventDetail
               event={toEvent(selected)}

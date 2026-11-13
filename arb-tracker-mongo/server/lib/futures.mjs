@@ -193,11 +193,12 @@ function matchOptic({ sport, comp, market, outright }, optic) {
   const marketT = tokens(market);
   const sameWords = (a, b) => a.size === b.size && [...a].every((t) => b.has(t));
   const rest = inLeague.filter((f) => !f.outright && compFits(f));
+  const marketBare = new Set([...marketT].filter((t) => !leagueT.has(t)));
   const exact = rest.filter((f) => {
     const nt = nameT(f);
     for (const t of compOnly) nt.delete(t);
     for (const t of leagueT) nt.delete(t);
-    return sameWords(marketT, nt);
+    return sameWords(marketBare, nt);
   });
   if (exact.length === 1) return exact[0];
   const loose = rest.filter((f) => { const nt = nameT(f); return [...marketT].every((t) => nt.has(t)); });
@@ -491,7 +492,34 @@ function attachGroups(rows, optic) {
     r.groupId = groupId;
     r.groupName = groupName;
     r.marketLabel = label;
+    const fam = familyOf(label);
+    r.tabLabel = fam.tab;
+    r.variantLabel = fam.variant;
   }
+}
+
+/*
+ * Markets that are one market in several pieces share a tab, each piece a
+ * variant under it: a "Yes/No" version beside the winner market, an
+ * over/under pair, the eight seeds, the divisions, the conferences, the
+ * top-N finishes, a golf round's leader and top-N.
+ */
+function familyOf(label) {
+  let base = String(label ?? '').trim();
+  let yn = '';
+  const ynm = base.match(/^(.*?)\s+yes\/no$/i);
+  if (ynm) { base = ynm[1]; yn = 'Yes/No'; }
+  const v = (variant) => [variant, yn].filter(Boolean).join(' · ') || 'Main';
+  let m;
+  if ((m = base.match(/^(.*?)\s+(over|under)\s+([\d.]+)$/i))) return { tab: `${m[1]} ${m[3]}`, variant: v(titleCase(m[2])) };
+  if ((m = base.match(/^(.*?conference)\s+#(\d+)\s+seed$/i))) return { tab: 'Conference Seed', variant: v(`${m[1].replace(/\s*conference$/i, '')} #${m[2]}`) };
+  if ((m = base.match(/^(afc|nfc|eastern|western)\s+conference\s+winner$/i))) return { tab: 'Conference Winner', variant: v(titleCase(m[1]).replace(/^(Afc|Nfc)$/, (x) => x.toUpperCase())) };
+  if ((m = base.match(/^(afc|nfc)\s+(east|west|north|south)\s+winner$/i))) return { tab: 'Division Winner', variant: v(`${m[1].toUpperCase()} ${titleCase(m[2])}`) };
+  if ((m = base.match(/^(\w+)\s+division\s+winner$/i))) return { tab: 'Division Winner', variant: v(titleCase(m[1])) };
+  if ((m = base.match(/^(east|west)\s+group\s+(\w)\s+winner$/i))) return { tab: 'Group Winner', variant: v(`${titleCase(m[1])} ${m[2].toUpperCase()}`) };
+  if ((m = base.match(/^top\s+(\d+(?:-\d+)?)\s+finish(er)?$/i))) return { tab: 'Top Finish', variant: v(`Top ${m[1]}`) };
+  if ((m = base.match(/^end of round\s+(\d)\s+(.*)$/i))) return { tab: `Round ${m[1]}`, variant: v(titleCase(m[2])) };
+  return { tab: base, variant: yn ? 'Yes/No' : 'Main' };
 }
 
 export const isFutureId = (id) => /^type_/.test(String(id ?? '')) || String(id ?? '').startsWith('mybet:') || String(id ?? '').startsWith('swift:');
@@ -639,9 +667,10 @@ export async function futureOdds(id) {
   // and one key per team across the books' spellings so the grid merges
   // "Philadelphia Phillies", "Philadephia Phillies" and "Phillies" into a
   // row. A player market has none of this and draws as before.
-  if (row && row.type !== 'PLAYER' && rows.length) {
+  if (row && rows.length) {
     const names = [...new Set(rows.map((r) => r.selection).filter(Boolean))];
-    const logos = await teamLogos(row.sport, names).catch(() => new Map());
+    // Players are merged by their words alone; only teams have crests.
+    const logos = row.type === 'PLAYER' ? new Map() : await teamLogos(row.sport, names).catch(() => new Map());
     const booksOf = new Map();
     for (const r of rows) (booksOf.get(r.selection) ?? booksOf.set(r.selection, new Set()).get(r.selection)).add(r.sportsbook);
     const keyed = mergeSpellings(names, logos, booksOf);
@@ -677,7 +706,8 @@ const TOKEN_CANON = { munchen: 'munich', muenchen: 'munich', milano: 'milan', pr
 const NAME_ALIASES = { psg: 'paris saint germain', 'paris saint g': 'paris saint germain', 'sporting lisbon': 'sporting clube portugal', 'sporting cp': 'sporting clube portugal', lask: 'linzer athletik sport klub', 'lask linz': 'linzer athletik sport klub', 'man city': 'manchester city', 'man utd': 'manchester united', spurs: 'tottenham hotspur', wolves: 'wolverhampton wanderers' };
 const SHORT_FORMS = { man: 'manchester', syd: 'sydney', utd: 'united', nottm: 'nottingham', souths: 'south sydney', bris: 'brisbane', sharks: 'cronulla', nth: 'north', sth: 'south', qld: 'queensland', ill: 'illawarra', nz: 'new zealand', la: 'los angeles', ny: 'new york', sf: 'san francisco' };
 const nameTokens = (s) => {
-  const raw = String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  // "Victor Wembanyama (SAS)", "Erling Haaland (Man City)": the team is not the name.
+  const raw = String(s ?? '').replace(/\s*\([^)]*\)\s*/g, ' ').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
     .split(/[^a-z0-9]+/).filter((t) => t && !NAME_NOISE.has(t)).map((t) => TOKEN_CANON[t] ?? t);
   const phrase = raw.join(' ');
   return NAME_ALIASES[phrase] ? NAME_ALIASES[phrase].split(' ') : raw;
@@ -694,7 +724,11 @@ const editOne = (a, b) => {
 };
 const wordFits = (w, cand) => cand.some((c) => c === w || (w.length >= 3 && c.startsWith(w)) || (w.length >= 6 && editOne(w, c)));
 const tokenFits = (t, cand) => wordFits(t, cand) || (!!SHORT_FORMS[t] && SHORT_FORMS[t].split(' ').every((w) => wordFits(w, cand)));
-const fitsInto = (small, big) => small.length > 0 && small.length <= big.length && small.every((t) => tokenFits(t, big));
+// A lone initial ("S Gilgeous Alexander") fits a word it starts, as long as
+// the rest of the name carries a real word that fits.
+const fitsInto = (small, big) => small.length > 0 && small.length <= big.length
+  && small.some((t) => t.length > 1 && tokenFits(t, big))
+  && small.every((t) => (t.length === 1 ? big.some((c) => c[0] === t) : tokenFits(t, big)));
 
 /*
  * One key per team across the books' spellings, as a union of spellings:
