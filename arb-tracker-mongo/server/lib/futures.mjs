@@ -674,12 +674,21 @@ export async function futureOdds(id) {
     const booksOf = new Map();
     for (const r of rows) (booksOf.get(r.selection) ?? booksOf.set(r.selection, new Set()).get(r.selection)).add(r.sportsbook);
     const keyed = mergeSpellings(names, logos, booksOf);
+    // A player's crest is his team's: the team Optic gives on its rows, found
+    // in the same entities the board draws from. The brands' rows for him
+    // carry no team but share his key, and the grid takes the crest from
+    // whichever row of the merged player has one.
+    let teamCrests = new Map();
+    if (row.type === 'PLAYER') {
+      const teams = [...new Set(rows.map((r) => r.player_team).filter(Boolean))];
+      if (teams.length) teamCrests = await teamLogos(row.sport, teams).catch(() => new Map());
+    }
     for (const r of rows) {
       const k = keyed.get(r.selection);
-      const hit = k ? logos.get(k.canonical) : null;
+      const hit = row.type === 'PLAYER' ? teamCrests.get(r.player_team) : k ? logos.get(k.canonical) : null;
       r.selection_key = k?.key ?? null;
       r.selection_logo = hit?.logoUrl ?? null;
-      r.selection_country = hit?.country ?? null;
+      r.selection_country = row.type === 'PLAYER' ? null : hit?.country ?? null;
     }
   }
   return rows;
