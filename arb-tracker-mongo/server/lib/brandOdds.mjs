@@ -572,8 +572,15 @@ function outcomeOfRole(role, sel, home, away) {
 async function mybetMarketRows(eventId, { home, away, sport }) {
   const db = await mybetDb();
   if (!db || eventId == null) return [];
+  /*
+   * The feed stopped writing `generationwebEventId` on 29 Oct 2026; since
+   * then a market's only link to its event is the `<eventId>-<market>`
+   * marketKey. Both are asked for, so the older documents still answer.
+   * Nothing from the book had reached a page for a fortnight: the puck line,
+   * the alternates and the halves were in the collection and never found.
+   */
   const docs = await db.collection('markets')
-    .find({ generationwebEventId: String(eventId) })
+    .find({ $or: [{ generationwebEventId: String(eventId) }, { marketKey: { $regex: `^${String(eventId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-` } }] })
     .project({ _id: 0, name: 1, market_type_code: 1, segment: 1, selections: 1, updated_at: 1 })
     .limit(400)
     .toArray()
@@ -581,8 +588,16 @@ async function mybetMarketRows(eventId, { home, away, sport }) {
 
   const out = [];
   for (const d of docs) {
-    const base = MYBET_MARKET[d.market_type_code];
+    let base = MYBET_MARKET[d.market_type_code];
     if (!base) continue;
+    /*
+     * A head-to-head WITH a draw is the three-way, whatever the type code
+     * says. On NHL the book's one "Head to Head" carries St Louis / Draw /
+     * Utah at regulation-time prices, and typed as the two-way it landed in
+     * the overtime-included row beside Pinnacle's, which is a different bet.
+     */
+    const hasTie = (d.selections ?? []).some((x) => /_(DRAW|TIE)$/.test(String(x?.role ?? '')));
+    if (base === 'moneyline' && hasTie) base = 'moneyline_3way';
     const prefix = periodPrefix(d.segment);
     if (prefix === null) continue;
     /*
@@ -598,7 +613,12 @@ async function mybetMarketRows(eventId, { home, away, sport }) {
       const fixed = sel?.products?.FixedWin ?? {};
       const price = num(fixed.price);
       if (price == null) continue;
-      const outcomeNo = outcomeOfRole(sel.role, sel, home, away);
+      // The name first on a team market, the role only as the fallback: the
+      // book had St Louis as SELECTION_ROLE_HOME for a game played in Utah,
+      // and the role put the wrong team's price on each row.
+      const outcomeNo =
+        (/moneyline|spread/.test(base) ? sideOfName(sel?.name ?? '', home, away) : null) ??
+        outcomeOfRole(sel.role, sel, home, away);
       if (outcomeNo == null) continue;
       out.push(row({
         book: MYBET_BOOK,

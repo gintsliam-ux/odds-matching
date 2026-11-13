@@ -781,7 +781,12 @@ async function syncTabOdds(S, D) {
 }
 
 async function ensureIndexes(D) {
+  // [collection, key, options, database]; the database defaults to the mirror.
   const want = [
+    // The brand's market book is found by its `<eventId>-<market>` marketKey
+    // (the feed stopped writing generationwebEventId on 29 Oct 2026); the
+    // anchored prefix needs this or it is a scan of 51k documents on Atlas.
+    ['markets', { marketKey: 1 }, {}, 'mybet'],
     ['event_mapping', { optic_fixture_id: 1 }, {}],
     ['event_mapping', { provider: 1, optic_fixture_id: 1 }, { unique: true }],
     ['competition_mapping', { optic_league: 1 }, {}],
@@ -792,9 +797,9 @@ async function ensureIndexes(D) {
     ['fixtures', { fixture_id: 1 }, {}],
     ['tab_odds', { fixture_id: 1 }, {}],
   ];
-  for (const [c, key, opts] of want) {
+  for (const [c, key, opts, db] of want) {
     try {
-      await D.collection(c).createIndex(key, opts);
+      await (db ? D.client.db(db) : D).collection(c).createIndex(key, opts);
     } catch (e) {
       // A pre-existing index with the same key but different options is fine —
       // it already serves the query, which is all this needs.
