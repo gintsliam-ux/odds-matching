@@ -1,5 +1,5 @@
 import { betsConfigured, betsDb } from './betsMongo.mjs';
-import { multiBetsFor } from './bets.mjs';
+import { multiBetsFor, swiftbetFor } from './bets.mjs';
 import { leagueFor, teamLogos } from './events.mjs';
 import { apiFutureOdds, apiFutures } from './sportApi.mjs';
 
@@ -68,7 +68,7 @@ const tokens = (s) => new Set(
 const yearOf = (s) => (String(s ?? '').match(/\b(20\d{2})(?:\/\d{2,4})?\b/) ?? [])[1] ?? null;
 
 /** "Outright Winner", "Super Bowl LXI Winner", "Premiership Winner", "Champion" -> the outright. */
-const OUTRIGHT_MARKET = /^((outright|championship|premiership|grand final|tournament|series|super bowl( [ivxl]+)?|stanley cup|world series) )?(winner|champion)$/i;
+const OUTRIGHT_MARKET = /^((outright|championship|premiership|grand final|tournament|series|race|super bowl( [ivxl]+)?|stanley cup|world series) )?(winner|champions?)$/i;
 
 /** description -> { comp, market, outright } */
 function parseDescription(desc) {
@@ -102,10 +102,8 @@ function mybetLeagueId(comp, sport) {
  * with the year required to agree where both carry one (tennis and golf
  * name the event and the year in the future itself).
  */
-function matchOptic(m, optic) {
-  const sport = MYBET_SPORT[norm(m.sport)];
+function matchOptic({ sport, comp, market, outright }, optic) {
   if (!sport) return null;
-  const { comp, market, outright } = parseDescription(m.description);
   const compT = tokens(comp);
   const year = yearOf(comp);
   let pool = optic.filter((f) => f.sport === sport);
@@ -197,15 +195,16 @@ const PROP_LIKE = /\bplayer\b|\bto have\b|\bto score\b|\bhi bat\b|partnership|\b
 
 /** The catalogue: Optic's futures with their mybet twin attached, plus mybet's own that Optic lacks. */
 export async function futuresList() {
-  const [optic, mybet] = await Promise.all([
+  const [optic, mybet, swift] = await Promise.all([
     apiFutures().catch(() => []),
     mybetFutures(),
+    swiftFutures(),
   ]);
   const rows = optic.map((f) => ({
     id: f.id, source: 'optic', sport: f.sport, sportLabel: SPORT_LABEL[f.sport] ?? f.sport,
     leagueId: f.league_id, leagueName: f.league_name, tournament: f.tournament ?? null,
     name: f.name, type: f.type ?? null, outright: !!f.outright, startsAt: f.start_date ?? null,
-    mybetId: null, mybetName: null,
+    mybetId: null, mybetName: null, swiftId: null, swiftMarket: null, swiftName: null,
   }));
   const byId = new Map(rows.map((r) => [r.id, r]));
   let matched = 0;
@@ -213,7 +212,7 @@ export async function futuresList() {
     const { comp, market, outright } = parseDescription(m.description);
     // Props filed under a match are in the same collection; they are not futures.
     if (PROP_LIKE.test(m.description ?? '') && !outright) continue;
-    const hit = matchOptic(m, optic);
+    const hit = matchOptic({ sport: MYBET_SPORT[norm(m.sport)], comp, market, outright }, optic);
     if (hit && byId.get(hit.id) && !byId.get(hit.id).mybetId) {
       const r = byId.get(hit.id);
       r.mybetId = String(m._id);
@@ -230,11 +229,124 @@ export async function futuresList() {
       leagueId: `mybet:${norm(comp).replace(/\b\d{4}(?:\/\d{2,4})?\b/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')}`,
       leagueName: comp, tournament: null, name: market, type: null, outright,
       startsAt: iso(m.outcomeAt), mybetId: String(m._id), mybetName: m.description ?? null,
+      swiftId: null, swiftMarket: null, swiftName: null,
+    });
+  }
+  // Swiftbet's futures, joined the same way; one Swiftbet does not list on
+  // Optic is its own row, as mybet's are.
+  let swiftMatched = 0;
+  for (const sf of swift) {
+    const hit = matchOptic(sf, optic);
+    if (hit && byId.get(hit.id) && !byId.get(hit.id).swiftId) {
+      const r = byId.get(hit.id);
+      r.swiftId = sf.swiftId;
+      r.swiftMarket = sf.swiftMarket;
+      r.swiftName = sf.swiftName;
+      swiftMatched++;
+      continue;
+    }
+    rows.push({
+      id: `swift:${sf.swiftId}:${sf.marketIndex}`, source: 'swiftbet', sport: sf.sport, sportLabel: SPORT_LABEL[sf.sport] ?? sf.sport,
+      leagueId: `swift:${norm(sf.comp).replace(/\b\d{4}(?:\/\d{2,4})?\b/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')}`,
+      // The event names the proposition where it is not the competition's
+      // own ("United States Las Vegas Grand Prix Race", not "Winner").
+      leagueName: sf.comp, tournament: null, type: null, outright: sf.outright,
+      name: sf.outright && norm(sf.eventName) !== norm(sf.comp) ? sf.eventName : sf.market,
+      startsAt: sf.startsAt, mybetId: null, mybetName: null,
+      swiftId: sf.swiftId, swiftMarket: sf.swiftMarket, swiftName: sf.swiftName,
     });
   }
   rows.sort((a, b) => a.sportLabel.localeCompare(b.sportLabel) || a.leagueName.localeCompare(b.leagueName) || Number(b.outright) - Number(a.outright) || a.name.localeCompare(b.name));
   await attachLeagues(rows);
-  return { count: rows.length, matched, mybet: mybet.length, data: rows };
+  return { count: rows.length, matched, mybet: mybet.length, swift: swift.length, swiftMatched, data: rows };
+}
+
+/*
+ * Swiftbet's futures: the open events whose name is not a match, each
+ * market a proposition. "NBA 2026/27 Champions" is one event with one market
+ * of the same name; "2026 Austin Championship" is one event with "outright
+ * winner", "top 5" and "top 10". Read as competition + market so they join
+ * the way mybet's descriptions do.
+ */
+const SWIFT_SPORT = {
+  'american football': 'amfootball', basketball: 'basketball', golf: 'golf', 'rugby league': 'rugbyleague',
+  'rugby union': 'rugbyunion', soccer: 'soccer', tennis: 'tennis', cricket: 'cricket', baseball: 'baseball',
+  'ice hockey': 'icehockey', 'motor sport': 'motorsport', 'australian rules': 'aussierules',
+};
+const SWIFT_MARKET_LABEL = { 'outright winner': 'Winner', 'race winner': 'Winner', winner: 'Winner', 'top 5': 'Top 5 Finish', 'top 10': 'Top 10 Finish', 'top 20': 'Top 20 Finish' };
+async function swiftFutures() {
+  if (!betsConfigured) return [];
+  const db = await betsDb();
+  if (!db) return [];
+  const since = new Date(Date.now() - 7 * 864e5);
+  const docs = await db.collection('events')
+    .find({
+      finished: { $ne: true },
+      name: { $not: /\bvs?\b/i },
+      'markets.0': { $exists: true },
+      $or: [{ scraped_at: { $gte: since } }, { scraped_at: { $gte: since.toISOString() } }],
+    })
+    .project({ name: 1, start_date: 1, 'sport.name': 1, 'competition.name': 1, markets: { name: 1, id: 1, selections: { name: 1 } } })
+    .limit(500)
+    .toArray()
+    .catch(() => []);
+  const out = [];
+  for (const e of docs) {
+    const sport = SWIFT_SPORT[norm(e.sport?.name)];
+    if (!sport) continue;
+    const compName = String(e.competition?.name ?? '').replace(/\bfutures?\b/gi, '').trim();
+    const eventName = String(e.name ?? '').trim();
+    // The event carries the year on a golf tournament; the competition on a
+    // league future. Both words go in, the matcher reads them as one phrase.
+    const comp = /\b20\d{2}\b/.test(eventName) && !/\b20\d{2}\b/.test(compName) ? eventName : compName || eventName;
+    (e.markets ?? []).forEach((m, i) => {
+      if (!(m.selections ?? []).length) return;
+      const raw = String(m.name ?? '').trim();
+      // A market named after its event IS the event's proposition.
+      let market = SWIFT_MARKET_LABEL[norm(raw)] ?? (norm(raw) === norm(eventName) ? eventName.replace(/^.*\b(20\d{2}(?:\/\d{2})?)\s*/, '') : raw);
+      // NFL's conference title is its "championship" on Swiftbet.
+      market = market.replace(/\b(AFC|NFC) Championship\b/i, '$1 Conference');
+      out.push({
+        sport, comp, market, outright: OUTRIGHT_MARKET.test(market),
+        swiftId: String(e._id), marketIndex: i, swiftMarket: raw, swiftName: `${eventName} · ${raw}`,
+        eventName, startsAt: iso(e.start_date),
+      });
+    });
+  }
+  return out;
+}
+
+/** Swiftbet's selections on one future's market, as odds rows. */
+async function swiftRows(swiftId, marketName, futureId) {
+  if (!betsConfigured || !swiftId) return [];
+  const db = await betsDb();
+  if (!db) return [];
+  const ev = await db.collection('events').findOne({ _id: swiftId }).catch(() => null);
+  const m = (ev?.markets ?? []).find((x) => norm(x?.name) === norm(marketName));
+  if (!m) return [];
+  const at = iso(ev.scraped_at);
+  const out = [];
+  for (const sel of m.selections ?? []) {
+    if (!sel?.name) continue;
+    const price = Number(sel.odds);
+    const ladder = (sel.price_history ?? [])
+      .map((h) => ({ p: Number(h?.odds), t: iso(h?.ts) }))
+      .filter((h) => Number.isFinite(h.p) && h.p > 1 && h.t)
+      .sort((a, b) => new Date(a.t) - new Date(b.t));
+    const live = Number.isFinite(price) && price > 1;
+    const last = ladder.length ? ladder[ladder.length - 1].p : null;
+    if (!live && last == null) continue;
+    out.push({
+      fixture_id: futureId, market_id: 'outright', market_name: 'Outright',
+      selection: sel.name, normalized_selection: null, line: null, line_group: null, pair_key: null,
+      outcome_no: null, is_main: true, sportsbook: 'swiftbet', is_lay: false, is_live: false,
+      current_price: live ? price : last, open_price: ladder[0]?.p ?? null, open_at: ladder[0]?.t ?? null,
+      close_price: null, closed_at: null, current_at: at,
+      status: live ? 'active' : 'suspended', flucs: ladder, daily_prices: {},
+      price_6h: null, price_3h: null, price_1h: null, price_30m: null, price_10m: null,
+    });
+  }
+  return out;
 }
 
 /**
@@ -267,7 +379,7 @@ async function attachLeagues(rows) {
   }
 }
 
-export const isFutureId = (id) => /^type_/.test(String(id ?? '')) || String(id ?? '').startsWith('mybet:');
+export const isFutureId = (id) => /^type_/.test(String(id ?? '')) || String(id ?? '').startsWith('mybet:') || String(id ?? '').startsWith('swift:');
 
 /** The bets tab for a future: mybet's singles and multis on its mybet event, when it has one. */
 export async function betsForFuture(id) {
@@ -279,13 +391,22 @@ export async function betsForFuture(id) {
   }
   const list = await futuresList().catch(() => ({ data: [] }));
   const row = list.data.find((r) => r.id === id);
-  const mybetId = row?.mybetId;
-  if (!mybetId) return result;
+  if (!row?.mybetId && !row?.swiftId) return result;
   const db = await betsDb();
   if (!db) return result;
-  const { mybet, multis } = await multiBetsFor(db, Number(mybetId), id);
-  result.mybet = { bets: mybet, reason: mybet.length ? null : 'none' };
-  result.multis = { bets: multis, reason: multis.length ? null : 'none' };
+  const jobs = [];
+  if (row.mybetId) {
+    jobs.push(multiBetsFor(db, Number(row.mybetId), id).then(({ mybet, multis }) => {
+      result.mybet = { bets: mybet, reason: mybet.length ? null : 'none' };
+      result.multis = { bets: multis, reason: multis.length ? null : 'none' };
+    }));
+  }
+  if (row.swiftId) {
+    jobs.push(swiftbetFor(db, row.swiftId).then((bets) => {
+      result.swiftbet = { bets, reason: bets.length ? null : 'none' };
+    }));
+  }
+  await Promise.all(jobs);
   return result;
 }
 
@@ -320,6 +441,18 @@ export async function futureDetails(id) {
       };
     }
   }
+  let swiftEvent = null;
+  if (row.swiftId && betsConfigured) {
+    const db = await betsDb();
+    const doc = db ? await db.collection('events').findOne({ _id: row.swiftId }, { projection: { markets: 0, teams: 0 } }).catch(() => null) : null;
+    if (doc) {
+      swiftEvent = {
+        id: String(doc._id), name: doc.name ?? row.swiftName, competition: doc.competition?.name ?? null, competitionId: doc.competition?.id ?? null,
+        sport: doc.sport?.name ?? null, status: doc.status ?? null, viewStatus: doc.event_view_status ?? null, feedStatus: doc.feed_status ?? null,
+        finished: doc.finished ?? null, startsAt: iso(doc.start_date), finishedAt: iso(doc.finished_at), marketCount: doc.market_count ?? null, teams: [],
+      };
+    }
+  }
   const none = { mapped: false, link: null, event: null };
   return {
     fixtureId: id, venue: null, location: null, country: null, season: null, seasonType: null, tier: null, broadcast: null,
@@ -330,7 +463,9 @@ export async function futureDetails(id) {
     mapping: {
       configured: betsConfigured,
       competitions: { swift: [], mybet: [] },
-      swift: none,
+      swift: row.swiftId
+        ? { mapped: true, link: { eventId: row.swiftId, confidence: null, source: 'futures name match', resolvedAt: null, actualStart: null }, event: swiftEvent ?? { id: row.swiftId, name: row.swiftName, competition: null, competitionId: null, sport: null, teams: [] } }
+        : none,
       mybet: row.mybetId
         ? { mapped: true, link: { eventId: row.mybetId, confidence: null, source: 'futures name match', resolvedAt: null, actualStart: null }, event: mybetEvent ?? { id: row.mybetId, name: row.mybetName, competition: null, competitionId: null, sport: null, teams: [] } }
         : none,
@@ -379,11 +514,12 @@ export async function futureOdds(id) {
   if (!id) return [];
   const list = await futuresList().catch(() => ({ data: [] }));
   const row = list.data.find((r) => r.id === id);
-  const [books, ours] = await Promise.all([
-    id.startsWith('mybet:') ? [] : apiFutureOdds(id).catch(() => []),
+  const [books, ours, theirs] = await Promise.all([
+    id.startsWith('mybet:') || id.startsWith('swift:') ? [] : apiFutureOdds(id).catch(() => []),
     row?.mybetId ? mybetRows(row.mybetId, id) : [],
+    row?.swiftId ? swiftRows(row.swiftId, row.swiftMarket, id) : [],
   ]);
-  const rows = [...ours, ...books];
+  const rows = [...theirs, ...ours, ...books];
   // The crest beside each team, from the same entities the board draws from,
   // and one key per team across the books' spellings so the grid merges
   // "Philadelphia Phillies", "Philadephia Phillies" and "Phillies" into a

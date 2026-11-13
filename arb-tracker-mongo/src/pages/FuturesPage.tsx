@@ -32,7 +32,10 @@ function toEvent(f: FutureItem): SportEvent {
     // The board's badge for the league, under the futures market set.
     league: { ...f.league, id: FUTURES_LEAGUE },
     name: f.tournament && !f.name.includes(f.tournament) ? `${f.tournament} · ${f.name}` : f.name,
-    subtitle: f.source === 'mybet' ? 'mybet only' : f.mybetName ? `mybet: ${f.mybetName}` : undefined,
+    subtitle:
+      f.source === 'mybet' ? 'mybet only'
+        : f.source === 'swiftbet' ? 'Swiftbet only'
+          : [f.mybetName && `mybet: ${f.mybetName}`, f.swiftName && `Swiftbet: ${f.swiftName}`].filter(Boolean).join(' · ') || undefined,
     home: '',
     away: '',
     startsAt: starts,
@@ -54,7 +57,8 @@ function settleLabel(iso: string | null): string {
 /** One future in the rail, drawn like a board row: badge, name, league line, a chip on the right. */
 function FutureRow({ f, selected, onSelect }: { f: FutureItem; selected: boolean; onSelect: (id: string) => void }) {
   const name = f.tournament && !f.name.includes(f.tournament) ? `${f.tournament} · ${f.name}` : f.name;
-  const sub = f.source === 'mybet' ? `${f.leagueName} · mybet only` : f.mybetId ? `${f.leagueName} · mybet` : f.leagueName;
+  const ours = [f.mybetId && 'mybet', f.swiftId && 'Swiftbet'].filter(Boolean).join(' + ');
+  const sub = f.source !== 'optic' ? `${f.leagueName} · ${ours} only` : ours ? `${f.leagueName} · ${ours}` : f.leagueName;
   return (
     <button
       type="button"
@@ -70,7 +74,7 @@ function FutureRow({ f, selected, onSelect }: { f: FutureItem; selected: boolean
       </div>
       <span
         className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs font-semibold tabular-nums ${
-          f.source === 'mybet' ? 'bg-amber-500/15 text-amber-300' : f.mybetId ? 'bg-emerald-500/15 text-emerald-300' : 'bg-white/5 text-slate-400'
+          f.source !== 'optic' ? 'bg-amber-500/15 text-amber-300' : f.mybetId || f.swiftId ? 'bg-emerald-500/15 text-emerald-300' : 'bg-white/5 text-slate-400'
         }`}
         title={f.startsAt ? `Feed date ${new Date(f.startsAt).toLocaleDateString()}` : undefined}
       >
@@ -123,7 +127,7 @@ export default function FuturesPage() {
   const [sport, setSport] = useParam('sport', 'all');
   const [query, setQuery] = useParam('q', '');
   const [outrightOnly, setOutrightOnly] = useFlagParam('outright', true);
-  const [mybetOnly, setMybetOnly] = useFlagParam('mybet', false);
+  const [oursOnly, setOursOnly] = useFlagParam('ours', false);
 
   // The clock the countdown reads — the same one-second beat the board uses.
   const [now, setNow] = useState(Date.now());
@@ -165,10 +169,10 @@ export default function FuturesPage() {
       (f) =>
         (sport === 'all' || f.sportLabel === sport) &&
         (!outrightOnly || f.outright) &&
-        (!mybetOnly || !!f.mybetId) &&
-        (!q || `${f.leagueName} ${f.tournament ?? ''} ${f.name} ${f.mybetName ?? ''}`.toLowerCase().includes(q)),
+        (!oursOnly || !!f.mybetId || !!f.swiftId) &&
+        (!q || `${f.leagueName} ${f.tournament ?? ''} ${f.name} ${f.mybetName ?? ''} ${f.swiftName ?? ''}`.toLowerCase().includes(q)),
     );
-  }, [all, sport, outrightOnly, mybetOnly, query]);
+  }, [all, sport, outrightOnly, oursOnly, query]);
 
   // Grouped for the rail by sport; each row carries its own league badge.
   const grouped = useMemo(() => {
@@ -237,7 +241,8 @@ export default function FuturesPage() {
                 <b className="text-slate-300 tabular-nums">{list.count}</b> futures
               </span>
               <span title="mybet futures joined to the same proposition on the odds surface">
-                <b className="text-emerald-300 tabular-nums">{list.matched}</b> of {list.mybet} mybet matched
+                <b className="text-emerald-300 tabular-nums">{list.matched}</b> of {list.mybet} mybet and{' '}
+                <b className="text-emerald-300 tabular-nums">{list.swiftMatched}</b> of {list.swift} Swiftbet matched
               </span>
             </div>
           )}
@@ -274,7 +279,7 @@ export default function FuturesPage() {
             </select>
             <div className="space-y-0.5">
               <Toggle on={outrightOnly} onChange={setOutrightOnly}>Outright only</Toggle>
-              <Toggle on={mybetOnly} onChange={setMybetOnly}>Priced by mybet</Toggle>
+              <Toggle on={oursOnly} onChange={setOursOnly}>Priced by mybet or Swiftbet</Toggle>
             </div>
           </div>
 

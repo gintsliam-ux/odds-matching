@@ -294,7 +294,7 @@ function normalise(o) {
 }
 
 /** Swiftbet: gutsy.bets, joined on the indexed legs_event_ids array. */
-async function swiftbetFor(db, gutsyEventId) {
+export async function swiftbetFor(db, gutsyEventId) {
   const rows = await db
     .collection('bets')
     .find({ 'derived.legs_event_ids': gutsyEventId, bet_time: { $gte: BET_CUTOFF } })

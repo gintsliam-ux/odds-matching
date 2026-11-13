@@ -471,7 +471,7 @@ export interface TickerFeed {
 /** One future on the futures tab: Optic's, with its mybet twin attached, or mybet's own. */
 export interface FutureItem {
   id: string;
-  source: 'optic' | 'mybet';
+  source: 'optic' | 'mybet' | 'swiftbet';
   sport: string;
   sportLabel: string;
   leagueId: string;
@@ -483,6 +483,9 @@ export interface FutureItem {
   startsAt: string | null;
   mybetId: string | null;
   mybetName: string | null;
+  swiftId: string | null;
+  swiftMarket: string | null;
+  swiftName: string | null;
   /** The badge, derived the way the board derives a fixture's. */
   league: League;
 }
@@ -490,6 +493,8 @@ export interface FuturesList {
   count: number;
   matched: number;
   mybet: number;
+  swift: number;
+  swiftMatched: number;
   data: FutureItem[];
 }
 export const fetchFutures = (): Promise<FuturesList> => apiGet<FuturesList>('/api/futures');
