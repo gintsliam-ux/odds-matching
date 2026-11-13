@@ -271,7 +271,9 @@ export function bookMargins(group: MarketGroup): MarketMargins {
 }
 
 export function isSuspended(cell: PriceCell): boolean {
-  return cell.detail?.status === 'suspended';
+  // 'stale': a futures book whose feed for the market has stopped (see the
+  // surface's /futures-odds). Not takeable, so treated as suspended.
+  return cell.detail?.status === 'suspended' || cell.detail?.status === 'stale';
 }
 
 /** One observed price change, as stored in the `flucs` jsonb column. */
