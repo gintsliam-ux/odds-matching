@@ -815,7 +815,7 @@ function MarketRows({
           </tr>
         );
       })}
-      {group.kind === 'h2h' && <MarginRow group={group} showExchange={showExchange} />}
+      {(group.kind === 'h2h' || group.kind === 'outright') && <MarginRow group={group} showExchange={showExchange} />}
     </tbody>
   );
 }
@@ -854,12 +854,18 @@ function MarginRow({ group, showExchange }: { group: MarketGroup; showExchange: 
       {v == null ? '–' : v.toFixed(1)}
     </span>
   );
-  const title = (v: number | null) =>
+  // On an outright the field differs by book, so the number says how many
+  // runners it was summed over.
+  const over = (id: string) =>
+    group.kind === 'outright' ? ` over ${margins.counts.get(id) ?? 0} of ${margins.outcomes} runners` : '';
+  const title = (v: number | null, id = '') =>
     v == null
-      ? 'Not every outcome is priced here'
+      ? group.kind === 'outright'
+        ? `Prices fewer than half the field (${margins.counts.get(id) ?? 0} of ${margins.outcomes})`
+        : 'Not every outcome is priced here'
       : v < 100
         ? `${v.toFixed(2)}% — under 100, every outcome can be backed for a guaranteed profit`
-        : `${v.toFixed(2)}% over-round`;
+        : `${v.toFixed(2)}% over-round${over(id)}`;
 
   return (
     <tr className="border-b border-surface-border bg-surface-raised/40">
@@ -881,7 +887,7 @@ function MarginRow({ group, showExchange }: { group: MarketGroup; showExchange: 
       )}
       <td
         className="border-l border-surface-border px-2 py-1.5 text-center text-[11px] font-semibold tabular-nums"
-        title={title(margins.best)}
+        title={title(margins.best, 'best')}
       >
         {cell(margins.best)}
       </td>
@@ -891,7 +897,7 @@ function MarginRow({ group, showExchange }: { group: MarketGroup; showExchange: 
           <td
             key={id}
             className="border-l border-surface-border px-1.5 py-1.5 text-center text-[11px] tabular-nums"
-            title={title(v)}
+            title={title(v, id)}
           >
             {cell(v)}
           </td>

@@ -215,35 +215,59 @@ export interface MarketMargins {
   best: number | null;
   /** The Betfair back column, on the same basis as a bookmaker. */
   betfairBack: number | null;
+  /** How many of the outcomes each column's number was summed over (the field, on a complete column). */
+  counts: Map<string, number>;
+  /** The size of the field. */
+  outcomes: number;
 }
 
 export function bookMargins(group: MarketGroup): MarketMargins {
   const rows = group.selections;
   const books = new Map<string, number | null>();
-  if (rows.length < 2) return { books, best: null, betfairBack: null };
+  const counts = new Map<string, number>();
+  const empty = { books, best: null, betfairBack: null, counts, outcomes: rows.length };
+  if (rows.length < 2) return empty;
+
+  /*
+   * An outright is never complete in the strict sense: the books list
+   * different fields (TAB thirty teams, another twenty-eight, and a
+   * long-shot or two listed by one book only), so requiring every row would
+   * blank the lot. A book's percentage on a future is the sum over the field
+   * IT offers, and it is shown as long as that field is most of the rows —
+   * a book quoting six of thirty is not pricing the market.
+   */
+  const outright = group.kind === 'outright';
+  const needed = outright ? Math.max(2, Math.ceil(rows.length / 2)) : rows.length;
 
   /** Sum 1/price across every outcome, or null if the column is incomplete. */
   const total = (pick: (row: SelectionRow) => PriceCell | null, price?: (row: SelectionRow) => number | null) => {
     let sum = 0;
+    let n = 0;
     for (const row of rows) {
       const p = price ? price(row) : pick(row)?.price ?? null;
       const cell = pick(row);
-      if (p == null || p <= 0 || (cell && isSuspended(cell))) return null;
+      if (p == null || p <= 0 || (cell && isSuspended(cell))) {
+        if (!outright) return { v: null, n: 0 };
+        continue;
+      }
       sum += 1 / p;
+      n++;
     }
-    return sum * 100;
+    return n >= needed ? { v: sum * 100, n } : { v: null, n };
   };
 
   const bookIds = rows[0].prices.map((c) => c.bookId);
-  bookIds.forEach((id, i) => books.set(id, total((row) => row.prices[i] ?? null)));
+  bookIds.forEach((id, i) => {
+    const t = total((row) => row.prices[i] ?? null);
+    books.set(id, t.v);
+    counts.set(id, t.n);
+  });
 
-  return {
-    books,
-    // `bestPrice` already skips suspended cells when it is chosen, so there is
-    // no cell to re-test here — only whether every outcome HAS a best.
-    best: total(() => null, (row) => row.bestPrice),
-    betfairBack: total((row) => row.betfairBack),
-  };
+  // `bestPrice` already skips suspended cells when it is chosen, so there is
+  // no cell to re-test here — only whether every outcome HAS a best.
+  const best = total(() => null, (row) => row.bestPrice);
+  counts.set('best', best.n);
+  return { books, best: best.v, betfairBack: total((row) => row.betfairBack).v, counts, outcomes: rows.length };
 }
 
 export function isSuspended(cell: PriceCell): boolean {
