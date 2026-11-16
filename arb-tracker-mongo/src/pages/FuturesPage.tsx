@@ -354,7 +354,9 @@ export default function FuturesPage() {
       fetchFutureOdds(id)
         .then((rows) => {
           if (cancelled) return;
-          const built = buildMarkets(rows, '', '', FUTURES_LEAGUE);
+          // A book whose prices haven't moved in a week has stopped quoting the
+          // market: leave it out of the grid entirely (Details still lists it).
+          const built = buildMarkets(rows.filter((r) => r.status !== 'stale'), '', '', FUTURES_LEAGUE);
           setOdds({ id, markets: built.groups, books: built.books, rows });
         })
         .catch(() => {
