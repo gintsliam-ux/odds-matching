@@ -324,8 +324,25 @@ async function scheduleOnly(have) {
  * fixtures from scratch: 2.6s on every click through to a match, paid again
  * for every event id because the per-event cache key could not help.
  */
-export const BOARD_TTL_MS = 45_000;
-export const cachedBoard = () => cached('board', BOARD_TTL_MS, allEvents);
+/*
+ * 15s, and never older than 30s.
+ *
+ * The rail polls every 15s, and routes.mjs has said "board at 15s" since the
+ * in-play stream landed, but this constant was still 45s, so two polls in
+ * three were answered from the same copy.
+ *
+ * The bound matters more. `cached` hands back a stale value while it
+ * refreshes, with no limit on how stale, and on Vercel an instance that built
+ * the board and then sat idle answers its next request with that old copy
+ * (its background refresh froze with it). The rail then showed a game at
+ * "Q4 03:15" beside an event page reading Final, and flipped back when a
+ * different instance took the next poll. It is the fault the pulse bar had,
+ * with the same cure: past 30s the caller waits for the rebuild, which is
+ * about a second.
+ */
+export const BOARD_TTL_MS = 15_000;
+const BOARD_MAX_STALE_MS = 30_000;
+export const cachedBoard = () => cached('board', BOARD_TTL_MS, allEvents, { maxStaleMs: BOARD_MAX_STALE_MS });
 
 /** Fixtures for one local calendar day (YYYY-MM-DD), for browsing past dates. */
 export async function eventsForDay(dateStr) {
