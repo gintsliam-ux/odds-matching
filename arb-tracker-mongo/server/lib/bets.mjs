@@ -653,6 +653,7 @@ async function siblingEventIds(db, baseId, fixtureId) {
  */
 const LEG_WINDOW_BACK_MS = 48 * 36e5;
 const LEG_WINDOW_FWD_MS = 30 * 36e5;
+const LEG_GAME_TOLERANCE_MS = 14 * 36e5;
 
 /** Only what `normalise` and `multiLegs` read — the rest of the doc is not kept. */
 const LEG_PROJECTION = {
@@ -684,8 +685,30 @@ async function leggedFor(db, fixtureId) {
     bet_type: { $not: VOID_BET },
   }).project(LEG_PROJECTION).toArray();
 
+  /*
+   * The leg has to be on THIS game, not just this pairing.
+   *
+   * The placed-time window above was meant to rule out a rematch, and it does
+   * when the rematch is weeks away. It does not for a back-to-back: Minnesota
+   * hosted Portland on 17 and on 18 Nov 2026, and every ticket struck for the
+   * first game sat inside the second game's window too, so it was listed on
+   * both. That turned into a wrong call once the page started flagging
+   * players who sat out: Deni Avdija played the first night (27 points) and
+   * not the second, and bets placed on the first were marked for voiding on
+   * the second's page.
+   *
+   * Each leg carries its own event time (`multileg_outcomedate`, in the same
+   * wall-clock-as-UTC form as transaction_date, hence betInstant). Fourteen
+   * hours either side separates two games a day apart and still allows the
+   * fixtures whose `startsAt` is a midnight placeholder eleven hours off the
+   * real tip. A leg with no readable time is kept, as before.
+   */
+  const onThisGame = (leg) => {
+    const t = betInstant(leg?.multileg_outcomedate)?.getTime();
+    return !Number.isFinite(t) || Math.abs(t - start) <= LEG_GAME_TOLERANCE_MS;
+  };
   return rows.filter((r) =>
-    (r.legs ?? []).some((leg) => want.has(matchName(leg?.multileg_evetdescription))),
+    (r.legs ?? []).some((leg) => want.has(matchName(leg?.multileg_evetdescription)) && onThisGame(leg)),
   );
 }
 
