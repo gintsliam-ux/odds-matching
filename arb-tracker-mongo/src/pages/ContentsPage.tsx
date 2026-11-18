@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import {
-  AlertTriangle, ArrowLeft, BookOpen, CalendarDays, Check, Clock, Hourglass, LayoutGrid, Link2, Minus, Radio,
+  AlertTriangle, ArrowLeft, BookOpen, CalendarDays, Check, ChevronDown, Clock, Hourglass, LayoutGrid, Link2, Minus, Radio,
   TrendingDown, Trophy, Users as UsersIcon,
 } from 'lucide-react';
 import { SignOut } from '../components/SignOut';
@@ -248,16 +248,23 @@ export default function ContentsPage() {
           ))}
         </nav>
 
+        <div className="mt-4 grid gap-4 xl:grid-cols-2">
+          {pages.map((p) => (
+            <PageCard key={p.title} page={p} />
+          ))}
+        </div>
+
         {/*
-          Who can see what, in one table. Only for an admin: it is the admin
-          who hands out roles, and the other two roles are only ever shown
-          their own pages here.
+          Who can see what, in one table. At the bottom and closed by default:
+          the chips on each card answer it page by page, and this is the same
+          answer laid out for whoever wants all of it at once.
         */}
-        {role === 'admin' && (
-          <section className="mt-4 max-w-2xl overflow-hidden rounded-xl border border-surface-border bg-white/[0.02]">
-            <h2 className="border-b border-surface-border px-4 py-2.5 text-[13px] font-semibold text-slate-100">
-              Who can see each page
-            </h2>
+        <details className="group mt-5 max-w-2xl overflow-hidden rounded-xl border border-surface-border bg-white/[0.02]">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-[13px] font-semibold text-slate-100 transition hover:bg-white/[0.03] [&::-webkit-details-marker]:hidden">
+            <ChevronDown size={14} className="shrink-0 -rotate-90 text-slate-500 transition group-open:rotate-0" />
+            Who can see each page
+          </summary>
+          <div className="border-t border-surface-border">
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="text-left text-[11px] uppercase tracking-wide text-slate-500">
@@ -289,14 +296,8 @@ export default function ContentsPage() {
             <p className="border-t border-surface-border/60 px-4 py-2 text-xs text-slate-500">
               Roles are set on the Users page. Trading and support see current prices only, with no price history.
             </p>
-          </section>
-        )}
-
-        <div className="mt-4 grid gap-4 xl:grid-cols-2">
-          {pages.map((p) => (
-            <PageCard key={p.title} page={p} />
-          ))}
-        </div>
+          </div>
+        </details>
 
         <p className="mt-5 max-w-3xl text-xs leading-relaxed text-slate-500">
           Terms: a book&apos;s % on a market is its margin, the amount its prices add up to over 100. Implied
