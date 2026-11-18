@@ -3,6 +3,9 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "regions": [
+    "syd1"
+  ],
   "functions": {
     "api/[...path].mjs": {
       "maxDuration": 300
