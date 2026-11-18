@@ -130,8 +130,8 @@ const words = (s: string) =>
  * was never in doubt — but `exact` is false and no void is claimed from it.
  */
 /**
- * What became of a bet: the brand's own word for it, or void when the man it
- * names never took the field.
+ * What became of a bet: the brand's own word for it and nothing else. Whether
+ * the man it names took the field is a separate claim — see Dnp.
  */
 /**
  * What the BRAND says about the bet. Nothing else may write this.
@@ -326,6 +326,7 @@ function byPlayer<
     stat: { value: number } | null;
     target: Target;
     landed: Landed;
+    dnp: Dnp;
     bet: Bet;
   },
 >(
@@ -340,6 +341,7 @@ function byPlayer<
   stat: T['stat'];
   target: Target;
   landed: Landed;
+  dnp: Dnp;
   stake: number;
   rows: T[];
 }[] {
@@ -356,6 +358,8 @@ function byPlayer<
       // One player, one market, one line — the target is the same for all of
       // them, so the first that has an answer answers for the group.
       target: list.find((r) => r.target)?.target ?? null,
+      // About the man, so it is the same for every ticket on him.
+      dnp: list.find((r) => r.dnp)?.dnp ?? null,
       landed: list.reduce<Landed>(
         (best, r) => (LANDED_ORDER[r.landed] < LANDED_ORDER[best] ? r.landed : best),
         'pending',
@@ -411,21 +415,6 @@ function namesPlayer(bet: Bet, players: PlayerStatLine[]): Match {
 }
 
 function landed(bet: Bet, match: Match, done: boolean): Landed {
-  /*
-   * Void is claimed only when we know WHICH player, and the box score has him
-   * recording nothing anywhere (the server's `played`, judged over his whole
-   * line — the stat columns on this page would call every kicker absent).
-   * An ambiguous surname falls through to the brand's own result: being unsure
-   * which Johnson a bet is on is not evidence that he sat out, and "void" is
-   * too confident a thing to say on a guess.
-   */
-  /*
-   * Only once the game is OVER. A box score mid-game has whole rosters sitting
-   * at nothing recorded yet, and they are not absent — they are second-quarter
-   * substitutes who have not touched the ball. `player_status` reads "live" on
-   * those rows, which is the giveaway: the stat line is still being written.
-   */
-  if (done && match?.exact && match.player.played === false) return 'void';
   const r = (bet.result ?? '').toLowerCase();
   if (/cancel|void|refund/.test(r)) return 'void';
   if (/^won\b/.test(r) || /^return @/.test(r)) return 'won';
@@ -456,9 +445,44 @@ function landed(bet: Bet, match: Match, done: boolean): Landed {
  * this reports the ticket.
  */
 function legLanded(bet: Bet, match: Match, done: boolean): Landed {
-  if (done && match?.exact && match.player.played === false) return 'void';
   return landed(bet, null, done);
 }
+
+/**
+ * Whether the man a bet names took the field, which is a separate claim from
+ * what the brand did with the ticket.
+ *
+ * The two used to share the badge: a player with nothing recorded turned the
+ * badge to "void", under a tooltip saying the brand had settled it that way.
+ * It had not — that was this page's reading of the box score — and it hid the
+ * case that matters, a bet that should be void and has been settled as lost.
+ * So the badge is the brand's word only, and this is the box score's: the row
+ * is greyed and says why, beside whatever the brand has done.
+ *
+ *   'dnp'     he is in the final box score with nothing recorded. In
+ *             basketball that is no minutes; in gridiron no stat of any kind,
+ *             which is as close as the feed gets (it has no snap counts).
+ *   'absent'  nobody of his name is in the final box score at all: not in the
+ *             game-day squad. Before this the bet was dropped from the tab,
+ *             because a bet was only listed when it matched a row. A spelling
+ *             the match cannot follow reads the same way, so the wording asks
+ *             for a check rather than stating it.
+ *
+ * Only once the game is over: mid-game a bench is full of men at nothing
+ * recorded who are about to come on.
+ */
+type Dnp = 'dnp' | 'absent' | null;
+
+const DNP_LABEL: Record<'dnp' | 'absent', string> = {
+  dnp: 'did not play · void',
+  absent: 'not in box score · void?',
+};
+
+const DNP_TITLE: Record<'dnp' | 'absent', string> = {
+  dnp: 'He is in the final box score with nothing recorded: he did not take the field. The bet should be void.',
+  absent:
+    'Nobody of this name is in the final box score: he was not in the game-day squad, or the name is spelled differently here. Check, then void.',
+};
 
 const LANDED_TONE: Record<Landed, string> = {
   won: 'bg-emerald-500/15 text-emerald-300',
@@ -723,8 +747,33 @@ function StatBets({
       /** This row is one leg of a multi, not the whole ticket. */
       ofMulti: boolean;
       landed: Landed;
+      /** The box score says he did not take the field — see Dnp. */
+      dnp: Dnp;
     };
     const all: Row[] = [];
+    /*
+     * A player bet on this fixture whose man is not in the final box score.
+     * The market has to be a player market and the selection's bracket one of
+     * this fixture's two teams, the same test that lists bets before there is
+     * a box score, so a multi's legs on other games stay out.
+     * A surname that finds only a namesake counts too (Marvin Harrison Jr has
+     * no row; "harrison" finds Malik): when the selection carries a given name
+     * and no player of that surname answers to it, he is not here.
+     */
+    const absentFrom = (market: string, selection: string, match: Match): boolean => {
+      if (noBox || !done || !fieldFor(market)) return false;
+      if (!sideByName(teamFromSelection(selection))) return false;
+      if (!match) return true;
+      if (match.exact) return false;
+      const hay = new Set(words(nameFromSelection(selection)));
+      if (hay.size < 2) return false;
+      return !players.some((p) => {
+        const { given, surname } = nameParts(p.player ?? '');
+        return hay.has(surname) && confirmsGiven(given, hay);
+      });
+    };
+    const dnpOf = (match: Match, absent: boolean): Dnp =>
+      absent ? 'absent' : done && match?.exact && match.player.played === false ? 'dnp' : null;
     /*
      * mybet and multis only, and that is not an omission.
      *
@@ -762,7 +811,10 @@ function StatBets({
              */
             if (!leg.selection || !leg.market) continue;
             const market = leg.market;
-            const match = namesPlayer({ ...bet, market, selection: leg.selection }, players);
+            const found = namesPlayer({ ...bet, market, selection: leg.selection }, players);
+            const absent = absentFrom(market, leg.selection, found);
+            // An absent man's row is his own, not the namesake the surname found.
+            const match = absent ? null : found;
             /*
              * No box score yet: the market still says this is a player market
              * and the selection still names the player — but nothing says the
@@ -771,7 +823,7 @@ function StatBets({
              * were all being listed here. The selection's bracket is the team,
              * so it has to be one of this fixture's two.
              */
-            if (!match && !(noBox && fieldFor(market) && sideByName(teamFromSelection(leg.selection)))) continue;
+            if (!match && !absent && !(noBox && fieldFor(market) && sideByName(teamFromSelection(leg.selection)))) continue;
             const stat = match ? statFor(market, match.player) : null;
             all.push({
               brand,
@@ -788,13 +840,16 @@ function StatBets({
               target: targetOf(market, stat, done),
               ofMulti: true,
               landed: legLanded(bet, match, done),
+              dnp: dnpOf(match, absent),
             });
           }
           continue;
         }
         const market = bet.market ?? bet.selection ?? 'Unknown market';
-        const match = namesPlayer(bet, players);
-        if (!match && !(noBox && fieldFor(market) && sideByName(teamFromSelection(bet.selection ?? '')))) continue;
+        const found = namesPlayer(bet, players);
+        const absent = absentFrom(market, bet.selection ?? '', found);
+        const match = absent ? null : found;
+        if (!match && !absent && !(noBox && fieldFor(market) && sideByName(teamFromSelection(bet.selection ?? '')))) continue;
         const stat = match ? statFor(market, match.player) : null;
         all.push({
           brand,
@@ -812,6 +867,7 @@ function StatBets({
           ofMulti: false,
           // The brand's own word, and only ever the brand's.
           landed: landed(bet, match, done),
+          dnp: dnpOf(match, absent),
         });
       }
     }
@@ -936,9 +992,17 @@ function StatBets({
                  * still pending — that is the normal state of a live game —
                  * and conflating them put "won" on money nobody had returned.
                  */
-                const hit = p.target === 'hit';
+                const hit = p.target === 'hit' && !p.dnp;
+                // Grey, the way a void reads: the man did not play, so the
+                // bet is one to void whatever the brand has done so far.
+                const out = p.dnp;
                 return (
-                  <div key={key} className={`border-t border-surface-border/60 ${hit ? 'bg-emerald-500/[0.07]' : ''}`}>
+                  <div
+                    key={key}
+                    className={`border-t border-surface-border/60 ${
+                      out ? 'bg-slate-500/[0.14]' : hit ? 'bg-emerald-500/[0.07]' : ''
+                    }`}
+                  >
                     <button
                       type="button"
                       onClick={() => toggle(key)}
@@ -985,10 +1049,20 @@ function StatBets({
                       />
                       <span
                         title={p.team ?? undefined}
-                        className={`truncate text-sm ${hit ? 'font-semibold text-slate-50' : 'text-slate-300'}`}
+                        className={`truncate text-sm ${
+                          out ? 'text-slate-500' : hit ? 'font-semibold text-slate-50' : 'text-slate-300'
+                        }`}
                       >
                         {p.player}
                       </span>
+                      {out && (
+                        <span
+                          title={DNP_TITLE[out]}
+                          className="shrink-0 rounded bg-slate-500/25 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-300"
+                        >
+                          {DNP_LABEL[out]}
+                        </span>
+                      )}
                       {p.stat && (
                         <span
                           title={
@@ -1023,7 +1097,10 @@ function StatBets({
                       <table className="w-full border-collapse text-sm">
                         <tbody>
                           {p.rows.map(({ brand, bet, selection, price, ofMulti, landed: l }, i) => (
-                            <tr key={`${bet.id}:${i}`} className="border-t border-surface-border/40">
+                            <tr
+                              key={`${bet.id}:${i}`}
+                              className={`border-t border-surface-border/40 ${out ? 'bg-slate-500/[0.08]' : ''}`}
+                            >
                               <td className="w-16 py-1 pl-8 pr-2">
                                 <span className={brandBadge(brand)}>{BRAND_LABEL[brand] ?? brand}</span>
                               </td>
