@@ -1,5 +1,5 @@
 import { Children, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, AlertTriangle, ChevronDown, Clock, Hourglass, Link2, LogOut, Radio, Settings, TrendingDown, Trophy, Users as UsersIcon, Wrench } from 'lucide-react';
+import { Activity, AlertTriangle, BookOpen, ChevronDown, Clock, Hourglass, Link2, LogOut, Radio, Settings, TrendingDown, Trophy, Users as UsersIcon, Wrench } from 'lucide-react';
 import { Link, Outlet, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import { Header } from './components/Header';
 import { FilterBar } from './components/FilterBar';
@@ -893,6 +893,8 @@ export default function App() {
             open={openGroup === 'settings'}
             onToggle={() => toggleGroup('settings')}
           >
+            {/* What each page is for. Every role has it, so Settings is never empty. */}
+            <RailLink to="/contents" icon={BookOpen}>Contents</RailLink>
             {caps.mapping && deskOnly && <RailLink to="/mapping" icon={Link2}>Mapping</RailLink>}
             {user?.role === 'admin' && <RailLink to="/users" icon={UsersIcon}>Users</RailLink>}
           </RailGroup>

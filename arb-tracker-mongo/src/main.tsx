@@ -62,6 +62,7 @@ const SettlementPage = page(() => import('./pages/SettlementPage'));
 const LateBetsPage = page(() => import('./pages/LateBetsPage'));
 const PendingBetsPage = page(() => import('./pages/PendingBetsPage'));
 const FuturesPage = page(() => import('./pages/FuturesPage'));
+const ContentsPage = page(() => import('./pages/ContentsPage'));
 import LoginPage from './pages/LoginPage';
 import { AuthProvider } from './lib/auth';
 import { useAuth } from './lib/useAuth';
@@ -160,6 +161,8 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/futures" element={<DeskOnly><FuturesPage /></DeskOnly>} />
         <Route path="/mapping" element={<DeskOnly><MappingPage /></DeskOnly>} />
         <Route path="/users" element={<AdminOnly><UsersPage /></AdminOnly>} />
+        {/* The guide to the pages; every role has it and it lists only their own. */}
+        <Route path="/contents" element={<ContentsPage />} />
       </Routes>
       </Suspense>
       </BrowserRouter>
