@@ -105,8 +105,10 @@ const num = (v: PlayerStatLine[string]) =>
  * box score is the authority on who played, so it is the authority on what is
  * a player bet.
  */
+// Apostrophes are dropped, not split on: the box score writes "De'Aaron Fox"
+// and the slip "DeAaron Fox", and split they are "de aaron" against "deaaron".
 const words = (s: string) =>
-  s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
+  s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/['\u2019\u2018`]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
 
 /**
  * Which player a bet is about, and whether we are sure it is him.
@@ -757,19 +759,23 @@ function StatBets({
      * this fixture's two teams, the same test that lists bets before there is
      * a box score, so a multi's legs on other games stay out.
      * A surname that finds only a namesake counts too (Marvin Harrison Jr has
-     * no row; "harrison" finds Malik): when the selection carries a given name
-     * and no player of that surname answers to it, he is not here.
+     * no row; "harrison" finds Malik, who plays for the other side): when
+     * nobody of that surname is on the team the selection names, he is not
+     * here. The TEAM decides that and not the given name, because given
+     * names differ for the same man — the slip's "NahShon Hyland" is the box
+     * score's "Bones Hyland" — and going by them greyed players who had
+     * played 17 minutes.
      */
     const absentFrom = (market: string, selection: string, match: Match): boolean => {
       if (noBox || !done || !fieldFor(market)) return false;
-      if (!sideByName(teamFromSelection(selection))) return false;
+      const side = sideByName(teamFromSelection(selection));
+      if (!side) return false;
       if (!match) return true;
       if (match.exact) return false;
       const hay = new Set(words(nameFromSelection(selection)));
-      if (hay.size < 2) return false;
       return !players.some((p) => {
-        const { given, surname } = nameParts(p.player ?? '');
-        return hay.has(surname) && confirmsGiven(given, hay);
+        const { surname } = nameParts(p.player ?? '');
+        return surname.length > 2 && hay.has(surname) && sideOf.get(p.player!)?.side === side;
       });
     };
     const dnpOf = (match: Match, absent: boolean): Dnp =>
