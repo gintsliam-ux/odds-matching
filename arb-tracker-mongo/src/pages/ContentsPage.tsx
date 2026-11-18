@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import {
-  AlertTriangle, ArrowLeft, BookOpen, CalendarDays, Clock, Hourglass, LayoutGrid, Link2, Radio,
+  AlertTriangle, ArrowLeft, BookOpen, CalendarDays, Check, Clock, Hourglass, LayoutGrid, Link2, Minus, Radio,
   TrendingDown, Trophy, Users as UsersIcon,
 } from 'lucide-react';
 import { SignOut } from '../components/SignOut';
@@ -20,6 +20,33 @@ import { useCapabilities } from '../lib/capabilitiesContext';
 
 type Gate = 'all' | 'notSupport' | 'desk' | 'admin';
 
+/**
+ * Who each gate lets in, for the "who can see it" chips.
+ *
+ * There are three roles and two of them are restricted (ALLOWED_BY_ROLE in
+ * server/lib/routes.mjs): support has the board and its event page, trading
+ * has those plus the ticker, and everything else is admin's. 'desk' means
+ * "not trading and not support", which with three roles is admin alone; it is
+ * kept apart from 'admin' because the server treats them differently (an
+ * allow-list for the restricted roles, a deny-list for admin-only routes) and
+ * a fourth role would land on the desk side.
+ */
+type Role = 'admin' | 'trading' | 'support';
+const ROLES: Role[] = ['admin', 'trading', 'support'];
+const ROLE_LABEL: Record<Role, string> = { admin: 'Admin', trading: 'Trading', support: 'Support' };
+const GATE_ROLES: Record<Gate, Role[]> = {
+  all: ['admin', 'trading', 'support'],
+  notSupport: ['admin', 'trading'],
+  desk: ['admin'],
+  admin: ['admin'],
+};
+// The same colours the Users page gives each role.
+const ROLE_ON: Record<Role, string> = {
+  admin: 'bg-emerald-500/15 text-emerald-300',
+  trading: 'bg-amber-500/15 text-amber-300',
+  support: 'bg-sky-500/15 text-sky-300',
+};
+
 interface Page {
   title: string;
   icon: typeof Radio;
@@ -32,6 +59,8 @@ interface Page {
   mapping?: boolean;
   summary: string;
   points: string[];
+  /** Where a role that can open the page sees less of it than an admin. */
+  roleNote?: string;
 }
 
 const PAGES: Page[] = [
@@ -46,6 +75,7 @@ const PAGES: Page[] = [
       'Games in play show the score and the clock, and update on their own.',
       'Click a fixture to open its event page on the right.',
     ],
+    roleNote: 'Trading and support see the same board as an admin.',
   },
   {
     title: 'Event page',
@@ -59,6 +89,7 @@ const PAGES: Page[] = [
       'Stats (NBA and NFL): the box score, and under Bets the player bets beside the stat they need. A green row has beaten its line; a grey row is a player who did not take the field, so the bet should be void.',
       'Details: which brand events and ids this fixture is joined to.',
     ],
+    roleNote: 'Trading and support get the current price only: no price history, so nothing shows on hover and there are no price-movement figures.',
   },
   {
     title: 'Ticker',
@@ -217,6 +248,50 @@ export default function ContentsPage() {
           ))}
         </nav>
 
+        {/*
+          Who can see what, in one table. Only for an admin: it is the admin
+          who hands out roles, and the other two roles are only ever shown
+          their own pages here.
+        */}
+        {role === 'admin' && (
+          <section className="mt-4 max-w-2xl overflow-hidden rounded-xl border border-surface-border bg-white/[0.02]">
+            <h2 className="border-b border-surface-border px-4 py-2.5 text-[13px] font-semibold text-slate-100">
+              Who can see each page
+            </h2>
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr className="text-left text-[11px] uppercase tracking-wide text-slate-500">
+                  <th className="px-4 py-1.5 font-medium">Page</th>
+                  {ROLES.map((r) => (
+                    <th key={r} className="w-24 px-2 py-1.5 text-center font-medium">{ROLE_LABEL[r]}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {PAGES.map((p) => (
+                  <tr key={p.title} className="border-t border-surface-border/60">
+                    <td className="px-4 py-1.5">
+                      <a href={`#${slug(p.title)}`} className="text-slate-200 hover:text-emerald-300">{p.title}</a>
+                    </td>
+                    {ROLES.map((r) => (
+                      <td key={r} className="px-2 py-1.5 text-center">
+                        {GATE_ROLES[p.gate].includes(r) ? (
+                          <Check size={14} className="inline text-emerald-400" aria-label="can see" />
+                        ) : (
+                          <Minus size={14} className="inline text-slate-700" aria-label="cannot see" />
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="border-t border-surface-border/60 px-4 py-2 text-xs text-slate-500">
+              Roles are set on the Users page. Trading and support see current prices only, with no price history.
+            </p>
+          </section>
+        )}
+
         <div className="mt-4 grid gap-4 xl:grid-cols-2">
           {pages.map((p) => (
             <PageCard key={p.title} page={p} />
@@ -245,14 +320,7 @@ function PageCard({ page }: { page: Page }) {
           <Icon size={16} className="text-emerald-300" />
         </div>
         <div className="min-w-0">
-          <h2 className="text-[15px] font-semibold text-slate-100">
-            {page.title}
-            {page.gate === 'admin' && (
-              <span className="ml-2 align-middle text-[10px] font-medium uppercase tracking-wider text-amber-400/80">
-                Admin
-              </span>
-            )}
-          </h2>
+          <h2 className="text-[15px] font-semibold text-slate-100">{page.title}</h2>
           <p className="text-sm text-slate-400">{page.summary}</p>
         </div>
       </div>
@@ -262,6 +330,26 @@ function PageCard({ page }: { page: Page }) {
           <li key={t}>{t}</li>
         ))}
       </ul>
+
+      {/* Who can open it: lit for a role that can, dimmed for one that cannot. */}
+      <div className="mt-4 flex flex-wrap items-center gap-1.5 text-[11px]">
+        <span className="mr-0.5 text-slate-500">Who can see it</span>
+        {ROLES.map((r) => {
+          const on = GATE_ROLES[page.gate].includes(r);
+          return (
+            <span
+              key={r}
+              title={`${ROLE_LABEL[r]} ${on ? 'can' : 'cannot'} open ${page.title}`}
+              className={`rounded px-1.5 py-0.5 font-semibold uppercase tracking-wide ${
+                on ? ROLE_ON[r] : 'bg-white/[0.03] text-slate-600 line-through'
+              }`}
+            >
+              {ROLE_LABEL[r]}
+            </span>
+          );
+        })}
+      </div>
+      {page.roleNote && <p className="mt-1.5 text-xs text-slate-500">{page.roleNote}</p>}
 
       {page.path && (
         <div className="mt-4">
