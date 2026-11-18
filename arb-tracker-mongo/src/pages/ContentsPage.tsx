@@ -278,7 +278,12 @@ export default function ContentsPage() {
                 {PAGES.map((p) => (
                   <tr key={p.title} className="border-t border-surface-border/60">
                     <td className="px-4 py-1.5">
-                      <a href={`#${slug(p.title)}`} className="text-slate-200 hover:text-emerald-300">{p.title}</a>
+                      {/* A link only where this account has the card to jump to. */}
+                      {pages.includes(p) ? (
+                        <a href={`#${slug(p.title)}`} className="text-slate-200 hover:text-emerald-300">{p.title}</a>
+                      ) : (
+                        <span className="text-slate-400">{p.title}</span>
+                      )}
                     </td>
                     {ROLES.map((r) => (
                       <td key={r} className="px-2 py-1.5 text-center">
