@@ -474,8 +474,6 @@ export default function FuturesPage() {
               markets={odds?.id === selected.id ? odds.markets : []}
               books={odds?.id === selected.id ? odds.books : []}
               loading={!ready}
-              oddsView="pre"
-              onOddsView={() => {}}
               future
             />
           ) : (

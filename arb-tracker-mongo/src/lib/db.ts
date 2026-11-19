@@ -97,21 +97,12 @@ export const searchEvents = (query: string): Promise<SportEvent[]> =>
     ? Promise.resolve([])
     : apiGet<SportEvent[]>(`/api/search?q=${encodeURIComponent(query.trim())}`);
 
-/**
- * Which of a fixture's two price sets the grid shows. Pregame and in-play are
- * separate rows per book, and a closing price next to a price quoted
- * mid-game is meaningless, so the page shows one or the other.
- */
-export type OddsView = 'pre' | 'live';
-
-/** Load the odds rows for a single fixture — pregame by default, or the stream's in-play rows. */
-export const fetchOdds = (event: SportEvent, view: OddsView = 'pre'): Promise<OddsRow[]> =>
+/** Load the pre-match odds rows for a single fixture. In-play prices are no longer captured. */
+export const fetchOdds = (event: SportEvent): Promise<OddsRow[]> =>
   // The sport rides along because the public odds surface is queried per sport;
   // the Mongo path ignores it.
   apiGet<OddsRow[]>(
-    `/api/odds?fixtureId=${encodeURIComponent(event.id)}&sport=${encodeURIComponent(event.league.id)}${
-      view === 'live' ? '&live=1' : ''
-    }`,
+    `/api/odds?fixtureId=${encodeURIComponent(event.id)}&sport=${encodeURIComponent(event.league.id)}`,
   );
 
 /**
