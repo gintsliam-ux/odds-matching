@@ -178,8 +178,15 @@ const fileOf = (url) => {
   try { return decodeURIComponent(String(url).split('?')[0].split('/').pop() || ''); }
   catch { return String(url); }
 };
+/* Never a badge, and checked BEFORE the "logo" override because every one of
+   these has "logo" in its name: the sister-project logo Wikipedia shows in the
+   sidebar of a page that has no image of its own. 118 competitions wore
+   Wikiquote, Wikibooks, Wikidata, Wikisource or Wiktionary this way, NCAAB and
+   Wimbledon among them (audit, 23 Nov 2026). */
+const NEVER_A_BADGE = /wiki(quote|source|data|books|news|voyage|versity|species)-logo|wiktionary-logo|commons-logo|wikipedia-logo/i;
 const badImage = (url) => {
   const f = fileOf(url);
+  if (NEVER_A_BADGE.test(f)) return true;
   if (LOGO_WORD.test(f)) return false;
   return NOT_A_CREST.test(f) || /\.jpe?g$/i.test(f);
 };

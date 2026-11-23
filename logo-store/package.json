@@ -1,0 +1,1 @@
+{"name":"logo-store","private":true,"type":"module","version":"1.0.0","description":"Our own copies of team and competition logos, served from Vercel Blob (sports-logos)","dependencies":{"@vercel/blob":"^2.9.0","mongodb":"^7.9.1"}}

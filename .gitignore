@@ -42,3 +42,4 @@ node_modules/
 /polytracker-mongo/
 /margin-dashboard/
 /optic-coverage-pipeline/
+.env*.local

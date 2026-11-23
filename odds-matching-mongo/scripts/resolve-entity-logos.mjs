@@ -23,6 +23,7 @@
 //         node scripts/resolve-entity-logos.mjs --retry-null      re-try recorded misses
 //         node scripts/resolve-entity-logos.mjs --dry-run          report, write nothing
 
+import { readFileSync } from 'node:fs';
 import {
   allEntities, assertWritable, close, competitorNames, golferNames, isDryRun,
   setDryRun, upsertEntities,
@@ -35,6 +36,14 @@ const flag = (n) => argv.includes(n);
 const optNum = (n, d) => { const i = argv.indexOf(n); return i === -1 ? d : Number(argv[i + 1]); };
 const LIMIT = optNum('--limit', Infinity);
 const RETRY_NULL = flag('--retry-null');
+/* --only-file <json>: resolve just these [{sport,name}] and treat them as a
+   retry. For repairing a known list (dead links found by an audit) without
+   re-trying every recorded miss, which --retry-null does. */
+const ONLY_FILE = (() => {
+  const i = argv.indexOf('--only-file');
+  if (i === -1) return null;
+  return new Set(JSON.parse(readFileSync(argv[i + 1], 'utf8')).map((r) => `${r.sport} | ${r.name}`));
+})();
 setDryRun(flag('--dry-run'));
 
 /* A team sport's competitors are clubs; an individual sport's are people, and
@@ -112,9 +121,15 @@ const fileOf = (url) => {
 /* The club's own name, as a filename would spell it: "Asplöven HC" -> asplovenhc. */
 const stem = (s) => norm(s).replace(/[^a-z0-9]/g, '');
 
+/* Never a crest, whatever else the name says. A Wikipedia page with no image
+   of its own offers the sister-project logo from its sidebar, and kit and
+   jersey diagrams are not crests either (39 teams). Audit, 23 Nov 2026. */
+const NEVER_A_CREST =
+  /wiki(quote|source|data|books|news|voyage|versity|species)-logo|wiktionary-logo|commons-logo|wikipedia-logo|(^|[^a-z])kit_(body|left|right|shorts|socks)|jerseys?\b|[_-]uniform|peliasu/i;
 const badImage = (url, name) => {
   const f = fileOf(url);
   if (LOGO_WORD.test(f)) return false;
+  if (NEVER_A_CREST.test(f)) return true;
   if (NOT_A_CREST.test(f)) return true;
   if (!/\.jpe?g$/i.test(f)) return false;
   /* A .jpg is a photograph -- unless its filename IS the club, in which case it
@@ -336,6 +351,7 @@ async function main() {
     const names = await competitorsOf(sport);
     const want = names.filter((name) => {
       const e = cached.get(`${sport} ${name}`);
+      if (ONLY_FILE) return ONLY_FILE.has(`${sport} | ${name}`) && !(isPlayer ? e?.country : e?.logo_url);
       if (!e) return true;
       const done = isPlayer ? !!e.country : !!e.logo_url;
       if (done) return false;

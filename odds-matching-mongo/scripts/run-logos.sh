@@ -34,4 +34,13 @@ for job in resolve-entity-logos resolve-tournament-logos; do
   echo "--- $(stamp) $job exit=$? ---"
 done
 
+# Keep our own copy of every logo the resolvers just found, and point
+# `entities.logo_store_url` at it (see ~/logo-store/sync.mjs). Capped per night:
+# Wikipedia allows about one image a second.
+if [ -f "$HOME/logo-store/sync.mjs" ]; then
+  echo "--- $(stamp) logo-store sync ---"
+  ( cd "$HOME/logo-store" && node --env-file=.env sync.mjs --max-fetch=1500 2>&1 )
+  echo "--- $(stamp) logo-store sync exit=$? ---"
+fi
+
 echo "=== $(stamp) end ==="

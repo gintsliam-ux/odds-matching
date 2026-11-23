@@ -1950,6 +1950,10 @@ function sportIconHtml(key, cls) {
 /* Competition badges, resolved offline by odds-matching-mongo/scripts/resolve-tournament-logos.mjs
    into `entities`. One query for the lot, keyed by the tournament's display
    name — which is exactly what fixtures.tournament carries. */
+/* Our own copies of team and competition logos, and the lookup files that
+   name them (~/logo-store/sync.mjs, run nightly). Logos used to be links to
+   Wikipedia, which renames files: 596 were dead on 23 Nov 2026. */
+const LOGO_STORE = 'https://mzmadqpfaf3glgvw.public.blob.vercel-storage.com/';
 const competitionLogos = new Map();
 let logosLoaded = false;
 
@@ -1960,11 +1964,15 @@ async function loadCompetitionLogos() {
     /* Snapshotted from `entities` and served beside this page — the odds API
        has no entities endpoint, and 1,079 badge URLs change rarely enough that
        a static file beats standing a service up for them. */
-    const r = await fetch('assets/competition-logos.json');
+    /* The logo store publishes this nightly from `entities` (our own copy of
+       each badge where we hold one). The file beside this page is the
+       fallback if the store cannot be reached. */
+    let r = await fetch(LOGO_STORE + 'index/competitions.json').catch(() => null);
+    if (!r || !r.ok) r = await fetch('assets/competition-logos.json');
     /* Skips Wikipedia's sister-project logos and locator maps, which the
        resolver picks up from pages that have no image of their own. */
     const junk = /Wikiquote-logo|Wikisource-logo|Wikidata-logo|Wiktionary-logo|Commons-logo|Wikinews-logo|Location_of_|_per_State/i;
-    for (const [name, url] of Object.entries(await r.json())) if (!junk.test(url)) competitionLogos.set(name, url);
+    for (const [name, url] of Object.entries(await r.json())) if (!junk.test(url)) { competitionLogos.set(name, url); if (!competitionLogos.has(name.toLowerCase())) competitionLogos.set(name.toLowerCase(), url); }
   } catch (err) {
     console.warn('competition logos unavailable', err);
   }
@@ -1984,7 +1992,7 @@ function tourFallbackFor(label, leagueId) {
 function tournamentLogoHtml(label, cls, lazy, leagueId) {
   let url = null;
   for (const name of leagueBadgeNames(label, leagueId)) {
-    url = competitionLogos.get(name);
+    url = competitionLogos.get(name) || competitionLogos.get(String(name).toLowerCase());   // "Ncaaw" is NCAAW
     if (url) break;
   }
   if (!url) url = competitionLogos.get(tourFallbackFor(label, leagueId));
@@ -2012,9 +2020,9 @@ function tournamentBadgeHtml(label, cls, lazy, leagueId) {
   return img ? img.replace('onerror="this.remove()"', `data-fb="${escAttr(mono)}" onerror="this.outerHTML=this.dataset.fb"`) : mono;
 }
 
-/* Team and player crests, snapshotted per sport from `entities` by
-   odds-matching-mongo/scripts/snapshot-team-logos.mjs. One file per sport, so
-   a page only fetches the sport it is showing. */
+/* Team and player crests, one lookup file per sport so a page only fetches
+   the sport it is showing. Read from the logo store; the snapshot beside this
+   page (odds-matching-mongo/scripts/snapshot-team-logos.mjs) is the fallback. */
 const teamLogos = {};
 const teamLogoLoads = {};
 /* The crests Sports Odds Desk ships as files (the major leagues: NFL, NBA,
@@ -2039,8 +2047,9 @@ function loadTeamLogos(sport) {
   if (!sport) return Promise.resolve();
   if (!teamLogoLoads[sport]) {
     teamLogoLoads[sport] = Promise.all([
-      fetch(`assets/team-logos/${sport}.json`)
-        .then(r => (r.ok ? r.json() : null))
+      fetch(`${LOGO_STORE}index/teams/${sport}.json`)
+        .then(r => (r.ok ? r.json() : Promise.reject()))
+        .catch(() => fetch(`assets/team-logos/${sport}.json`).then(r => (r.ok ? r.json() : null)))
         .catch(() => null),
       loadLocalCrests(),
     ]).then(([j]) => { teamLogos[sport] = j || { p: [], l: {} }; });

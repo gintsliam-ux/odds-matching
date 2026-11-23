@@ -438,10 +438,10 @@ async function competitionLogos() {
   if (Date.now() - compLogoCache.at < COMP_TTL_MS) return compLogoCache.map;
   const rows = await (await coll('entities'))
     .find({ sport: 'competition', logo_url: { $ne: null } })
-    .project({ _id: 0, normalized: 1, logo_url: 1 })
+    .project({ _id: 0, normalized: 1, logo_url: 1, logo_store_url: 1 })
     .toArray();
   const map = new Map();
-  for (const r of rows) if (r.normalized && r.logo_url) map.set(r.normalized, r.logo_url);
+  for (const r of rows) if (r.normalized && r.logo_url) map.set(r.normalized, r.logo_store_url || r.logo_url);
   compLogoCache = { at: Date.now(), map };
   return map;
 }
@@ -527,6 +527,19 @@ export function usableLogo(url, normalized = '') {
   return tokens.some((t) => NOT_A_CREST.has(t) && !ownWords.has(t)) ? null : url;
 }
 
+/**
+ * The crest to serve for an entity row.
+ *
+ * `logo_url` is a link to someone else's image and those rot — 596 of 16,588
+ * were dead on 23 Nov 2026. `logo_store_url` is our own copy in the
+ * sports-logos Blob store (see ~/logo-store/sync.mjs), so it is served when
+ * there is one. The file-name screen still runs against the ORIGINAL link,
+ * because our copy's name is a hash and says nothing about what it shows.
+ */
+function crestOf(row, normalized) {
+  return usableLogo(row?.logo_url, normalized) ? row.logo_store_url || row.logo_url : null;
+}
+
 async function fixtureEntities(fixtures) {
   const out = new Map();
   // Same as competitionLogos: the NAS copy, or the Atlas mirror when deployed.
@@ -548,7 +561,7 @@ async function fixtureEntities(fixtures) {
 
   const rows = await (await coll('entities'))
     .find({ sport: { $in: [...sports] }, normalized: { $in: [...norms] } })
-    .project({ _id: 0, sport: 1, normalized: 1, logo_url: 1, country: 1 })
+    .project({ _id: 0, sport: 1, normalized: 1, logo_url: 1, logo_store_url: 1, country: 1 })
     .toArray();
 
   const byKey = new Map();
@@ -562,11 +575,11 @@ async function fixtureEntities(fixtures) {
       if (!name) return undefined;
       const n = normEntity(name);
       const own = byKey.get(`${f.sport}|${n}`);
-      const ownLogo = usableLogo(own?.logo_url, n);
+      const ownLogo = crestOf(own, n);
       if (ownLogo) return { logoUrl: ownLogo, country: own.country ?? null };
       for (const s of siblingKeys(n)) {
         const sib = byKey.get(`${f.sport}|${s}`);
-        const logo = usableLogo(sib?.logo_url, n);
+        const logo = crestOf(sib, n);
         if (logo) return { logoUrl: logo, country: own?.country ?? sib.country ?? null };
       }
       return own ? { logoUrl: null, country: own.country ?? null } : undefined;
@@ -761,18 +774,18 @@ export async function teamLogos(sport, names) {
   if (!norms.size) return out;
   const rows = await (await coll('entities'))
     .find({ sport, normalized: { $in: [...norms] } })
-    .project({ _id: 0, normalized: 1, logo_url: 1, country: 1 })
+    .project({ _id: 0, normalized: 1, logo_url: 1, logo_store_url: 1, country: 1 })
     .toArray()
     .catch(() => []);
   const byKey = new Map(rows.map((r) => [r.normalized, r]));
   for (const [name, n] of normOf) {
     const own = byKey.get(n);
-    const ownLogo = usableLogo(own?.logo_url, n);
+    const ownLogo = crestOf(own, n);
     if (ownLogo) { out.set(name, { key: n, logoUrl: ownLogo, country: own.country ?? null }); continue; }
     let hit = null;
     for (const s of siblingKeys(n)) {
       const sib = byKey.get(s);
-      const logo = usableLogo(sib?.logo_url, n);
+      const logo = crestOf(sib, n);
       if (logo) { hit = { key: s, logoUrl: logo, country: own?.country ?? sib.country ?? null }; break; }
     }
     // Known to the table but without a crest: still the same team wherever
