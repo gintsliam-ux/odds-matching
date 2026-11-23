@@ -7,6 +7,7 @@ Vercel Blob store (connected to the `workspace` project):
       v1/<key>.png                 one 160px image per source file
       index/teams/<sport>.json     name -> logo, read by the Odds Library page
       index/competitions.json      competition name -> badge
+      index/keys.json              every image key the store holds
 
 `gutsys_sport.entities` stays the record of who uses which logo:
 
@@ -37,9 +38,24 @@ at most 1,500 new images.
 
 `clear-bad.mjs` is the one-off that blanked the 756 bad links from the audit.
 
+## Using it from anywhere
+
+There is no logo endpoint on gutsys-api; the files above are the API. They are
+public, cached for an hour, and send `access-control-allow-origin: *`.
+
+- By name: `index/teams/<sport>.json` is `{ p: [prefixes], l: { name: "i|rest" } }`
+  where a name is lowercased, accents stripped, punctuation to spaces, and a
+  value is prefix `i` followed by the rest of the address.
+- By an existing Wikipedia link: key = `'w-' + sha1(file title with spaces)[0..16]`;
+  if `index/keys.json` contains it, the copy is `v1/<key>.png`.
+
 ## Readers
 
 - Odds Library (`index.html`): the lookup files, with the snapshot in
   `assets/` as a fallback.
 - Sports Odds Desk (`arb-tracker-mongo/server/lib/events.mjs`, `crestOf`):
   `logo_store_url` first, then `logo_url`.
+- live-fixtures (`src/lib/logoStore.ts`, used by `Avatar`): keeps its own
+  Supabase `entities` table, so it swaps each Wikipedia link for our copy by
+  key when the store holds one.
+- polytracker has its own hand-kept ESPN logo map and does not use the store.

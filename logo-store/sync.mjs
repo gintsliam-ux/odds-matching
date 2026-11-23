@@ -149,6 +149,11 @@ if (!DRY && base) {
   const json = (path, obj) => put('index/' + path, JSON.stringify(obj), { access: 'public', addRandomSuffix: false, allowOverwrite: true, contentType: 'application/json', cacheControlMaxAge: 3600 });
   for (const [sport, l] of bySport) await json(`teams/${sport}.json`, { p: P, l: Object.fromEntries(Object.entries(l).map(([k, u]) => [k, pack(u)])) });
   await json('competitions.json', comps);
+  // For any other reader holding a Wikipedia logo link of its own (live-fixtures
+  // keeps a separate table): the keys we hold, so it can swap a link for our
+  // copy. A link's key is 'w-' + the first 16 hex of sha1(file title, spaces
+  // not underscores); our copy is then v1/<key>.png.
+  await json('keys.json', [...have.keys()].sort());
   console.log(`  published lookups for ${bySport.size} sports and ${Object.keys(comps).length} competitions`);
 }
 const covered = await col.countDocuments({ logo_store_url: { $type: 'string' } });
