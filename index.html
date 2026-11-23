@@ -710,12 +710,17 @@
   .sport-glyph {
     display: inline-grid; place-items: center; flex-shrink: 0; border-radius: 7px;
     color: var(--tint);
-    background: color-mix(in srgb, var(--tint) 13%, transparent);
-    border: 1px solid color-mix(in srgb, var(--tint) 26%, transparent);
+    background: linear-gradient(145deg, color-mix(in srgb, var(--tint) 24%, transparent), color-mix(in srgb, var(--tint) 9%, transparent));
+    border: 1px solid color-mix(in srgb, var(--tint) 34%, transparent);
   }
-  .sport-glyph svg { width: 64%; height: 64%; }
-  .sb-league-icon { width: 23px; height: 23px; border-radius: 6px; }
-  .ht-icon.sport-glyph { width: 34px; height: 34px; border-radius: 9px; }
+  .sport-glyph svg {
+    width: 72%; height: 72%; fill: none; stroke: currentColor; stroke-width: 1.7;
+    stroke-linecap: round; stroke-linejoin: round;
+  }
+  .sport-glyph .f { fill: currentColor; fill-opacity: .2; }
+  .sport-glyph .s { fill: currentColor; stroke: none; }
+  .sb-league-icon { width: 24px; height: 24px; border-radius: 7px; }
+  .ht-icon.sport-glyph { width: 38px; height: 38px; border-radius: 10px; }
   .dh-ico { width: 22px; height: 22px; border-radius: 6px; }
 
   /* Sidebar group head now carries chevron + glyph + name + count + freshness */
@@ -896,6 +901,48 @@
     border-radius: 4px; background: rgba(255,255,255,0.92); padding: 1px;
   }
   .tp-item .tl-badge { width: 22px; height: 22px; }
+
+  /* Competition with no badge: initials on the sport's tint, so every row in
+     the picker starts with a mark and the names share one left edge. */
+  .tl-mono {
+    display: inline-grid; place-items: center; background: color-mix(in srgb, var(--tint, #5b9dff) 16%, transparent);
+    border: 1px solid color-mix(in srgb, var(--tint, #5b9dff) 30%, transparent);
+    color: var(--tint, #5b9dff); font-size: 8.5px; font-weight: 800; letter-spacing: .2px; padding: 0;
+    line-height: 1; user-select: none; text-transform: uppercase;
+  }
+
+  /* ============================================================
+     Team crests
+     ============================================================ */
+  .crest {
+    width: 24px; height: 24px; flex-shrink: 0; display: inline-grid; place-items: center;
+    border-radius: 7px; overflow: hidden; background: rgba(255,255,255,0.94);
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.06);
+  }
+  .crest img { width: 100%; height: 100%; object-fit: contain; padding: 2px; display: block; }
+  /* No crest (or it failed to load): initials on a colour taken from the name. */
+  .crest:not(:has(img)) {
+    background: linear-gradient(145deg, hsl(var(--h) 46% 34%), hsl(var(--h) 52% 22%));
+    box-shadow: inset 0 0 0 1px hsl(var(--h) 55% 52% / .45);
+  }
+  .crest:not(:has(img))::before {
+    content: attr(data-mono); color: hsl(var(--h) 70% 88%);
+    font-size: 9.5px; font-weight: 800; letter-spacing: .2px; line-height: 1;
+  }
+  .crest.crest-lg { width: 40px; height: 40px; border-radius: 11px; }
+  .crest.crest-lg img { padding: 3px; }
+  .crest.crest-lg:not(:has(img))::before { font-size: 14px; }
+
+  .match-card .mc-teams.mc-sides { display: flex; flex-direction: column; gap: 7px; }
+  .mc-side { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .mc-side .mc-tname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mc-side .mc-pts { font-size: 14px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
+  .mc-side.won .mc-pts { color: var(--pos); }
+  .mc-side.lost .mc-tname { color: var(--text-2); }
+
+  .dh-title.dh-sides { display: flex; align-items: center; gap: 12px 14px; flex-wrap: wrap; }
+  .dh-side { display: inline-flex; align-items: center; gap: 11px; min-width: 0; }
+  .dh-title.dh-sides .vs-sep { margin: 0; }
 
   .tp-cat { margin-left: 7px; font-size: 11px; font-weight: 500; color: var(--text-3); }
   .dh-country {
@@ -1857,23 +1904,25 @@ const ICON = {
   back: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 19l-7-7 7-7"/></svg>',
 };
 
+/* Duotone marks on a 24px grid. Classes: .f = tinted fill under the stroke,
+   .s = solid shape with no stroke. Drawn for this page. */
 const SPORT_GLYPH = {
-  soccer: '<circle cx="12" cy="12" r="8.5"/><path d="m12 7.5 4 2.9-1.5 4.7h-5L8 10.4l4-2.9z"/>',
-  basketball: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17M3.5 12h17M6 6c3.2 3.2 3.2 8.8 0 12M18 6c-3.2 3.2-3.2 8.8 0 12"/>',
-  amfootball: '<path d="M4 12c0-4.5 3.5-8 8-8s8 3.5 8 8-3.5 8-8 8-8-3.5-8-8z"/><path d="M8 12h8M10 9.5v5M14 9.5v5"/>',
-  baseball: '<circle cx="12" cy="12" r="8.5"/><path d="M6.5 5.5C9 8 9 16 6.5 18.5M17.5 5.5C15 8 15 16 17.5 18.5"/>',
-  icehockey: '<ellipse cx="12" cy="12" rx="8.5" ry="4.5"/><path d="M3.5 12v3c0 2.5 3.8 4.5 8.5 4.5s8.5-2 8.5-4.5v-3"/>',
-  tennis: '<circle cx="12" cy="12" r="8.5"/><path d="M5 6.5c3.5 2.5 3.5 8.5 0 11M19 6.5c-3.5 2.5-3.5 8.5 0 11"/>',
-  cricket: '<path d="m5 19 5-5"/><path d="M8.5 10.5 14 5a2.8 2.8 0 0 1 4 4l-5.5 5.5z"/><circle cx="6" cy="7" r="2.5"/>',
-  aussierules: '<ellipse cx="12" cy="12" rx="5" ry="8.5"/><path d="M12 5v14M9.5 9h5M9.5 15h5"/>',
-  rugbyleague: '<ellipse cx="12" cy="12" rx="8.5" ry="5.5" transform="rotate(-30 12 12)"/><path d="m8.5 15.5 7-7M10 11l1.5 1.5M13 8.5 14.5 10"/>',
-  rugbyunion: '<ellipse cx="12" cy="12" rx="8.5" ry="5.5" transform="rotate(-30 12 12)"/><path d="m8.5 15.5 7-7"/>',
-  golf: '<path d="M11 20V4l7 3.5-7 3.5"/><ellipse cx="9" cy="20" rx="4.5" ry="1.6"/>',
-  mma: '<path d="M7 11V7.5a1.8 1.8 0 0 1 3.5 0V11"/><path d="M10.5 10.5V6a1.8 1.8 0 0 1 3.5 0v5"/><path d="M14 11V8a1.8 1.8 0 0 1 3.5 0v6.5a5.5 5.5 0 0 1-11 0V11"/>',
-  boxing: '<path d="M6 8.5A2.5 2.5 0 0 1 8.5 6h5A4.5 4.5 0 0 1 18 10.5V13a4 4 0 0 1-4 4h-3a4 4 0 0 1-4-4z"/><path d="M6 11h12M9 17v2.5h6V17"/>',
-  darts: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/>',
-  esports: '<rect x="2.5" y="7.5" width="19" height="9" rx="4.5"/><path d="M7 10v4M5 12h4M15.5 11h.01M18 13h.01"/>',
-  volleyball: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5c-3 4-3 13 0 17M3.6 10c4.5-1.5 12.5 1 16.6 5M20.4 10c-4.5-1.5-12.5 1-16.6 5"/>',
+  soccer: '<circle class="f" cx="12" cy="12" r="9"/><path class="s" d="M12 8.4l3.42 2.49-1.3 4.02H9.88l-1.3-4.02z"/><path d="M12 8.4V3.2M15.42 10.89l4.9-1.6M14.12 14.91l3.05 4.2M9.88 14.91l-3.05 4.2M8.58 10.89l-4.9-1.6"/>',
+  basketball: '<circle class="f" cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18M5.6 5.7c3.5 3.4 3.5 9.2 0 12.6M18.4 5.7c-3.5 3.4-3.5 9.2 0 12.6"/>',
+  amfootball: '<path class="f" d="M20.5 3.5C13.5 2.5 2.5 13.5 3.5 20.5 10.5 21.5 21.5 10.5 20.5 3.5z"/><path d="M9.6 14.4l4.8-4.8M9.9 12.5l1.6 1.6M11.2 11.2l1.6 1.6M12.5 9.9l1.6 1.6"/>',
+  baseball: '<circle class="f" cx="12" cy="12" r="9"/><path d="M6.2 5.2c2.6 3.8 2.6 9.8 0 13.6M17.8 5.2c-2.6 3.8-2.6 9.8 0 13.6"/><path d="M7.7 8.7l1.5-.5M8.2 12h1.6M7.7 15.3l1.5.5M16.3 8.7l-1.5-.5M15.8 12h-1.6M16.3 15.3l-1.5.5" stroke-width="1.3"/>',
+  icehockey: '<path d="M17.8 3.6 11.3 16.9a2.2 2.2 0 0 1-2 1.3H5.4" stroke-width="2.3"/><path class="s" d="M14.4 17.4c0-.9 1.5-1.6 3.3-1.6s3.3.7 3.3 1.6v1.5c0 .9-1.5 1.6-3.3 1.6s-3.3-.7-3.3-1.6z"/>',
+  tennis: '<circle class="f" cx="12" cy="12" r="9"/><path d="M3.2 10.3c5 .4 9.2 4.2 10 10.5M20.8 13.7c-5-.4-9.2-4.2-10-10.5"/>',
+  cricket: '<g transform="rotate(45 12 12)"><rect class="f" x="9.5" y="1.6" width="5" height="13" rx="1.7"/><path d="M12 14.6v7" stroke-width="2.2"/></g><circle class="s" cx="18" cy="17.6" r="2.3"/>',
+  aussierules: '<ellipse class="f" cx="12" cy="12" rx="5.4" ry="9"/><path d="M12 7.6v8.8M10.3 9.8h3.4M10.3 12h3.4M10.3 14.2h3.4"/>',
+  rugbyleague: '<g transform="rotate(-40 12 12)"><ellipse class="f" cx="12" cy="12" rx="9.2" ry="5.6"/><path d="M6.6 7.5c1.7 2.7 1.7 6.3 0 9M17.4 7.5c-1.7 2.7-1.7 6.3 0 9M10 12h4"/></g>',
+  rugbyunion: '<path d="M6.5 21V8M17.5 21V8M6.5 14.5h11" stroke-width="2"/><ellipse class="s" cx="12" cy="5.6" rx="3.6" ry="2.3" transform="rotate(-25 12 5.6)"/>',
+  golf: '<path d="M9 20.5V3.2"/><path class="s" d="M9 3.2l9 3.6-9 3.6z"/><path d="M3.5 20.8c3-1.9 14-1.9 17 0"/><circle class="s" cx="15.3" cy="17.6" r="1.7"/>',
+  mma: '<path class="f" d="M8.48 3.5h7.04l4.98 4.98v7.04l-4.98 4.98H8.48L3.5 15.52V8.48z"/><path d="M10.3 7.9h3.4l2.4 2.4v3.4l-2.4 2.4h-3.4l-2.4-2.4v-3.4z"/>',
+  boxing: '<path class="f" d="M8 15.5V9a5 5 0 0 1 5-5h.5A4.5 4.5 0 0 1 18 8.5v3a3.6 3.6 0 0 1-2 3.2v.8z"/><path d="M8 12.2H6.6a2.1 2.1 0 0 1 0-4.2H8"/><path class="f" d="M8 15.5h8v3a1.5 1.5 0 0 1-1.5 1.5h-5A1.5 1.5 0 0 1 8 18.5z"/>',
+  darts: '<circle class="f" cx="11" cy="13" r="8"/><circle cx="11" cy="13" r="4.2"/><circle class="s" cx="11" cy="13" r="1.5"/><path d="M11 13l8.6-8.6M17.2 4.2h2.6v2.6" stroke-width="1.9"/>',
+  esports: '<path class="f" d="M7 7.5h10a4.5 4.5 0 0 1 4.4 3.6l.9 4.6a2.6 2.6 0 0 1-4.5 2.2l-2.2-2.4H8.4l-2.2 2.4a2.6 2.6 0 0 1-4.5-2.2l.9-4.6A4.5 4.5 0 0 1 7 7.5z"/><path d="M7.6 10v3M6.1 11.5h3"/><circle class="s" cx="15.4" cy="10.6" r="1"/><circle class="s" cx="17.6" cy="12.7" r="1"/>',
+  volleyball: '<circle class="f" cx="12" cy="12" r="9"/><g id="vb"><path d="M12 12c-.4-3.4.8-6.6 3.2-8.4M7.4 9.3c.4-2.4 1.7-4.5 3.6-6"/></g><g transform="rotate(120 12 12)"><path d="M12 12c-.4-3.4.8-6.6 3.2-8.4M7.4 9.3c.4-2.4 1.7-4.5 3.6-6"/></g><g transform="rotate(240 12 12)"><path d="M12 12c-.4-3.4.8-6.6 3.2-8.4M7.4 9.3c.4-2.4 1.7-4.5 3.6-6"/></g>',
 };
 
 function sportIconHtml(key, cls) {
@@ -1883,7 +1932,7 @@ function sportIconHtml(key, cls) {
   const tint = cfg.tint || '#5b9dff';
   if (!glyph) return `<span class="${cls} sport-init" style="color:${tint}" aria-hidden="true">${escHtml((cfg.label || '?')[0])}</span>`;
   return `<span class="${cls} sport-glyph" style="--tint:${tint}" aria-hidden="true">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${glyph}</svg>
+    <svg viewBox="0 0 24 24">${glyph}</svg>
   </span>`;
 }
 
@@ -1927,6 +1976,64 @@ function tournamentLogoHtml(label, cls, lazy, leagueId) {
   if (!url) url = competitionLogos.get(tourFallbackFor(label, leagueId));
   if (!url) return '';
   return `<img class="${cls}" src="${escAttr(url)}" alt=""${lazy ? ' loading="lazy"' : ''} onerror="this.remove()">`;
+}
+
+function monogram(name, max) {
+  const skip = /^(fc|cf|sc|ac|afc|bc|bk|fk|sk|cd|ca|club|the|de|of|and|u\d+|women|w)$/i;
+  const words = String(name || '').replace(/[^\p{L}\p{N} ]+/gu, ' ').split(/\s+/).filter(Boolean);
+  const keep = words.filter(w => !skip.test(w));
+  const use = keep.length ? keep : words;
+  if (!use.length) return '?';
+  if (use.length === 1) return use[0].slice(0, max || 2).toUpperCase();
+  return use.slice(0, max || 2).map(w => w[0]).join('').toUpperCase();
+}
+
+/* A badge for every competition: the real one when it resolved, initials on
+   the sport's tint when it did not. */
+function tournamentBadgeHtml(label, cls, lazy, leagueId) {
+  const mono = `<span class="${cls} tl-mono" style="--tint:${SPORTS[activeSport]?.tint || '#5b9dff'}" aria-hidden="true">${escHtml(monogram(label, 2))}</span>`;
+  const img = tournamentLogoHtml(label, cls, lazy, leagueId);
+  /* A badge URL that no longer loads falls back to the initials too, rather
+     than leaving a gap. */
+  return img ? img.replace('onerror="this.remove()"', `data-fb="${escAttr(mono)}" onerror="this.outerHTML=this.dataset.fb"`) : mono;
+}
+
+/* Team and player crests, snapshotted per sport from `entities` by
+   odds-matching-mongo/scripts/snapshot-team-logos.mjs. One file per sport, so
+   a page only fetches the sport it is showing. */
+const teamLogos = {};
+const teamLogoLoads = {};
+function loadTeamLogos(sport) {
+  if (!sport) return Promise.resolve();
+  if (!teamLogoLoads[sport]) {
+    teamLogoLoads[sport] = fetch(`assets/team-logos/${sport}.json`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => { teamLogos[sport] = j || { p: [], l: {} }; })
+      .catch(() => { teamLogos[sport] = { p: [], l: {} }; });
+  }
+  return teamLogoLoads[sport];
+}
+const teamKey = s => String(s || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+function teamLogoUrl(name) {
+  const t = teamLogos[activeSport];
+  const v = t?.l?.[teamKey(name)];
+  if (!v) return null;
+  const m = /^(\d+)\|(.*)$/.exec(v);
+  return m ? (t.p[+m[1]] || '') + m[2] : v;
+}
+function nameHue(name) {
+  let h = 0;
+  for (const ch of String(name || '')) h = (h * 31 + ch.codePointAt(0)) % 360;
+  return h;
+}
+function crestHtml(name, cls) {
+  const url = teamLogoUrl(name);
+  return `<span class="crest ${cls || ''}" style="--h:${nameHue(name)}" data-mono="${escAttr(monogram(name, 2))}" aria-hidden="true">${
+    url ? `<img src="${escAttr(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</span>`;
+}
+function titleSides(title) {
+  const parts = String(title || '').split(/\s+vs\.?\s+/i);
+  return parts.length === 2 ? parts : null;
 }
 
 /* ===========================================================================
@@ -1986,7 +2093,7 @@ function navTournamentRows(key) {
       data-name="${escAttr(String(l.label).toLowerCase())}"
       title="${escAttr(l.label)}${l.category ? ' — ' + escAttr(l.category) : ''}${dim ? ' · nothing in this period' : ''}"
       onclick="selectTournament('${jsStr(l.id)}')">
-      ${tournamentLogoHtml(l.label, 'tl-badge', true, l.id) || '<span class="tl-badge tl-none"></span>'}
+      ${tournamentBadgeHtml(l.label, 'tl-badge', true, l.id)}
       <span class="tl-name">${escHtml(l.label)}</span>
     </div>`;
 
@@ -2373,6 +2480,12 @@ function renderMatchList() {
   const data = sportData[activeSport];
   const listEl = document.getElementById('match-list-view');
   if (!data) return;
+  if (!teamLogos[activeSport]) {
+    const sport = activeSport;
+    loadTeamLogos(sport).then(() => {
+      if (activeSport === sport && listEl.style.display !== 'none' && !currentSlug) renderMatchList();
+    });
+  }
 
   const events = data.events || [];
   const leagues = data.monthLeagues || [];
@@ -2420,7 +2533,7 @@ function renderTournamentPicker(leagues) {
       </div>
       <div class="tp-grid">
         ${leagues.map(l => `<div class="tp-item" onclick="selectTournament('${jsStr(l.id)}')">
-            ${tournamentLogoHtml(l.label, 'tl-badge', false, l.id)}
+            ${tournamentBadgeHtml(l.label, 'tl-badge', false, l.id)}
             <span class="tp-name">${escHtml(l.label)}${l.category ? `<span class="tp-cat">${escHtml(l.category)}</span>` : ''}</span>
             <span class="tp-n">${l.n.toLocaleString()}</span>
           </div>`).join('')}
@@ -2433,6 +2546,9 @@ function renderMatchCard(ev) {
   const statusText = ev.live ? '<span class="pulse-dot"></span> Live'
     : ev.ended ? '<span class="final-dot"></span> Final'
     : ev.cancelled ? 'Cancelled' : 'Upcoming';
+  const sides = titleSides(ev.title);
+  const m = sides && /^(\d+)-(\d+)$/.exec(ev.score || '');
+  const pts = m ? [Number(m[1]), Number(m[2])] : null;
 
   return `<div class="match-card" onclick="openDetail('${escAttr(ev.id)}')">
     <div class="mc-top">
@@ -2442,9 +2558,11 @@ function renderMatchCard(ev) {
       </div>
       <span class="mc-status ${statusClass}">${statusText}</span>
     </div>
-    <div class="mc-teams">${splitTitle(ev.title)}</div>
+    ${sides ? `<div class="mc-teams mc-sides">${sides.map((n, i) => `<div class="mc-side ${pts ? (pts[i] > pts[1 - i] ? 'won' : pts[i] < pts[1 - i] ? 'lost' : '') : ''}">
+        ${crestHtml(n)}<span class="mc-tname">${escHtml(n)}</span>${pts ? `<span class="mc-pts">${pts[i]}</span>` : ''}
+      </div>`).join('')}</div>` : `<div class="mc-teams">${splitTitle(ev.title)}</div>`}
     <div class="mc-meta">
-      ${ev.score ? `<span class="mc-score">${escHtml(ev.score)}</span>` : ''}
+      ${ev.score && !sides ? `<span class="mc-score">${escHtml(ev.score)}</span>` : ''}
       <span class="mc-when">${escHtml(fmtTime(ev.start))}</span>
     </div>
   </div>`;
@@ -2503,6 +2621,9 @@ async function openDetailDirect(id) {
   if (!detailTypes.includes(activeMarketType)) activeMarketType = detailTypes[0] || null;
 
   const statusText = ev.live ? 'Live' : ev.ended ? 'Final' : ev.cancelled ? 'Cancelled' : 'Upcoming';
+  await loadTeamLogos(activeSport);
+  if (currentSlug !== id) return;
+  const dhSides = titleSides(ev.title);
   let html = `<div class="detail-sticky">
     <div class="detail-top">
       <button class="back-btn" onclick="closeDetail()">${ICON.back} Back</button>
@@ -2514,7 +2635,8 @@ async function openDetailDirect(id) {
           ${escHtml(ev.tournament || SPORTS[activeSport].label)}
           ${ev.country ? `<span class="dh-country">${escHtml(ev.country)}</span>` : ''}
         </div>
-        <div class="dh-title">${splitTitle(ev.title)}</div>
+        ${dhSides ? `<div class="dh-title dh-sides">${dhSides.map(n => `<span class="dh-side">${crestHtml(n, 'crest-lg')}<span>${escHtml(n)}</span></span>`).join('<span class="vs-sep">vs</span>')}</div>`
+          : `<div class="dh-title">${splitTitle(ev.title)}</div>`}
         <div class="dh-meta">
           <span>${escHtml(fmtDate(ev.start))}</span>
           <span class="dh-pill ${ev.ended ? 'final' : ev.live ? 'live' : 'upcoming'}">${statusText}</span>
