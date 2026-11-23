@@ -28,6 +28,10 @@ const PREFIXES = [
   'https://www.thesportsdb.com/images/media/',
   'https://a.espncdn.com/',
 ];
+// The resolver sometimes lands on a Wikipedia page with no image of its own and
+// takes the sister-project logo from the sidebar (Wikiquote, Wikisource…) or a
+// locator map. None of those is a crest.
+const JUNK = /Wikiquote-logo|Wikisource-logo|Wikidata-logo|Wiktionary-logo|Commons-logo|Wikinews-logo|Wikivoyage|Wikibooks|Wikiversity|Location_of_|_per_State/i;
 const key = (s) => String(s ?? '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 
 const client = new MongoClient(process.env.MONGO_URI, { appName: 'oddslib:logo-snapshot' });
@@ -41,6 +45,7 @@ const bySport = new Map();
 const hosts = new Map();
 for (const r of rows) {
   if (!r.sport || !r.name || !/^https:\/\//.test(r.logo_url)) continue;
+  if (JUNK.test(r.logo_url)) continue;
   const url = r.logo_url.replace(/\?utm_source=[^#]*$/, '');
   const i = PREFIXES.findIndex((p) => url.startsWith(p));
   const packed = i >= 0 ? i + '|' + url.slice(PREFIXES[i].length) : url;

@@ -1961,7 +1961,10 @@ async function loadCompetitionLogos() {
        has no entities endpoint, and 1,079 badge URLs change rarely enough that
        a static file beats standing a service up for them. */
     const r = await fetch('assets/competition-logos.json');
-    for (const [name, url] of Object.entries(await r.json())) competitionLogos.set(name, url);
+    /* Skips Wikipedia's sister-project logos and locator maps, which the
+       resolver picks up from pages that have no image of their own. */
+    const junk = /Wikiquote-logo|Wikisource-logo|Wikidata-logo|Wiktionary-logo|Commons-logo|Wikinews-logo|Location_of_|_per_State/i;
+    for (const [name, url] of Object.entries(await r.json())) if (!junk.test(url)) competitionLogos.set(name, url);
   } catch (err) {
     console.warn('competition logos unavailable', err);
   }
@@ -2014,13 +2017,33 @@ function tournamentBadgeHtml(label, cls, lazy, leagueId) {
    a page only fetches the sport it is showing. */
 const teamLogos = {};
 const teamLogoLoads = {};
+/* The crests Sports Odds Desk ships as files (the major leagues: NFL, NBA,
+   AFL, NRL and so on). They are served from that site, so they keep working
+   when a Wikipedia thumbnail in `entities` is renamed and starts to 404 —
+   which is what left the Buffalo Bills on initials. `_local.json` lists the
+   slugs that exist, so a team outside the set never costs a failed request. */
+const LOCAL_CREST_BASE = 'https://sports-odds-desk.vercel.app/logos/teams/';
+let localCrests = null;
+let localCrestLoad = null;
+function loadLocalCrests() {
+  if (!localCrestLoad) {
+    localCrestLoad = fetch('assets/team-logos/_local.json')
+      .then(r => (r.ok ? r.json() : []))
+      .then(a => { localCrests = new Set(a); })
+      .catch(() => { localCrests = new Set(); });
+  }
+  return localCrestLoad;
+}
+const teamSlug = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 function loadTeamLogos(sport) {
   if (!sport) return Promise.resolve();
   if (!teamLogoLoads[sport]) {
-    teamLogoLoads[sport] = fetch(`assets/team-logos/${sport}.json`)
-      .then(r => (r.ok ? r.json() : null))
-      .then(j => { teamLogos[sport] = j || { p: [], l: {} }; })
-      .catch(() => { teamLogos[sport] = { p: [], l: {} }; });
+    teamLogoLoads[sport] = Promise.all([
+      fetch(`assets/team-logos/${sport}.json`)
+        .then(r => (r.ok ? r.json() : null))
+        .catch(() => null),
+      loadLocalCrests(),
+    ]).then(([j]) => { teamLogos[sport] = j || { p: [], l: {} }; });
   }
   return teamLogoLoads[sport];
 }
@@ -2037,10 +2060,19 @@ function nameHue(name) {
   for (const ch of String(name || '')) h = (h * 31 + ch.codePointAt(0)) % 360;
   return h;
 }
+/* Shipped crest first, then the one resolved into `entities`, then initials.
+   Each failure falls through to the next. */
+function crestNext(img) {
+  const next = img.dataset.alt;
+  if (!next) { img.remove(); return; }
+  delete img.dataset.alt;
+  img.src = next;
+}
 function crestHtml(name, cls) {
-  const url = teamLogoUrl(name);
+  const slug = teamSlug(name);
+  const urls = [localCrests?.has(slug) ? LOCAL_CREST_BASE + slug + '.png' : null, teamLogoUrl(name)].filter(Boolean);
   return `<span class="crest ${cls || ''}" style="--h:${nameHue(name)}" data-mono="${escAttr(monogram(name, 2))}" aria-hidden="true">${
-    url ? `<img src="${escAttr(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</span>`;
+    urls.length ? `<img src="${escAttr(urls[0])}"${urls[1] ? ` data-alt="${escAttr(urls[1])}"` : ''} alt="" loading="lazy" referrerpolicy="no-referrer" onerror="crestNext(this)">` : ''}</span>`;
 }
 function titleSides(title) {
   const parts = String(title || '').split(/\s+vs\.?\s+/i);
