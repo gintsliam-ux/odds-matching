@@ -69,6 +69,7 @@ const MYBET: Bookmaker = {
   logoUrl: '/logos/brands/mybet.png',
 };
 const OUR_BOOKS: Bookmaker[] = [SWIFTBET, MYBET];
+const OUR_BOOK_IDS = new Set(OUR_BOOKS.map((b) => b.id));
 
 // Golf outrights are priced by mostly-US books plus TAB — a different set from
 // the core AU columns, so golf uses its own list.
@@ -484,6 +485,7 @@ const GRIDIRON_MARKETS: MarketDef[] = [
   D('1h_spread', '1st Half — Line', 'spread'),
   D('1h_total', '1st Half — Total Points', 'total'),
   D('1q_moneyline', '1st Quarter — Head to Head', 'h2h'),
+  D('1q_moneyline_3way', '1st Quarter — Head to Head — 3-Way', 'h2h'),
   D('1q_spread', '1st Quarter — Line', 'spread'),
   D('1q_total', '1st Quarter — Total Points', 'total'),
   D('1q_btts', '1st Quarter — Both Teams to Score', 'flat'),
@@ -1032,7 +1034,17 @@ export function buildMarkets(
       const baseHasPrices = rows.some(
         (r) => r.market_id === baseId && !r.is_lay && (r.current_price ?? r.open_price) != null,
       );
-      if (baseHasPrices && coverage(marketRows) < 2) continue;
+      // Unless the one book is ours. Swiftbet's 1st-half market IS the
+      // three-way (home / draw / away) on basketball and the other
+      // non-drawable sports, so hiding a lone three-way hid our own price
+      // completely — it was only visible in the raw Details tab. Our price is
+      // the subject of the page; it shows whether or not the field has caught
+      // up. The field's three-ways for the periods are captured too now, so
+      // the row usually has company.
+      const oursPricesIt = marketRows.some(
+        (r) => OUR_BOOK_IDS.has(r.sportsbook) && !r.is_lay && (r.current_price ?? r.open_price) != null,
+      );
+      if (baseHasPrices && coverage(marketRows) < 2 && !oursPricesIt) continue;
     }
 
     let selections: SelectionRow[];
