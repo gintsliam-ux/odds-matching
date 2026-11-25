@@ -964,8 +964,14 @@ function StatBets({
     <div className="space-y-3">
       {groups.map((family) => (
         <div key={family.key} className="space-y-2">
-          {/* The stat, once, over every line the book offered on it. */}
-          <div className="flex items-baseline gap-2">
+          {/*
+            * The stat, once, over every line the book offered on it — and
+            * pinned to the top of the panel while its lines scroll under it,
+            * so forty rows into Points the page still says Points. It is
+            * bounded by its own family, so Assists pushes it off as it arrives.
+            * Opaque and full-bleed, or the rows show through and beside it.
+            */}
+          <div className="sticky top-0 z-10 -mx-4 flex items-baseline gap-2 border-b border-surface-border/60 bg-surface px-4 py-1.5">
             <h4 className="text-[13px] font-semibold text-slate-200">{family.label}</h4>
             <span className="text-[11px] text-slate-600">
               {family.bets} bet{family.bets === 1 ? '' : 's'} · ${Math.round(family.stake).toLocaleString()}
