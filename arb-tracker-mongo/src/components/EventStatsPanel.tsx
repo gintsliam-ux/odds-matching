@@ -970,8 +970,11 @@ function StatBets({
             * so forty rows into Points the page still says Points. It is
             * bounded by its own family, so Assists pushes it off as it arrives.
             * Opaque and full-bleed, or the rows show through and beside it.
+            * -top-4, not top-0: the panel's own p-4 counts as part of where a
+            * sticky row may rest, so top-0 left sixteen pixels of scrolling
+            * rows visible above the heading.
             */}
-          <div className="sticky top-0 z-10 -mx-4 flex items-baseline gap-2 border-b border-surface-border/60 bg-surface px-4 py-1.5">
+          <div className="sticky -top-4 z-10 -mx-4 flex items-baseline gap-2 border-b border-surface-border/60 bg-surface px-4 py-1.5">
             <h4 className="text-[13px] font-semibold text-slate-200">{family.label}</h4>
             <span className="text-[11px] text-slate-600">
               {family.bets} bet{family.bets === 1 ? '' : 's'} · ${Math.round(family.stake).toLocaleString()}
