@@ -869,7 +869,7 @@ async function resolveByNameAndStart(bets, byEventId, fixtures) {
   if (mongoConfigured) {
     candidates = await (await coll('fixtures'))
       .find({ scheduled_start: { $gte: lo, $lte: hi } })
-      .project({ _id: 0, fixture_id: 1, sport: 1, category: 1, tournament: 1,
+      .project({ _id: 0, fixture_id: 1, sport: 1, category: 1, tournament: 1, optic_league: 1,
                  home_team: 1, away_team: 1, event_name: 1, scheduled_start: 1 })
       .limit(4000)
       .toArray()
@@ -887,14 +887,21 @@ async function resolveByNameAndStart(bets, byEventId, fixtures) {
 
   for (const b of orphans) {
     const want = new Set(
-      key(b.event).split(' ').filter((t) => t.length > 2 && !FORMAT_TOKEN.test(t)),
+      // not the grade word either: sameGrade below answers for it, and the
+      // feed's side names do not carry it
+      key(b.event).split(' ').filter((t) => t.length > 2 && !FORMAT_TOKEN.test(t) && !WOMENS.test(t)),
     );
     if (want.size < 2) continue;
     const at = new Date(b.startsAt).getTime();
     const hits = candidates.filter((f) => {
       if (Math.abs(new Date(f.scheduled_start).getTime() - at) > WINDOW_MIN * 60_000) return false;
       if (b.sport && sportLabel(f.sport) && sportLabel(f.sport) !== b.sport) return false;
-      if (!sameGrade(b.event, `${f.home_team ?? ''} ${f.away_team ?? ''} ${f.event_name ?? ''}`)) return false;
+      // The competition counts on both sides: the feed's WBBL sides are plain
+      // "Sydney Thunder v Adelaide Strikers" and only the tournament, "Big
+      // Bash League Women", says which grade. Compared on the names alone,
+      // every WBBL bet (33 of 200 on 26 Nov 2026) disagreed with its own game.
+      if (!sameGrade(`${b.event} ${b.tournament ?? ''}`,
+        `${f.home_team ?? ''} ${f.away_team ?? ''} ${f.event_name ?? ''} ${f.tournament ?? ''} ${f.optic_league ?? ''}`)) return false;
       const got = key(`${f.home_team ?? ''} ${f.away_team ?? ''} ${f.event_name ?? ''}`);
       let hit = 0;
       for (const t of want) if (got.includes(t)) hit++;
@@ -934,7 +941,7 @@ const FORMAT_TOKEN = /^(t20|t10|odi|test|xi|100|fc|pfc|afc|sc|sv|cf|ac|cd|ud|gd|
  * it is required to AGREE rather than be ignored: a side that says women must
  * meet one that says women.
  */
-const WOMENS = /\b(women|womens|ladies|wfc|w)\b/;
+const WOMENS = /\b(women|womens|ladies|wfc|w|wbbl|wnbl|wnba|nwsl|aflw|nrlw)\b/;
 const sameGrade = (a, b) => WOMENS.test(key(a)) === WOMENS.test(key(b));
 
 /**
