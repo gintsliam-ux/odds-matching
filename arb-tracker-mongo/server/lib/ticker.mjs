@@ -209,6 +209,7 @@ const FETCH_LANES = 16;
 /** Prop fixtures priced per build, and how many Optic calls go out together. */
 const PROP_FIXTURE_CAP = 40;
 const PROP_LANES = 6;
+const PROP_MARKETS_PER_CALL = 8;
 
 /**
  * Phase timings, reported on the payload.
@@ -1227,6 +1228,12 @@ export function parseBetMarket(market, outcome, sport) {
   const prop = parsePlayerProp(m, o, sport);
   if (prop) return prop;
 
+  // Odd/even, half-time/full-time and winning margin: not stored either, and
+  // asked for live the same way. Ahead of the guards below for the same
+  // reason as the props — two of these carry a slash and one says "margin".
+  const live = parseLiveMarket(m, o, sport);
+  if (live) return live;
+
   /*
    * Both-teams-to-score, on its own, IS a market the surface prices — `btts`,
    * and its selections are literally "Yes" and "No".
@@ -1577,6 +1584,130 @@ function teamTotalMarket(w) {
   return TEAM_TOTAL_MARKET[id.slice(0, -'team_total'.length)] ?? null;
 }
 
+/**
+ * Three popular markets nothing stores, priced live beside the props
+ * (27 Nov 2026: twelve of the latest 200 bets). Each resolves to Optic's own
+ * market name and is matched on exactly what the bet says:
+ *
+ *   odd/even              "total points odd/even | Even"
+ *   half-time/full-time   "half-time/full-time | Houston Rockets/Phoenix Suns"
+ *   margin                "Margin | Clemson 1-10 Mgn", "... | Melbourne Win By 40+"
+ *
+ * Anything short of an exact reading is left blank. A margin is only the same
+ * bet at the same band, so "1-10" never borrows the price of "1-5"; a Tri Bet
+ * is a three-way on a handicap line and is not a margin band at all.
+ */
+const LIVE_PERIODS = [
+  [/\b(1st|first) half\b|\b1h\b/, '1st Half '],
+  [/\b(2nd|second) half\b|\b2h\b/, '2nd Half '],
+  [/\b(1st|first) quarter\b|\bquarter 1\b|\b1q\b/, '1st Quarter '],
+  [/\b(2nd|second) quarter\b|\bquarter 2\b|\b2q\b/, '2nd Quarter '],
+  [/\b(3rd|third) quarter\b|\bquarter 3\b|\b3q\b/, '3rd Quarter '],
+  [/\b(4th|fourth) quarter\b|\bquarter 4\b|\b4q\b/, '4th Quarter '],
+];
+// What Optic calls the thing being counted, which is part of the market name.
+// No ice hockey: Optic's includes overtime, where a tied game always ends on
+// an odd total (bet365 had Odd at 1.48), and a 60-minute bet is not that.
+const ODD_EVEN_UNIT = [
+  [/basketball|football|gridiron|aussie|afl|rugby|nrl/, 'Points'],
+  [/soccer/, 'Goals'],
+];
+const MARGIN_MARKETS = ['Winning Margin', 'Winning Margin 5-Way'];
+const bandOf = (txt) => {
+  const t = String(txt ?? '');
+  const range = t.match(/(\d+)\s*(?:-|–|to)\s*(\d+)/i);
+  if (range) return `${Number(range[1])}-${Number(range[2])}`;
+  const plus = t.match(/(\d+)\s*\+/);
+  return plus ? `${Number(plus[1])}+` : null;
+};
+
+function parseLiveMarket(m, o, sport) {
+  const km = key(m);
+  const ko = key(o);
+
+  if (/\bodd (or )?even\b/.test(km)) {
+    if (!/^(odd|even)$/.test(ko)) return null;
+    let rest = km.replace(/\bodd (or )?even\b/, ' ');
+    let period = '';
+    for (const [re, name] of LIVE_PERIODS) {
+      if (re.test(rest)) { period = name; rest = rest.replace(re, ' '); break; }
+    }
+    // Whatever is left has to be nothing but the words for the whole game's
+    // score. A team's own odd/even, or a hockey period's, is another market.
+    if (rest.replace(/\b(total|points|goals|match|game|score|full|time)\b/g, ' ').trim()) return null;
+    const unit = ODD_EVEN_UNIT.find(([re]) => re.test(key(sport)))?.[1];
+    if (!unit) return null;
+    return { kind: 'live', match: 'oddeven', marketIds: [], markets: [`${period}Total ${unit} Odd/Even`], name: ko, line: null };
+  }
+
+  if (/\b(half ?time|ht) (full ?time|ft)\b/.test(km) || /\bdouble result\b/.test(km)) {
+    const halves = o.split('/').map((x) => x.trim());
+    if (halves.length !== 2 || halves.some((x) => !x)) return null;
+    return { kind: 'live', match: 'htft', marketIds: [], markets: ['Halftime / Fulltime'], halves, line: null };
+  }
+
+  if (/\bmargin\b/.test(km) && !/\btri bet\b/.test(km)) {
+    // Full game only: a first-half margin is its own market with its own bands.
+    if (LIVE_PERIODS.some(([re]) => re.test(km)) || /\b(period|set|inning|innings)\b/.test(km)) return null;
+    const band = bandOf(o);
+    if (!band) return null;
+    const name = o
+      .replace(/(\d+)\s*(?:-|–|to)\s*(\d+)|(\d+)\s*\+/i, ' ')
+      .replace(/\b(mgn|margin|win by|wins by|to win by|by|points|pts|goals)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!name || DRAW.test(key(name))) return null;
+    return { kind: 'live', match: 'margin', marketIds: [], markets: MARGIN_MARKETS, name, band, line: null };
+  }
+  return null;
+}
+
+/**
+ * The rows a live market bet is on, and — where every book cuts the market
+ * the same way — the whole market for the fairs. Optic numbers no outcomes in
+ * these, so they are numbered here: without that the de-vig has nothing to
+ * tell Odd from Even.
+ */
+export function liveHits(all, w) {
+  const rows = all.filter((r) => !r.is_lay && w.markets.includes(r.market_name));
+  if (!rows.length) return { hits: [], group: null };
+
+  if (w.match === 'oddeven') {
+    const group = rows.map((r) => ({ ...r, outcome_no: key(r.selection) === 'odd' ? 1 : key(r.selection) === 'even' ? 2 : null }));
+    const no = w.name === 'odd' ? 1 : 2;
+    return { hits: group.filter((r) => r.outcome_no === no), group };
+  }
+
+  if (w.match === 'htft') {
+    // "Draw :: Miami Heat" — the half-time leader, then the winner.
+    const teams = new Map();
+    for (const r of rows) {
+      for (const part of String(r.selection ?? '').split('::')) {
+        const t = part.trim();
+        if (t && !DRAW.test(key(t))) teams.set(key(t), { selection: t });
+      }
+    }
+    const resolve = (name) => {
+      if (DRAW.test(key(name))) return 'draw';
+      const got = pickByName([...teams.values()], name);
+      return got.length === 1 ? key(got[0].selection) : null;
+    };
+    const want = w.halves.map(resolve);
+    if (want.some((x) => x == null)) return { hits: [], group: null };
+    const sides = (r) => String(r.selection ?? '').split('::').map((x) => (DRAW.test(key(x)) ? 'draw' : key(x))).join('|');
+    const order = [...new Set(rows.map(sides))].sort();
+    const group = rows.map((r) => ({ ...r, outcome_no: order.indexOf(sides(r)) + 1 }));
+    return { hits: group.filter((r) => sides(r) === want.join('|')), group };
+  }
+
+  // Margin. The band is Optic's `selection_line`; a surface that does not
+  // send it yet has no way to tell one band from another, so nothing matches.
+  // No fairs: books cut the margin into different bands, so there is no one
+  // market to take the margin out of.
+  const hits = pickByName(rows, w.name).filter((r) => r.selection_line != null && bandOf(r.selection_line) === w.band);
+  return { hits, group: null };
+}
+
 export const sameLine = (a, b) => a != null && b != null && Math.abs(a - b) < 0.01;
 
 /**
@@ -1802,12 +1933,12 @@ async function pricesFor(bets, byEventId, fixtures, timings, { closing = false }
     for (const [b, w] of want) {
       // A team's own total rides the same call: the capture stores none
       // either, and three US books quote a ladder of them on every NBA game.
-      const market = w.kind === 'prop' ? w.market : teamTotalMarket(w);
-      if (!market) continue;
+      const markets = w.kind === 'prop' ? [w.market] : w.kind === 'live' ? w.markets : [teamTotalMarket(w)];
+      if (!markets[0]) continue;
       const m = byEventId.get(String(b.eventId));
       if (!m) continue;
       const set = propMarkets.get(m.optic_fixture_id) ?? new Set();
-      set.add(market);
+      for (const market of markets) set.add(market);
       propMarkets.set(m.optic_fixture_id, set);
     }
     if (propMarkets.size) {
@@ -1816,8 +1947,12 @@ async function pricesFor(bets, byEventId, fixtures, timings, { closing = false }
         const out = [];
         while (queue.length) {
           const [fixtureId, markets] = queue.shift();
-          const got = await apiPropOdds(fixtureId, [...markets]).catch(() => []);
-          for (const r of got) out.push(r);
+          // The surface takes eight markets a call and drops the rest unsaid.
+          const names = [...markets];
+          for (let i = 0; i < names.length; i += PROP_MARKETS_PER_CALL) {
+            const got = await apiPropOdds(fixtureId, names.slice(i, i + PROP_MARKETS_PER_CALL)).catch(() => []);
+            for (const r of got) out.push(r);
+          }
         }
         return out;
       };
@@ -1883,6 +2018,8 @@ async function pricesFor(bets, byEventId, fixtures, timings, { closing = false }
           (r) => sameLine(r.line, w.line) && r.outcome_no === (w.side === 'over' ? 1 : 2),
         );
       }
+      let liveGroup = null;
+      if (w.kind === 'live') ({ hits, group: liveGroup } = liveHits(all, w));
       const teamTotal = teamTotalMarket(w);
       if (teamTotal) {
         // Whose total is the team named in the bet's market; the side and the
@@ -1923,7 +2060,7 @@ async function pricesFor(bets, byEventId, fixtures, timings, { closing = false }
        * bet is in, and that is what gets de-vigged. See fair.mjs for why a
        * missing pair_key means no fair rather than a guessed grouping.
        */
-      const group = groups.get(groupKey(hits[0]));
+      const group = liveGroup ?? groups.get(groupKey(hits[0]));
       if (group) {
         const f = fairsFor(group, hits[0].outcome_no, { field: priceField });
         if (f.fairPinnacle != null) b.fairPinnacle = f.fairPinnacle;
