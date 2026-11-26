@@ -1562,11 +1562,40 @@ export const sameLine = (a, b) => a != null && b != null && Math.abs(a - b) < 0.
  * not be allowed to choose between two clubs that both contain it.
  */
 export function pickByName(rows, name) {
-  const strict = rows.filter((r) => sameSelection(r.selection, name));
-  if (strict.length) return strict;
-  const loose = rows.filter((r) => surnameSubset(r.selection, name));
-  const distinct = new Set(loose.map((r) => key(r.selection)));
-  return distinct.size === 1 ? loose : [];
+  // "Tampines (Sgp)": swiftbet tags a club with its country, which is no part
+  // of the name the surface holds ("Tampines Rovers").
+  const bare = String(name ?? '').replace(COUNTRY_TAG, '');
+  for (const n of bare && bare !== name ? [name, bare] : [name]) {
+    const strict = rows.filter((r) => sameSelection(r.selection, n));
+    if (strict.length) return strict;
+    const loose = rows.filter((r) => surnameSubset(r.selection, n));
+    if (new Set(loose.map((r) => key(r.selection))).size === 1) return loose;
+  }
+  const tailed = rows.filter((r) => nicknamed(r.selection, bare));
+  return new Set(tailed.map((r) => key(r.selection))).size === 1 ? tailed : [];
+}
+
+const COUNTRY_TAG = /\s*\([A-Za-z]{2,3}\)\s*$/;
+const NOT_A_NICKNAME = /^(and|or|over|under|to|by|win|draw)$/;
+/**
+ * The surface's name with a nickname or a format after it: "Stanford Cardinal"
+ * for "Stanford", "Washington Huskies" for "Washington", "Australia T20" for
+ * "Australia". 26 Nov 2026: six of the latest 200 bets were plain head-to-heads
+ * left blank beside a game quoting them, because one extra word in a two-word
+ * name scores 0.67 against the 0.8 the strict test wants.
+ *
+ * This is the direction pickByName otherwise refuses (the surface's name inside
+ * the bet's), so it is kept narrow. The surface's name has to come FIRST and be
+ * followed by one or two plain words: a scorer is written the other way round,
+ * "Brevyn Spann-Ford (Dallas Cowboys)", and a same-game-multi leg carries a
+ * number or a joining word, "Stanford Cardinal and Over +70.5". And as with the
+ * loose pass, it only stands when it picks out exactly one selection.
+ */
+function nicknamed(surfaceName, betName) {
+  const s = key(surfaceName); const b = key(betName);
+  if (!s || !b.startsWith(`${s} `)) return false;
+  const rest = b.slice(s.length + 1).split(' ');
+  return rest.length <= 2 && rest.every((t) => (/^[a-z]+$/.test(t) || FORMAT_TOKEN.test(t)) && !NOT_A_NICKNAME.test(t));
 }
 
 /**
