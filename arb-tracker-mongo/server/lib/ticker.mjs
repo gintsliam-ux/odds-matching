@@ -1559,6 +1559,24 @@ export function parseBetMarket(market, outcome, sport) {
  * lines, and "San Jose Sharks +1.5 goals" (struck at 1.61) matched San Jose at
  * -1.5 and was shown against a field of 4.70.
  */
+/**
+ * Optic's name for the team-total market a bet is in, or null when the bet is
+ * not a team total. Asked for live beside the player props (see pricesFor):
+ * 26 Nov 2026, ten of the latest 200 bets were "Alternate Total Over - Golden
+ * State Warriors" and the like, blank because nothing stores that market.
+ */
+const TEAM_TOTAL_MARKET = {
+  '': 'Team Total', '1h_': '1st Half Team Total', '2h_': '2nd Half Team Total',
+  '1q_': '1st Quarter Team Total', '2q_': '2nd Quarter Team Total',
+  '3q_': '3rd Quarter Team Total', '4q_': '4th Quarter Team Total',
+};
+function teamTotalMarket(w) {
+  if (w?.kind !== 'total' || !w.qualifier) return null;
+  const id = w.marketIds?.[0] ?? '';
+  if (!id.endsWith('team_total')) return null;
+  return TEAM_TOTAL_MARKET[id.slice(0, -'team_total'.length)] ?? null;
+}
+
 export const sameLine = (a, b) => a != null && b != null && Math.abs(a - b) < 0.01;
 
 /**
@@ -1782,11 +1800,14 @@ async function pricesFor(bets, byEventId, fixtures, timings, { closing = false }
   if (!closing) {
     const propMarkets = new Map(); // fixture_id -> Set of Optic market names
     for (const [b, w] of want) {
-      if (w.kind !== 'prop') continue;
+      // A team's own total rides the same call: the capture stores none
+      // either, and three US books quote a ladder of them on every NBA game.
+      const market = w.kind === 'prop' ? w.market : teamTotalMarket(w);
+      if (!market) continue;
       const m = byEventId.get(String(b.eventId));
       if (!m) continue;
       const set = propMarkets.get(m.optic_fixture_id) ?? new Set();
-      set.add(w.market);
+      set.add(market);
       propMarkets.set(m.optic_fixture_id, set);
     }
     if (propMarkets.size) {
@@ -1862,7 +1883,16 @@ async function pricesFor(bets, byEventId, fixtures, timings, { closing = false }
           (r) => sameLine(r.line, w.line) && r.outcome_no === (w.side === 'over' ? 1 : 2),
         );
       }
-      for (const marketId of w.marketIds) {
+      const teamTotal = teamTotalMarket(w);
+      if (teamTotal) {
+        // Whose total is the team named in the bet's market; the side and the
+        // number both have to agree, as for a prop.
+        const inMarket = all.filter((r) => !r.is_lay && r.market_name === teamTotal);
+        hits = pickByName(inMarket, w.qualifier).filter(
+          (r) => sameLine(r.line, w.line) && r.outcome_no === (w.side === 'over' ? 1 : 2),
+        );
+      }
+      for (const marketId of hits.length ? [] : w.marketIds) {
         const inMarket = all.filter((r) => !r.is_lay && r.market_id === marketId);
         if (!inMarket.length) continue;
         hits =
