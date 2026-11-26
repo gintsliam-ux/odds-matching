@@ -856,15 +856,28 @@ async function resolveSatelliteEvents(bets, byEventId) {
  */
 async function resolveByNameAndStart(bets, byEventId, fixtures) {
   const orphans = bets.filter(
-    (b) => b.event && b.startsAt && !(b.eventId && byEventId.has(String(b.eventId))),
+    (b) => b.event && (b.startsAt || b.placedAt) && !(b.eventId && byEventId.has(String(b.eventId))),
   );
   if (!orphans.length) return;
 
   const WINDOW_MIN = 90;
-  const starts = orphans.map((b) => new Date(b.startsAt).getTime()).filter(Number.isFinite);
-  if (!starts.length) return;
-  const lo = new Date(Math.min(...starts) - WINDOW_MIN * 60_000);
-  const hi = new Date(Math.max(...starts) + WINDOW_MIN * 60_000);
+  /*
+   * A mybet or multis bet carries no start time at all — only when it was
+   * struck. So its game is looked for from four hours before the bet (it may
+   * have been struck in play) to a day and a half after, and taken only if
+   * exactly one fixture in that whole stretch answers to the names. Two games
+   * of a series on consecutive days are two answers, and stay unlinked.
+   */
+  const span = (b) => {
+    const at = new Date(b.startsAt ?? '').getTime();
+    if (Number.isFinite(at)) return [at - WINDOW_MIN * 60_000, at + WINDOW_MIN * 60_000];
+    const placed = new Date(b.placedAt ?? '').getTime();
+    return Number.isFinite(placed) ? [placed - 4 * 3_600_000, placed + 36 * 3_600_000] : null;
+  };
+  const spans = orphans.map(span).filter(Boolean);
+  if (!spans.length) return;
+  const lo = new Date(Math.min(...spans.map((x) => x[0])));
+  const hi = new Date(Math.max(...spans.map((x) => x[1])));
 
   let candidates = [];
   if (mongoConfigured) {
@@ -872,7 +885,7 @@ async function resolveByNameAndStart(bets, byEventId, fixtures) {
       .find({ scheduled_start: { $gte: lo, $lte: hi } })
       .project({ _id: 0, fixture_id: 1, sport: 1, category: 1, tournament: 1, optic_league: 1,
                  home_team: 1, away_team: 1, event_name: 1, scheduled_start: 1 })
-      .limit(4000)
+      .limit(12000)
       .toArray()
       .catch(() => []);
   } else {
@@ -887,15 +900,13 @@ async function resolveByNameAndStart(bets, byEventId, fixtures) {
   if (!candidates.length) return;
 
   for (const b of orphans) {
-    const want = new Set(
-      // not the grade word either: sameGrade below answers for it, and the
-      // feed's side names do not carry it
-      key(b.event).split(' ').filter((t) => t.length > 2 && !FORMAT_TOKEN.test(t) && !WOMENS.test(t)),
-    );
+    const want = new Set(nameTokens(b.event));
     if (want.size < 2) continue;
-    const at = new Date(b.startsAt).getTime();
+    const [from, to] = span(b) ?? [];
+    if (from == null) continue;
     const hits = candidates.filter((f) => {
-      if (Math.abs(new Date(f.scheduled_start).getTime() - at) > WINDOW_MIN * 60_000) return false;
+      const start = new Date(f.scheduled_start).getTime();
+      if (!(start >= from && start <= to)) return false;
       if (b.sport && sportLabel(f.sport) && sportLabel(f.sport) !== b.sport) return false;
       // The competition counts on both sides: the feed's WBBL sides are plain
       // "Sydney Thunder v Adelaide Strikers" and only the tournament, "Big
@@ -906,7 +917,7 @@ async function resolveByNameAndStart(bets, byEventId, fixtures) {
       const got = key(`${f.home_team ?? ''} ${f.away_team ?? ''} ${f.event_name ?? ''}`);
       let hit = 0;
       for (const t of want) if (got.includes(t)) hit++;
-      return hit / want.size >= 0.8;
+      return hit / want.size >= 0.8 || sidesAgree(b.event, f);
     });
     // Only when it is unambiguous — two fixtures answering to the same teams at
     // the same minute means we do not actually know which was backed.
@@ -916,6 +927,39 @@ async function resolveByNameAndStart(bets, byEventId, fixtures) {
     b.eventId = b.eventId ?? `name:${b.id}`;
     fixtures.set(f.fixture_id, f);
   }
+}
+
+// The words of a name that say who it is: not the grade word (sameGrade
+// answers for it, and the feed's side names do not carry it), not a format.
+const nameTokens = (name) =>
+  key(name).split(' ').filter((t) => t.length > 2 && !FORMAT_TOKEN.test(t) && !WOMENS.test(t));
+
+/**
+ * The same two sides, each recognisably itself.
+ *
+ * "Al-Fateh Al-Hasa vs Al-Riyadh" is "Al Fateh SC v Al Riyadh SC": two of its
+ * three words, which is under the bar the whole name has to clear, because
+ * one book adds the town. Side against side it is plain — half of one and all
+ * of the other. A word both sides share ("Real", "Manchester") says nothing
+ * about which game this is and is not counted, and the whole still has to
+ * reach 60%, so two half-matches on a shared prefix cannot pass.
+ */
+function sidesAgree(event, f) {
+  const sides = key(event).split(/ (?:vs|v) /);
+  if (sides.length !== 2 || !f.home_team || !f.away_team) return false;
+  const [a, b] = sides.map((x) => nameTokens(x));
+  const own = (mine, theirs) => mine.filter((t) => !theirs.includes(t));
+  const A = own(a, b); const B = own(b, a);
+  if (!A.length || !B.length) return false;
+  const score = (tokens, name) => {
+    const got = key(name);
+    return tokens.filter((t) => got.includes(t)).length;
+  };
+  for (const [h, w] of [[f.home_team, f.away_team], [f.away_team, f.home_team]]) {
+    const x = score(A, h); const y = score(B, w);
+    if (x / A.length >= 0.5 && y / B.length >= 0.5 && (x + y) / (A.length + B.length) >= 0.6) return true;
+  }
+  return false;
 }
 
 /**
@@ -961,6 +1005,8 @@ const key = (s) =>
     .normalize('NFD')
     .replace(/\p{Diacritic}/gu, '')
     .replace(/[^a-z0-9]+/g, ' ')
+    // One country, two spellings: the feed took up "Turkiye", the books did not.
+    .replace(/\bturkiye\b/g, 'turkey')
     .trim();
 
 /**
