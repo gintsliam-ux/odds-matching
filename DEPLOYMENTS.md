@@ -1,48 +1,38 @@
 # Deployments
 
-This repo backs several Vercel projects. They do **not** all deploy the same way,
-which is the source of a recurring surprise — write it down once.
+This repo (`odds-matching`) backs two Vercel projects. Both deploy from Git, and
+both redeploy on every push to `main`.
 
-| project | deploys from | root dir | notes |
+| project | deploys from | root dir | serves |
 |---|---|---|---|
-| `live-fixtures` | **CLI only** (`vercel --prod`) | `live-fixtures` | no Git integration — merging to `main` does NOT deploy it |
-| `arb-tracker` | push to the `arb-tracker` branch | `arb-tracker` | production branch is `arb-tracker`, not `main` |
-| `workspace` | push to any branch | repo root | serves `odds-matching.vercel.app` |
+| `sports-odds-desk` | push to `main` (other branches get previews) | `arb-tracker-mongo` | `sports-odds-desk.vercel.app` |
+| `workspace` | push to `main` (other branches get previews) | repo root | `odds-matching.vercel.app` |
 
-## Known: arb-tracker fails on every `main` commit
+Checked against the Vercel team and GitHub on 27 Nov 2026.
 
-Every commit that lands on `main` triggers an `arb-tracker` build that dies in
-~350 ms with:
+## What a push to `main` does
 
-```
-Cloning odds-matching (Branch: main, Commit: …)
-The specified Root Directory "arb-tracker" does not exist.
-```
+- Both projects build and go public. There is no ignored-build step on either,
+  so a change to one folder redeploys both sites, and so does a docs-only commit.
+- The `mapping-tick` workflow is read from `main`, so workflow changes must land
+  there.
 
-`arb-tracker/` only exists on the `arb-tracker` branch, but the project is
-configured to build **all** branches. Each failure emails the account owner, and
-a single PR produces two (one per environment).
+## Projects that no longer exist
 
-**Things that do not fix it:**
+- **`arb-tracker`** was deleted from the Vercel team. It used to build every
+  branch with root directory `arb-tracker/`, which only exists on the
+  `arb-tracker` branch, so every `main` commit produced a failed build and an
+  email. No commit on `main` since 30 Oct 2026 carries an `arb-tracker` build.
+  The `arb-tracker` branch is still in the repo but nothing deploys it. A local
+  `arb-tracker/` folder, where present, is a separate ignored checkout.
+- **`live-fixtures`** was removed from `main` on 30 Oct 2026 (`5447d2a`) and has
+  no Vercel project. It cannot be deployed.
 
-- The Ignored Build Step. `commandForIgnoringBuildStep` is already set to
-  `git diff --quiet HEAD^ HEAD -- ./`, but Vercel resolves the root directory
-  *before* running it, so it never executes.
-- `vercel.json` with `git.deploymentEnabled`. That file is read from the
-  project's root directory — `arb-tracker/` — which is the thing that's missing.
-  Same circularity.
-- The Vercel CLI. `vercel git` only offers `connect` / `disconnect`.
+The old advice to batch work into one PR per session, to limit failed
+`arb-tracker` builds, no longer applies.
 
-**The fix** is one project setting:
+## Other projects on the same Vercel team
 
-> arb-tracker → Settings → Git → Deployment Branches → **Only the Production Branch**
-
-The API alternative, `gitProviderOptions.createDeployments: "disabled"`, is worse
-— it stops arb-tracker auto-deploying from its own branch too.
-
-## Until then
-
-Batch live-fixtures work into **one PR per session** rather than one per fix.
-`main` stays the source of truth (and the mapping-tick workflow is read from it,
-so workflow changes must land there), but 18 small PRs cost ~36 failed builds
-where 3 would have cost 6.
+These build from their own repos, not this one: `wagering-co` (repo `swiftbet`),
+`racing-flucs`, `polytracker`, `next-to-go` (`racing-odds-desk.vercel.app`) and
+`margin-dashboard`.
