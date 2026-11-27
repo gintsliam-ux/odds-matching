@@ -237,7 +237,9 @@ export function bookMargins(group: MarketGroup): MarketMargins {
    * IT offers, and it is shown as long as that field is most of the rows —
    * a book quoting six of thirty is not pricing the market.
    */
-  const outright = group.kind === 'outright';
+  // A margin ladder is cut differently by each book, so like an outright no
+  // book prices every row and each is summed over the rows it does.
+  const outright = group.kind === 'outright' || group.kind === 'margin';
   const needed = outright ? Math.max(2, Math.ceil(rows.length / 2)) : rows.length;
 
   /** Sum 1/price across every outcome, or null if the column is incomplete. */
@@ -423,7 +425,7 @@ export interface OddsRow {
 // Canonical market ids are shared across sports (spread, total, moneyline, …);
 // only the labels and which markets exist differ per sport. `kind` drives the
 // ladder shape. Markets with no rows are dropped, so a list can be a superset.
-export type MarketKind = 'h2h' | 'spread' | 'total' | 'outright' | 'flat';
+export type MarketKind = 'h2h' | 'spread' | 'total' | 'outright' | 'flat' | 'margin';
 interface MarketDef {
   id: string;
   label: string;
@@ -438,8 +440,8 @@ const TEAM_DEFAULT: MarketDef[] = [
   D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Line', 'spread'),
   D('total', 'Total', 'total'),
-  D('winning_margin', 'Winning Margin', 'outright'),
-  D('winning_margin_5way', 'Winning Margin — 5-Way', 'outright'),
+  D('winning_margin', 'Winning Margin', 'margin'),
+  D('winning_margin_5way', 'Winning Margin — 5-Way', 'margin'),
   D('1h_moneyline', '1st Half — Head to Head', 'h2h'),
   D('1h_moneyline_3way', '1st Half — Head to Head — 3-Way', 'h2h'),
   D('1h_spread', '1st Half — Line', 'spread'),
@@ -460,8 +462,8 @@ const SOCCER_MARKETS: MarketDef[] = [
    */
   D('handicap_3way', 'Handicap — 3-Way', 'spread'),
   D('total', 'Total Goals', 'total'),
-  D('winning_margin', 'Winning Margin', 'outright'),
-  D('winning_margin_5way', 'Winning Margin — 5-Way', 'outright'),
+  D('winning_margin', 'Winning Margin', 'margin'),
+  D('winning_margin_5way', 'Winning Margin — 5-Way', 'margin'),
   D('dnb', 'Draw No Bet', 'h2h'),
   D('double_chance', 'Double Chance', 'flat'),
   D('btts', 'Both Teams to Score', 'flat'),
@@ -484,8 +486,8 @@ const GRIDIRON_MARKETS: MarketDef[] = [
   D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Line', 'spread'),
   D('total', 'Total Points', 'total'),
-  D('winning_margin', 'Winning Margin', 'outright'),
-  D('winning_margin_5way', 'Winning Margin — 5-Way', 'outright'),
+  D('winning_margin', 'Winning Margin', 'margin'),
+  D('winning_margin_5way', 'Winning Margin — 5-Way', 'margin'),
   D('1h_moneyline', '1st Half — Head to Head', 'h2h'),
   D('1h_moneyline_3way', '1st Half — Head to Head — 3-Way', 'h2h'),
   D('1h_spread', '1st Half — Line', 'spread'),
@@ -505,8 +507,8 @@ const RUGBY_MARKETS: MarketDef[] = [
   D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Line', 'spread'),
   D('total', 'Total Points', 'total'),
-  D('winning_margin', 'Winning Margin', 'outright'),
-  D('winning_margin_5way', 'Winning Margin — 5-Way', 'outright'),
+  D('winning_margin', 'Winning Margin', 'margin'),
+  D('winning_margin_5way', 'Winning Margin — 5-Way', 'margin'),
   D('1h_moneyline', '1st Half — Head to Head', 'h2h'),
   D('1h_moneyline_3way', '1st Half — Head to Head — 3-Way', 'h2h'),
   D('1h_spread', '1st Half — Line', 'spread'),
@@ -518,8 +520,8 @@ const HOCKEY_MARKETS: MarketDef[] = [
   D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Puck Line', 'spread'),
   D('total', 'Total', 'total'),
-  D('winning_margin', 'Winning Margin', 'outright'),
-  D('winning_margin_5way', 'Winning Margin — 5-Way', 'outright'),
+  D('winning_margin', 'Winning Margin', 'margin'),
+  D('winning_margin_5way', 'Winning Margin — 5-Way', 'margin'),
   D('1p_moneyline', '1st Period — Head to Head', 'h2h'),
   D('1p_moneyline_3way', '1st Period — Head to Head — 3-Way', 'h2h'),
   D('1p_spread', '1st Period — Puck Line', 'spread'),
@@ -537,8 +539,8 @@ const MLB_MARKETS: MarketDef[] = [
   D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Run Line', 'spread'),
   D('total', 'Total Runs', 'total'),
-  D('winning_margin', 'Winning Margin', 'outright'),
-  D('winning_margin_5way', 'Winning Margin — 5-Way', 'outright'),
+  D('winning_margin', 'Winning Margin', 'margin'),
+  D('winning_margin_5way', 'Winning Margin — 5-Way', 'margin'),
   D('1h_moneyline', 'First 5 Innings — Head to Head', 'h2h'),
   D('1h_spread', 'First 5 Innings — Run Line', 'spread'),
   D('1h_total', 'First 5 Innings — Total Runs', 'total'),

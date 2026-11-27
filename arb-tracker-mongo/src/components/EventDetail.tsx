@@ -133,11 +133,12 @@ function ordinal(n: number): string {
  * variants ride with their parent: a 1st-half line is still a handicap.
  */
 const MARKET_GROUPS: { key: string; label: string; kinds: MarketKind[] }[] = [
-  { key: 'all', label: 'All', kinds: ['h2h', 'spread', 'total', 'flat', 'outright'] },
+  { key: 'all', label: 'All', kinds: ['h2h', 'spread', 'total', 'flat', 'margin', 'outright'] },
   { key: 'moneyline', label: 'Moneyline', kinds: ['h2h'] },
   { key: 'handicap', label: 'Handicap', kinds: ['spread'] },
   { key: 'totals', label: 'Totals', kinds: ['total'] },
   { key: 'specials', label: 'Specials', kinds: ['flat'] },
+  { key: 'margin', label: 'Margin', kinds: ['margin'] },
   { key: 'outright', label: 'Outright', kinds: ['outright'] },
 ];
 
@@ -731,7 +732,7 @@ function MarketRows({
           </tr>
         );
       })}
-      {(group.kind === 'h2h' || group.kind === 'outright') && <MarginRow group={group} showExchange={showExchange} />}
+      {(group.kind === 'h2h' || group.kind === 'outright' || group.kind === 'margin') && <MarginRow group={group} showExchange={showExchange} />}
     </tbody>
   );
 }
@@ -772,11 +773,12 @@ function MarginRow({ group, showExchange }: { group: MarketGroup; showExchange: 
   );
   // On an outright the field differs by book, so the number says how many
   // runners it was summed over.
+  const partial = group.kind === 'outright' || group.kind === 'margin';
   const over = (id: string) =>
-    group.kind === 'outright' ? ` over ${margins.counts.get(id) ?? 0} of ${margins.outcomes} ${/winning_margin/.test(group.key) ? 'outcomes' : 'runners'}` : '';
+    partial ? ` over ${margins.counts.get(id) ?? 0} of ${margins.outcomes} ${group.kind === 'margin' ? 'outcomes' : 'runners'}` : '';
   const title = (v: number | null, id = '') =>
     v == null
-      ? group.kind === 'outright'
+      ? partial
         ? `Prices fewer than half the field (${margins.counts.get(id) ?? 0} of ${margins.outcomes})`
         : 'Not every outcome is priced here'
       : v < 100
