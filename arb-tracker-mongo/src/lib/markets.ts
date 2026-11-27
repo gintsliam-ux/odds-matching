@@ -438,6 +438,8 @@ const TEAM_DEFAULT: MarketDef[] = [
   D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Line', 'spread'),
   D('total', 'Total', 'total'),
+  D('winning_margin', 'Winning Margin', 'outright'),
+  D('winning_margin_5way', 'Winning Margin — 5-Way', 'outright'),
   D('1h_moneyline', '1st Half — Head to Head', 'h2h'),
   D('1h_moneyline_3way', '1st Half — Head to Head — 3-Way', 'h2h'),
   D('1h_spread', '1st Half — Line', 'spread'),
@@ -458,6 +460,8 @@ const SOCCER_MARKETS: MarketDef[] = [
    */
   D('handicap_3way', 'Handicap — 3-Way', 'spread'),
   D('total', 'Total Goals', 'total'),
+  D('winning_margin', 'Winning Margin', 'outright'),
+  D('winning_margin_5way', 'Winning Margin — 5-Way', 'outright'),
   D('dnb', 'Draw No Bet', 'h2h'),
   D('double_chance', 'Double Chance', 'flat'),
   D('btts', 'Both Teams to Score', 'flat'),
@@ -480,6 +484,8 @@ const GRIDIRON_MARKETS: MarketDef[] = [
   D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Line', 'spread'),
   D('total', 'Total Points', 'total'),
+  D('winning_margin', 'Winning Margin', 'outright'),
+  D('winning_margin_5way', 'Winning Margin — 5-Way', 'outright'),
   D('1h_moneyline', '1st Half — Head to Head', 'h2h'),
   D('1h_moneyline_3way', '1st Half — Head to Head — 3-Way', 'h2h'),
   D('1h_spread', '1st Half — Line', 'spread'),
@@ -499,6 +505,8 @@ const RUGBY_MARKETS: MarketDef[] = [
   D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Line', 'spread'),
   D('total', 'Total Points', 'total'),
+  D('winning_margin', 'Winning Margin', 'outright'),
+  D('winning_margin_5way', 'Winning Margin — 5-Way', 'outright'),
   D('1h_moneyline', '1st Half — Head to Head', 'h2h'),
   D('1h_moneyline_3way', '1st Half — Head to Head — 3-Way', 'h2h'),
   D('1h_spread', '1st Half — Line', 'spread'),
@@ -510,6 +518,8 @@ const HOCKEY_MARKETS: MarketDef[] = [
   D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Puck Line', 'spread'),
   D('total', 'Total', 'total'),
+  D('winning_margin', 'Winning Margin', 'outright'),
+  D('winning_margin_5way', 'Winning Margin — 5-Way', 'outright'),
   D('1p_moneyline', '1st Period — Head to Head', 'h2h'),
   D('1p_moneyline_3way', '1st Period — Head to Head — 3-Way', 'h2h'),
   D('1p_spread', '1st Period — Puck Line', 'spread'),
@@ -527,6 +537,8 @@ const MLB_MARKETS: MarketDef[] = [
   D('moneyline_3way', 'Head to Head — 3-Way', 'h2h'),
   D('spread', 'Run Line', 'spread'),
   D('total', 'Total Runs', 'total'),
+  D('winning_margin', 'Winning Margin', 'outright'),
+  D('winning_margin_5way', 'Winning Margin — 5-Way', 'outright'),
   D('1h_moneyline', 'First 5 Innings — Head to Head', 'h2h'),
   D('1h_spread', 'First 5 Innings — Run Line', 'spread'),
   D('1h_total', 'First 5 Innings — Total Runs', 'total'),
@@ -1009,6 +1021,28 @@ export interface BuiltMarkets {
 }
 
 /**
+ * A winning-margin market: one outcome per team and band ("Brazil 14-16",
+ * "USA 21+"), plus a draw where the sport has one.
+ */
+const isMarginMarket = (id: string) => /(^|_)winning_margin(_5way)?$/.test(id);
+
+/**
+ * Where a margin outcome sits in its ladder: the home side's bands from the
+ * narrowest up, then the away side's, then the draw. Books cut the bands
+ * differently (bet365 1-2 / 3-6, Sportsbet 1-5 / 6-10), so two books' rows
+ * interleave by where the band starts and only line up where they agree.
+ */
+function marginRank(selection: string, home: string, away: string): [number, number, number] {
+  const m = selection.match(/^(.*?)\s+(\d+)(?:-(\d+)|(\+))?$/);
+  if (!m) return [/^(draw|tie)$/i.test(selection.trim()) ? 2 : 3, 0, 0];
+  const team = m[1].trim();
+  const side = team === home ? 0 : team === away ? 1 : 3;
+  const lo = Number(m[2]);
+  const hi = m[4] ? Infinity : m[3] ? Number(m[3]) : lo;
+  return [side, lo, hi];
+}
+
+/**
  * Pivot a fixture's odds rows into the per-market grid. Sides are keyed on the
  * canonical `outcome_no` / `normalized_selection` rather than by matching the
  * selection string to a team name.
@@ -1050,7 +1084,24 @@ export function buildMarkets(
     let selections: SelectionRow[];
     let keyedOn: string = def.kind;
 
-    if (def.kind === 'outright') {
+    if (isMarginMarket(def.id)) {
+      // One row per team-and-band, in ladder order rather than by price. Keyed
+      // on the stored slug, never on playerKey: that drops digits, which would
+      // fold every band of a side onto one row.
+      const byBand = new Map<string, OddsRow[]>();
+      for (const r of marketRows) {
+        const key = r.normalized_selection || r.selection || '';
+        (byBand.get(key) ?? byBand.set(key, []).get(key)!).push(r);
+      }
+      keyedOn = 'band';
+      selections = [...byBand.entries()]
+        .map(([k, rs]) => {
+          const name = rs[0].selection ?? k;
+          return { row: makeSelectionRow(books, k, name, rs), rank: marginRank(name, home, away) };
+        })
+        .sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1] || a.rank[2] - b.rank[2])
+        .map((x) => x.row);
+    } else if (def.kind === 'outright') {
       // A flat field, one row per player, shortest price first. Merge a player's
       // spellings across books with playerKey — NOT normalized_selection, which
       // isn't cross-book stable for outrights (TAB writes "scheffler_scottie",

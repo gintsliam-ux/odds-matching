@@ -773,7 +773,7 @@ function MarginRow({ group, showExchange }: { group: MarketGroup; showExchange: 
   // On an outright the field differs by book, so the number says how many
   // runners it was summed over.
   const over = (id: string) =>
-    group.kind === 'outright' ? ` over ${margins.counts.get(id) ?? 0} of ${margins.outcomes} runners` : '';
+    group.kind === 'outright' ? ` over ${margins.counts.get(id) ?? 0} of ${margins.outcomes} ${/winning_margin/.test(group.key) ? 'outcomes' : 'runners'}` : '';
   const title = (v: number | null, id = '') =>
     v == null
       ? group.kind === 'outright'
