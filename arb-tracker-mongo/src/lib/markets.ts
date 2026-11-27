@@ -622,6 +622,41 @@ const LEAGUE_MARKETS: Record<string, MarketDef[]> = {
   golf: GOLF_MARKETS,
 };
 
+/**
+ * The side markets every team sport shares: period margins, each side's total
+ * and odd/even, the game's odd/even, half-time/full-time, overtime and the tri
+ * bet. Built once rather than repeated in every list above. `{home}` and
+ * `{away}` in a label are replaced with the fixture's teams when the grid is
+ * built. A market with no rows is dropped, so a sport that has no quarters
+ * simply never shows the quarter ones.
+ */
+const PERIOD_LABELS: [string, string][] = [
+  ['', ''],
+  ['1h_', '1st Half — '],
+  ['1q_', '1st Quarter — '],
+  ['1p_', '1st Period — '],
+];
+const SIDE_MARKETS: MarketDef[] = [
+  D('1h_winning_margin', '1st Half — Winning Margin', 'margin'),
+  D('1q_winning_margin', '1st Quarter — Winning Margin', 'margin'),
+  D('tri_bet', 'Tri Bet', 'flat'),
+  ...PERIOD_LABELS.flatMap(([pre, lab]) => [
+    D(`${pre}team_total_home`, `${lab}{home} Total`, 'total'),
+    D(`${pre}team_total_away`, `${lab}{away} Total`, 'total'),
+  ]),
+  ...PERIOD_LABELS.map(([pre, lab]) => D(`${pre}odd_even`, `${lab}Total Odd/Even`, 'flat')),
+  ...PERIOD_LABELS.flatMap(([pre, lab]) => [
+    D(`${pre}team_odd_even_home`, `${lab}{home} Odd/Even`, 'flat'),
+    D(`${pre}team_odd_even_away`, `${lab}{away} Odd/Even`, 'flat'),
+  ]),
+  D('htft', 'Half Time / Full Time', 'flat'),
+  D('overtime', 'Overtime', 'flat'),
+  D('correct_score', 'Correct Score', 'flat'),
+  D('total_corners', 'Total Corners', 'total'),
+];
+/** Leagues whose fixture is not two teams playing a game with a score. */
+const NO_SIDE_MARKETS = new Set([FUTURES_LEAGUE, 'golf', 'tennis', 'mma', 'boxing', 'darts']);
+
 const signed = (n: number) => (n > 0 ? `+${n}` : `${n}`);
 
 /**
@@ -1029,6 +1064,37 @@ export interface BuiltMarkets {
 const isMarginMarket = (id: string) => /(^|_)winning_margin(_5way)?$/.test(id);
 
 /**
+ * Markets drawn as a list of named outcomes in a fixed order: the margins, the
+ * tri bet, half-time/full-time and the correct score. None can be keyed by
+ * side or by playerKey, and each has an order a reader expects.
+ */
+const isLadderMarket = (id: string) =>
+  isMarginMarket(id) || id === 'tri_bet' || id === 'htft' || id === 'correct_score';
+
+const HTFT_ORDER = ['home', 'draw', 'away'].flatMap((a) => ['home', 'draw', 'away'].map((b) => `${a}_${b}`));
+
+/** Where one outcome of a ladder market sorts. */
+function ladderRank(id: string, r: OddsRow, home: string, away: string): [number, number, number] {
+  const sel = r.selection ?? '';
+  if (id === 'htft') {
+    const i = HTFT_ORDER.indexOf(r.normalized_selection ?? '');
+    return [i < 0 ? 99 : i, 0, 0];
+  }
+  if (id === 'tri_bet') {
+    // Each threshold is three outcomes: one side by more, either by less, the other side by more.
+    const side = sel.startsWith('Either') ? 1 : sel.startsWith(home) ? 0 : 2;
+    return [r.line ?? 0, side, 0];
+  }
+  if (id === 'correct_score') {
+    const m = sel.match(/^(.*?)\s+(\d+)-(\d+)$/);
+    if (!m) return [9, 0, 0];
+    const team = m[1].trim();
+    return [team === home ? 0 : team === 'Draw' ? 1 : team === away ? 2 : 3, Number(m[2]), Number(m[3])];
+  }
+  return marginRank(sel, home, away);
+}
+
+/**
  * Where a margin outcome sits in its ladder: the home side's bands from the
  * narrowest up, then the away side's, then the draw. Books cut the bands
  * differently (bet365 1-2 / 3-6, Sportsbet 1-5 / 6-10), so two books' rows
@@ -1058,7 +1124,11 @@ export function buildMarkets(
   const groups: MarketGroup[] = [];
   const books = eventBooks(rows, leagueId);
 
-  for (const def of LEAGUE_MARKETS[leagueId] ?? TEAM_DEFAULT) {
+  const defs = [
+    ...(LEAGUE_MARKETS[leagueId] ?? TEAM_DEFAULT),
+    ...(NO_SIDE_MARKETS.has(leagueId) ? [] : SIDE_MARKETS),
+  ];
+  for (const def of defs) {
     const marketRows = rows.filter((r) => r.market_id === def.id);
     if (marketRows.length === 0) continue;
 
@@ -1086,10 +1156,10 @@ export function buildMarkets(
     let selections: SelectionRow[];
     let keyedOn: string = def.kind;
 
-    if (isMarginMarket(def.id)) {
-      // One row per team-and-band, in ladder order rather than by price. Keyed
-      // on the stored slug, never on playerKey: that drops digits, which would
-      // fold every band of a side onto one row.
+    if (isLadderMarket(def.id)) {
+      // One row per named outcome, in the market's own order rather than by
+      // price. Keyed on the stored slug, never on playerKey: that drops
+      // digits, which would fold every band of a side onto one row.
       const byBand = new Map<string, OddsRow[]>();
       for (const r of marketRows) {
         const key = r.normalized_selection || r.selection || '';
@@ -1099,7 +1169,7 @@ export function buildMarkets(
       selections = [...byBand.entries()]
         .map(([k, rs]) => {
           const name = rs[0].selection ?? k;
-          return { row: makeSelectionRow(books, k, name, rs), rank: marginRank(name, home, away) };
+          return { row: makeSelectionRow(books, k, name, rs), rank: ladderRank(def.id, rs[0], home, away) };
         })
         .sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1] || a.rank[2] - b.rank[2])
         .map((x) => x.row);
@@ -1240,7 +1310,7 @@ export function buildMarkets(
       new Set(marketRows.map(f).filter((v) => v != null && v !== '')).size;
     groups.push({
       key: def.id,
-      label: def.label,
+      label: def.label.replace('{home}', home).replace('{away}', away),
       kind: def.kind,
       selections,
       diag: {
