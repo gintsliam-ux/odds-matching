@@ -206,6 +206,18 @@ const DRAW_IS_A_RESULT = new Set([
 /** Sport arrives as either the surface slug or the display label. */
 const sportKey = (s) => String(s ?? '').toLowerCase().replace(/[^a-z]/g, '');
 
+/**
+ * Two team prices that make a whole book on their own.
+ *
+ * mybet's NHL "Head to Head" lists Winnipeg 1.91 / Draw 4.00 / Islanders 1.82.
+ * Read as one three-way market that is a 132% book, which nobody runs. The
+ * two teams alone come to 107%: they are the ordinary head to head, overtime
+ * included, and the draw is a separate price on a level score after sixty
+ * minutes. All 135 NHL events opened in the last twenty days are this shape;
+ * a real three-way has its two teams well under 100%.
+ */
+const teamsAloneAreABook = (a, b) => a > 1 && b > 1 && 1 / a + 1 / b >= 1;
+
 /** The id for a head-to-head, given whether it carries a draw. */
 const threeWayApplies = (sport, hasDraw) => hasDraw && !DRAW_IS_A_RESULT.has(sportKey(sport));
 
@@ -414,7 +426,10 @@ function mybetRows(ev, { home, away, sport }) {
   const sideB = sideA === null ? null : sideA === 1 ? 2 : 1;
 
   const draw = num(m.Draw);
-  const threeWay = draw != null;
+  // A draw beside a complete two-way is not part of this market; it is left
+  // out rather than shown as a one-sided three-way.
+  const sideDraw = draw != null && !DRAW_IS_A_RESULT.has(sportKey(sport)) && teamsAloneAreABook(num(m.AWin), num(m.BWin));
+  const threeWay = draw != null && !sideDraw;
   const h2hId = threeWayApplies(sport, threeWay)
     ? 'moneyline_3way'
     : !threeWay && DNB_SPORTS.has(sportKey(sport))
@@ -596,8 +611,17 @@ async function mybetMarketRows(eventId, { home, away, sport }) {
      * Utah at regulation-time prices, and typed as the two-way it landed in
      * the overtime-included row beside Pinnacle's, which is a different bet.
      */
-    const hasTie = (d.selections ?? []).some((x) => /_(DRAW|TIE)$/.test(String(x?.role ?? '')));
-    if (base === 'moneyline' && hasTie) base = 'moneyline_3way';
+    const isTie = (x) => /_(DRAW|TIE)$/.test(String(x?.role ?? ''));
+    const hasTie = (d.selections ?? []).some(isTie);
+    /*
+     * Unless the two teams are a whole book without it — see
+     * teamsAloneAreABook. Then it IS the two-way and the draw is dropped.
+     */
+    const teamPrices = (d.selections ?? []).filter((x) => !isTie(x)).map((x) => num(x?.products?.FixedWin?.price));
+    const sideDraw =
+      base === 'moneyline' && hasTie && !DRAW_IS_A_RESULT.has(sportKey(sport)) &&
+      teamPrices.length === 2 && teamsAloneAreABook(teamPrices[0], teamPrices[1]);
+    if (base === 'moneyline' && hasTie && !sideDraw) base = 'moneyline_3way';
     const prefix = periodPrefix(d.segment);
     if (prefix === null) continue;
     /*
@@ -610,6 +634,7 @@ async function mybetMarketRows(eventId, { home, away, sport }) {
         : `${prefix}${base}`;
     const alt = d.market_type_code.startsWith('alt-');
     for (const sel of d.selections ?? []) {
+      if (sideDraw && isTie(sel)) continue;
       const fixed = sel?.products?.FixedWin ?? {};
       const price = num(fixed.price);
       if (price == null) continue;
